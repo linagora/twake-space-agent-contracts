@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -20,3 +21,8 @@ def create_app(database_url: str) -> FastAPI:
     problems.install(app)
     app.include_router(events.router(pool))
     return app
+
+
+def create_app_from_env() -> FastAPI:
+    """Entry point for uvicorn --factory, configured by the environment."""
+    return create_app(os.environ["DATABASE_URL"])
