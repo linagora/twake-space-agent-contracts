@@ -30,14 +30,18 @@ def router(pool: AsyncConnectionPool) -> APIRouter:
 
     @routes.get("")
     async def list_events(
-        caller: Caller, limit: Annotated[int, Query(ge=1, le=100)] = 20
+        caller: Caller,
+        type: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> EventList:
         async with pool.connection() as connection:
             cursor = connection.cursor(row_factory=class_row(Event))
             await cursor.execute(
                 "SELECT id, type, time, org, actor, targets, subject, data FROM workplace_events"
-                " WHERE targets @> ARRAY[%s::text] ORDER BY time DESC LIMIT %s",
-                (caller, limit),
+                " WHERE targets @> ARRAY[%(caller)s::text]"
+                " AND (%(type)s::text IS NULL OR type = %(type)s)"
+                " ORDER BY time DESC LIMIT %(limit)s",
+                {"caller": caller, "type": type, "limit": limit},
             )
             return EventList(events=await cursor.fetchall())
 
