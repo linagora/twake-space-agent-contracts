@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from psycopg_pool import AsyncConnectionPool
 
-from twake_space_agent_contracts import events
+from twake_space_agent_contracts import events, problems
 
 
 def create_app(database_url: str) -> FastAPI:
@@ -17,5 +17,6 @@ def create_app(database_url: str) -> FastAPI:
         await pool.close()
 
     app = FastAPI(title="Twake Space agent contracts", lifespan=lifespan)
+    problems.install(app)
     app.include_router(events.router(pool))
     return app

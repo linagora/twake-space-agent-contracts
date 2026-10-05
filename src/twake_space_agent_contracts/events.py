@@ -6,6 +6,8 @@ from psycopg.rows import class_row
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
 
+from twake_space_agent_contracts.problems import Problem
+
 
 class Event(BaseModel):
     id: str
@@ -31,7 +33,13 @@ def router(pool: AsyncConnectionPool) -> APIRouter:
                 (event_id, x_twake_user),
             )
             event = await cursor.fetchone()
-        assert event is not None
+        if event is None:
+            raise Problem(
+                status=404,
+                code="event_not_found",
+                title="Event not found",
+                detail=f"No event {event_id} concerns this user.",
+            )
         return event
 
     return routes
