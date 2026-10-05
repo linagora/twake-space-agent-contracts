@@ -15,6 +15,8 @@ SCHEMA = Path(__file__).parent.parent / "sql" / "workplace_events.sql"
 
 INVITED = "com.twake.calendar.event.invited.v1"
 
+AS_MMAUDET = {"X-Twake-User": "mmaudet"}
+
 
 class Store(Protocol):
     async def __call__(self, event: dict[str, Any]) -> None: ...

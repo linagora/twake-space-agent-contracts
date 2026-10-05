@@ -1,13 +1,13 @@
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import Store, invitation
+from tests.conftest import AS_MMAUDET, Store, invitation
 
 
 async def test_a_target_reads_a_stored_event(client: AsyncClient, store: Store) -> None:
     await store(invitation("evt-1", targets=["mmaudet"], time="2026-10-05T09:14:22Z"))
 
-    response = await client.get("/contracts/v1/events/evt-1", headers={"X-Twake-User": "mmaudet"})
+    response = await client.get("/contracts/v1/events/evt-1", headers=AS_MMAUDET)
 
     assert response.status_code == 200
     assert response.json() == {
@@ -27,7 +27,7 @@ async def test_a_target_reads_a_stored_event(client: AsyncClient, store: Store) 
 async def test_an_event_of_another_user_is_not_found(client: AsyncClient, store: Store) -> None:
     await store(invitation("evt-1", targets=["alice"], time="2026-10-05T09:14:22Z"))
 
-    response = await client.get("/contracts/v1/events/evt-1", headers={"X-Twake-User": "mmaudet"})
+    response = await client.get("/contracts/v1/events/evt-1", headers=AS_MMAUDET)
 
     assert response.status_code == 404
     assert response.headers["content-type"] == "application/problem+json"
@@ -41,7 +41,7 @@ async def test_an_event_of_another_user_is_not_found(client: AsyncClient, store:
 
 
 async def test_an_unknown_event_is_not_found(client: AsyncClient, store: Store) -> None:
-    response = await client.get("/contracts/v1/events/evt-404", headers={"X-Twake-User": "mmaudet"})
+    response = await client.get("/contracts/v1/events/evt-404", headers=AS_MMAUDET)
 
     assert response.status_code == 404
     assert response.json()["code"] == "event_not_found"
