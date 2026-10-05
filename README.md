@@ -15,7 +15,7 @@ Reads the workplace events stored for the user the agent acts for.
 | `read_event` | `GET /contracts/v1/events/{event_id}` | the event, if the user is one of its targets |
 | `list_events` | `GET /contracts/v1/events?type=…&limit=…` | `{"events": [...]}`, the user's events newest first |
 
-- APISIX names the user in the `X-Twake-User` header, as a uid, and only APISIX may set it.
+- APISIX names the user in the `X-Twake-User` header, as a uid, and only APISIX may set it. The header is left out of the OpenAPI document, so an agent never sees it as a tool argument.
 - `limit` goes from 1 to 100 and is 20 by default.
 - Pass `type=com.twake.calendar.event.invited.v1` to list meeting invitations.
 - An event the user is not a target of answers exactly like an unknown one, so the contract never reveals that an event exists.
@@ -27,6 +27,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 400 | `invalid_request` | a parameter is invalid |
 | 401 | `missing_user` | the `X-Twake-User` header is missing or empty |
 | 404 | `event_not_found` | no event with this id concerns the user |
+
+Routing errors, such as an unknown path, use the same format, with a `code` named after their HTTP status (`not_found`, `method_not_allowed`).
 
 ## The table it reads
 
