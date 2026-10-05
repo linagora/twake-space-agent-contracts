@@ -1,3 +1,4 @@
+import pytest
 from httpx import AsyncClient
 
 from tests.conftest import Store, invitation
@@ -48,3 +49,15 @@ async def test_the_list_keeps_only_the_requested_type(client: AsyncClient, store
     )
 
     assert [event["id"] for event in response.json()["events"]] == ["evt-invite"]
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+async def test_a_limit_out_of_range_is_an_invalid_request(client: AsyncClient, limit: int) -> None:
+    response = await client.get("/contracts/v1/events", params={"limit": limit}, headers=MMAUDET)
+
+    assert response.status_code == 400
+    assert response.headers["content-type"] == "application/problem+json"
+    problem = response.json()
+    assert problem["type"] == "urn:twake:problem:invalid_request"
+    assert problem["code"] == "invalid_request"
+    assert "limit" in problem["detail"]
