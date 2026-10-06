@@ -18,9 +18,29 @@ The user is the token's subject, their email, lowercased. Neither the token nor 
 
 ## Applications
 
-A contract belongs to the application its id starts with, its domain, such as `calendar` for `calendar.freebusy.read.v1`. Each application is declared once, in [`applications.py`](src/twake_space_agent_contracts/applications.py): its domain and the routers of its contracts, one per contract.
+A contract belongs to the application its id starts with, its domain, such as `calendar` for `calendar.freebusy.read.v1`. Each application is declared once, in [`applications.py`](src/twake_space_agent_contracts/applications.py): its domain, the words the harness names it with, and the routers of its contracts, one per contract.
 
 The service publishes only the applications `PUBLISHED_APPS` names, `events` and `calendar` when it is unset: it serves their contracts and describes them in its OpenAPI document, while the paths of any other application answer 404 `not_found`, like a path the service never had. The operator keeps it equal to the applications APISIX routes, so that an application leaves the agents' tools when it leaves the gateway. A name the service does not know stops it from starting.
+
+Before an assistant first reads in an application, and before it first writes there, the harness asks its owner, naming the application and saying what reading or writing covers there. It takes those words from the root of the OpenAPI document, in `x-twake-domains`, which holds the published applications only:
+
+```json
+"x-twake-domains": {
+  "calendar": {
+    "name": { "en": "Twake Calendar", "fr": "Twake Agenda" },
+    "read": {
+      "en": "see your free and busy times in your calendars",
+      "fr": "voir tes créneaux libres et occupés dans tes agendas"
+    },
+    "write": {
+      "en": "accept the invitations you received, which tells their organizer",
+      "fr": "accepter les invitations que tu as reçues, ce qui prévient leur organisateur"
+    }
+  }
+}
+```
+
+The words are in English and in French, addressed to the owner, and plain text on one line without a final period: no markup character (`` \ ` * _ ~ [ ] < > & ``), and nothing that looks like a link, an address or a domain name, such as a dot inside a word. A name takes at most 64 characters and what a level covers 200. `read` and `write` are given for the levels the application offers only: a `GET` contract reads, any other writes. The harness ignores an entry that breaks these rules; the tests refuse it first.
 
 ## Contracts
 

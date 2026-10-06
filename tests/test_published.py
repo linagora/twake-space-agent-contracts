@@ -45,6 +45,7 @@ async def test_calendar_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> 
         )
 
     assert operation_ids(document) == {"read_event", "list_events"}
+    assert set(document["x-twake-domains"]) == {"events"}
     # Its paths answer exactly like paths the service never had
     for response in (freebusy, accept):
         assert response.status_code == 404
@@ -57,6 +58,7 @@ async def test_calendar_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> 
         )
 
     assert {"read_freebusy", "accept_invitation"} <= operation_ids(document)
+    assert "calendar" in document["x-twake-domains"]
     assert freebusy.status_code == 200, freebusy.text
 
 
@@ -73,6 +75,7 @@ async def test_without_the_setting_events_and_calendar_are_published(
         "read_freebusy",
         "accept_invitation",
     }
+    assert set(document["x-twake-domains"]) == {"events", "calendar"}
 
 
 async def test_the_setting_lists_the_applications_by_their_domain(

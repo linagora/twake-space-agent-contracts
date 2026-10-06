@@ -2,6 +2,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 from fastapi import FastAPI
@@ -10,6 +11,16 @@ from psycopg_pool import AsyncConnectionPool
 from twake_space_agent_contracts import applications, problems
 from twake_space_agent_contracts.caller import TokenVerifier, caller_dependency
 from twake_space_agent_contracts.settings import Settings
+
+
+class Contracts(FastAPI):
+    """The service, whose OpenAPI document also names, at its root, each application it publishes
+    in the words the harness asks their owners with (x-twake-domains)."""
+
+    domains: dict[str, Any]
+
+    def openapi(self) -> dict[str, Any]:
+        return super().openapi() | {"x-twake-domains": self.domains}
 
 
 def create_app(
@@ -32,7 +43,8 @@ def create_app(
             await http.aclose()
 
     caller = caller_dependency(TokenVerifier(settings, http, clock))
-    app = FastAPI(title="Twake Space agent contracts", lifespan=lifespan)
+    app = Contracts(title="Twake Space agent contracts", lifespan=lifespan)
+    app.domains = {application.domain: application.described() for application in published}
     problems.install(app)
     context = applications.Context(settings, pool, http, caller)
     for application in published:
