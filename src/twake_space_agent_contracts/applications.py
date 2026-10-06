@@ -106,8 +106,12 @@ def _mail(context: Context) -> list[APIRouter]:
 
 
 def _drive(context: Context) -> list[APIRouter]:
+    domain = context.settings.drive_instance_domain
+    # Required once Drive is published, and only then: the service runs before Drive goes live
+    if domain is None:
+        raise ValueError("PUBLISHED_APPS names drive, which needs DRIVE_INSTANCE_DOMAIN")
     drive = Drive(context.settings, context.http)
-    drive_owner = drive_owner_dependency(context.caller)
+    drive_owner = drive_owner_dependency(context.caller, domain)
     return [drive_files.router(drive, drive_owner), drive_contents.router(drive, drive_owner)]
 
 

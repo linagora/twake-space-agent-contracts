@@ -201,7 +201,7 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 
 ### Drive, as the user
 
-The Drive contracts, published once `PUBLISHED_APPS` names `drive`, act in the user's cozy-stack instance, which accepts only its own tokens. There is no `DRIVE_URL`: the gateway's route for a Drive contract asks the token broker for the user's Drive token, and passes three headers:
+The Drive contracts act in the user's cozy-stack instance, which accepts only its own tokens. There is no `DRIVE_URL`: the gateway's route for a Drive contract asks the token broker for the user's Drive token, and passes three headers:
 
 | Header | |
 |---|---|
@@ -210,7 +210,8 @@ The Drive contracts, published once `PUBLISHED_APPS` names `drive`, act in the u
 | `X-Twake-Drive-Instance` | the host of that instance, from the user's `workplaceFqdn` in LemonLDAP-NG |
 
 - The gateway removes these headers from what an agent sends, so only the broker sets them. The service reads them like the bearer token, out of the OpenAPI document, and never stores them.
-- Without an instance, or with a host that is not a domain name, a Drive contract answers `drive_instance_unknown`; without a Drive token, `missing_drive_token`.
+- Drive is published once `PUBLISHED_APPS` names `drive`. The service then needs `DRIVE_INSTANCE_DOMAIN`, and does not start without it; while Drive is not published, it needs none of its settings.
+- An instance is one name under `DRIVE_INSTANCE_DOMAIN`, such as `alice.<domain>`. Without an instance, or with any other host, such as an address or a host of another domain, a Drive contract answers `drive_instance_unknown`, and the Drive token goes nowhere. Without a Drive token, it answers `missing_drive_token`.
 - The service calls the instance over HTTPS, with the Drive token as a bearer token: it must reach the users' instances. What is in the trash, or out of the token's reach, answers exactly like what does not exist.
 - Names, paths and contents come in an `untrusted` object, apart from what the contract computed: the user wrote them, or anyone who shared a file with them. They come without control characters, but for the tabs and line breaks of a text.
 - `web_url` opens the item in the Drive web app, for the user: on `<name>-drive.<domain>` when the stack serves its apps on flat subdomains, as its capabilities say, else on `drive.<instance>`.
@@ -266,7 +267,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `mailbox_not_found` | the user has no mailbox of their own with this id |
 | 404 | `email_not_found` | the user has no email with this id in their own mailboxes |
 | 404 | `thread_not_found` | the user has no conversation with this id in their own mailboxes |
-| 404 | `drive_instance_unknown` | no Drive instance is known for the user: LemonLDAP-NG gives no `workplaceFqdn` for them |
+| 404 | `drive_instance_unknown` | no Drive instance of the platform is known for the user: LemonLDAP-NG gives no `workplaceFqdn` for them, or one outside `DRIVE_INSTANCE_DOMAIN` |
 | 404 | `folder_not_found` | no folder with this id in the user's Drive, out of the trash |
 | 404 | `file_not_found` | no file with this id in the user's Drive, out of the trash |
 | 409 | `not_an_attendee` | the invitation in the user's calendar does not list the user as an attendee |
@@ -316,6 +317,7 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `MATRIX_SERVER_NAME` | the name of Chat's homeserver, which ends its users' Matrix ids; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `MATRIX_MAIL_DOMAIN` | the mail domain of its users, the server name by default |
 | `MAIL_URL` | TMail's JMAP API, under which the service calls `/jmap/session` and `/jmap`; needed once `PUBLISHED_APPS` names `mail`, and only then |
+| `DRIVE_INSTANCE_DOMAIN` | the domain of the users' cozy-stack instances, each one name under it, such as `dev.twake.lin-saas.com` on dev; needed once `PUBLISHED_APPS` names `drive`, and only then |
 | `DRIVE_SCHEME` | how the service reaches the users' Drive instances, `https` by default; `http` for a local cozy-stack |
 | `DRIVE_PORT` | the port of those instances, when it is not the scheme's, such as `8080` for a local cozy-stack |
 

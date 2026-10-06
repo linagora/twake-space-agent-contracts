@@ -34,6 +34,8 @@ SETTINGS = Settings(
     matrix_server_name="chat.twake.test",
     matrix_mail_domain="twake.test",
     mail_url="https://tmail.test",
+    # Where the users' cozy-stack instances are, one name each under it
+    drive_instance_domain="twake.test",
 )
 SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 KEY_ID = "sig-1"
@@ -1002,8 +1004,11 @@ class FakeBoundary:
         self.synapse = FakeSynapse()
         self.tmail = FakeTMail()
         self.drive = FakeDrive()
+        self.requests: list[httpx.Request] = []
+        """Every request the service sent, wherever to."""
 
     def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
         if request.url == SETTINGS.jwks_url:
             return self.issuer.handle(request)
         if request.url.host == "calendar.test":

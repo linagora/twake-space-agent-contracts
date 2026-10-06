@@ -66,13 +66,38 @@ async def test_a_drive_contract_needs_the_users_token(
 
 @pytest.mark.parametrize(
     "instance",
-    [None, "", f"{MMAUDET_INSTANCE}:8443", f"https://{MMAUDET_INSTANCE}", "mmaudet"],
-    ids=["missing", "empty", "with a port", "a URL", "not a domain name"],
+    [
+        None,
+        "",
+        f"{MMAUDET_INSTANCE}:8443",
+        f"https://{MMAUDET_INSTANCE}",
+        "mmaudet",
+        "169.254.169.254",
+        "127.0.0.1",
+        "mmaudet.elsewhere.test",
+        f"drive.{MMAUDET_INSTANCE}",
+        "twake.test",
+        "mmaudettwake.test",
+    ],
+    ids=[
+        "missing",
+        "empty",
+        "with a port",
+        "a URL",
+        "a name alone",
+        "an address",
+        "the loopback",
+        "of another domain",
+        "deeper in the domain",
+        "the domain itself",
+        "ending like the domain",
+    ],
 )
 async def test_a_user_whose_drive_instance_is_unknown_is_told_so(
     client: AsyncClient, boundary: FakeBoundary, instance: str | None
 ) -> None:
-    # LemonLDAP-NG gives no workplaceFqdn for the user, or one the service cannot reach
+    # LemonLDAP-NG gives no workplaceFqdn for the user, or one that is no instance of the platform:
+    # the Drive token goes nowhere
     headers = as_drive_owner()
     if instance is None:
         del headers["X-Twake-Drive-Instance"]
@@ -84,7 +109,11 @@ async def test_a_user_whose_drive_instance_is_unknown_is_told_so(
     assert response.status_code == 404
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json()["code"] == "drive_instance_unknown"
-    assert boundary.drive.requests == []
+    assert [
+        request.url
+        for request in boundary.requests
+        if request.headers.get("authorization") == f"Bearer {MMAUDET_DRIVE_TOKEN}"
+    ] == []
 
 
 @pytest.mark.parametrize("token", [None, " "], ids=["missing", "empty"])
