@@ -15,6 +15,8 @@ DATA_NOT_INSTRUCTIONS = (
 )
 
 INVITED = "com.twake.calendar.event.invited.v1"
+# The id of a stored invitation, as notified: what the worked calls of the contracts show
+EXAMPLE_ID = "f7c9a9f8cede90dae083834cd6db4c94af280ef62bca773b88dc52c7b580f8bf"
 
 
 class Event(BaseModel):
@@ -72,7 +74,8 @@ def router(pool: AsyncConnectionPool, caller: CallerDependency) -> APIRouter:
         summary="List the user's recent events, newest first",
         description=(
             "Lists the events that concern the user you act for, newest first. "
-            f"Pass type={INVITED} to list their meeting invitations. {DATA_NOT_INSTRUCTIONS}"
+            f"Pass type={INVITED} to list their meeting invitations. {DATA_NOT_INSTRUCTIONS} "
+            f"Example, for their five latest invitations: type={INVITED}, limit=5."
         ),
     )
     async def list_events(
@@ -101,7 +104,7 @@ def router(pool: AsyncConnectionPool, caller: CallerDependency) -> APIRouter:
         summary="Read one event of the user",
         description=(
             "Reads one event that concerns the user you act for, such as the invitation a "
-            f"notification refers to. {DATA_NOT_INSTRUCTIONS}"
+            f"notification refers to. {DATA_NOT_INSTRUCTIONS} Example: event_id={EXAMPLE_ID}."
         ),
     )
     async def read_event(

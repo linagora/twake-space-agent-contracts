@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Callable
 from typing import Any
 
 from httpx import AsyncClient
@@ -38,6 +39,168 @@ def unplain_texts(texts: dict[str, Any], longest: int) -> list[str]:
         return [f"in {sorted(texts)}, not in en and fr"]
     found = ((language, text, unplain(text, longest)) for language, text in texts.items())
     return [f"{language}: {problem}: {text!r}" for language, text, problem in found if problem]
+
+
+# A worked call: after "Example" and what it is an example of, name=value pairs separated by commas,
+# to the end of the description. A list gives its name once per value, a body is body=<JSON>.
+PAIR = re.compile(r"(?P<name>\w+)=(?P<value>.+?)(?=, \w+=|$)")
+# The formats the gateway checks, as JSON Schema defines them
+FORMATS = {
+    "date-time": re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})"),
+    "date": re.compile(r"\d{4}-\d{2}-\d{2}"),
+}
+TYPES: dict[str, Callable[[Any], bool]] = {
+    "string": lambda value: isinstance(value, str),
+    "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
+    "number": lambda value: isinstance(value, int | float) and not isinstance(value, bool),
+    "boolean": lambda value: isinstance(value, bool),
+    "array": lambda value: isinstance(value, list),
+    "object": lambda value: isinstance(value, dict),
+    "null": lambda value: value is None,
+}
+# What a schema says that checks nothing
+ANNOTATIONS = {"title", "description", "default", "examples", "deprecated"}
+
+
+def worked_call(description: str) -> dict[str, list[str]]:
+    """The values of the worked call a description ends with, by name, as they are written."""
+    _, example, call = description.rpartition("Example")
+    values: dict[str, list[str]] = {}
+    if example:
+        for pair in PAIR.finditer(call.removesuffix(".")):
+            values.setdefault(pair["name"], []).append(pair["value"])
+    return values
+
+
+def refusal(value: Any, schema: dict[str, Any], document: dict[str, Any]) -> str | None:
+    """Why the gateway, which checks each call against the document, would refuse this value, or
+    None. A keyword the test does not know is a refusal too, so that it never passes a value it
+    could not check."""
+    if "$ref" in schema:
+        name = schema["$ref"].removeprefix("#/components/schemas/")
+        return refusal(value, document["components"]["schemas"][name], document)
+    if "anyOf" in schema:
+        refusals = [refusal(value, branch, document) for branch in schema["anyOf"]]
+        return None if None in refusals else " or ".join(map(str, refusals))
+    types = schema.get("type", list(TYPES))
+    if not any(TYPES[name](value) for name in (types if isinstance(types, list) else [types])):
+        return f"not of type {types}"
+    for keyword, expected in schema.items():
+        match keyword:
+            case "type":
+                continue
+            case "format":
+                accepted = expected in FORMATS and FORMATS[expected].fullmatch(value) is not None
+            case "pattern":
+                accepted = re.search(expected, value) is not None
+            case "enum":
+                accepted = value in expected
+            case "const":
+                accepted = value == expected
+            case "minLength" | "minItems":
+                accepted = len(value) >= expected
+            case "maxLength" | "maxItems":
+                accepted = len(value) <= expected
+            case "minimum":
+                accepted = value >= expected
+            case "maximum":
+                accepted = value <= expected
+            case "exclusiveMinimum":
+                accepted = value > expected
+            case "exclusiveMaximum":
+                accepted = value < expected
+            case "required":
+                accepted = set(expected) <= set(value)
+            case "items" | "properties" | "additionalProperties":
+                if found := part_refusal(keyword, value, schema, document):
+                    return found
+                continue
+            case _ if keyword in ANNOTATIONS:
+                continue
+            case _:
+                return f"{keyword}, which the test cannot check"
+        if not accepted:
+            return f"refused by {keyword} {expected!r}"
+    return None
+
+
+def part_refusal(
+    keyword: str, value: Any, schema: dict[str, Any], document: dict[str, Any]
+) -> str | None:
+    """Why the gateway would refuse a part of a list or of an object, or None."""
+    expected = schema[keyword]
+    parts: dict[int | str, Any]
+    schemas: dict[int | str, Any]
+    if keyword == "items":
+        parts = dict(enumerate(value))
+        schemas = dict.fromkeys(parts, expected)
+    elif keyword == "properties":
+        parts = {name: value[name] for name in value.keys() & expected.keys()}
+        schemas = expected
+    else:
+        parts = {name: value[name] for name in value.keys() - schema.get("properties", {}).keys()}
+        if expected is False and parts:
+            return f"{', '.join(sorted(map(str, parts)))}: not a property it takes"
+        schemas = dict.fromkeys(parts, expected if isinstance(expected, dict) else {})
+    for name, part in parts.items():
+        if found := refusal(part, schemas[name], document):
+            return f"{name}: {found}"
+    return None
+
+
+def as_sent(text: str, schema: dict[str, Any], document: dict[str, Any]) -> Any:
+    """A path or query value as the gateway reads it: the text itself where its schema takes
+    text, else the number or the boolean it writes."""
+    if refusal(text, schema, document) is None:
+        return text
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
+
+
+def worked_call_problems(operation: dict[str, Any], document: dict[str, Any]) -> list[str]:
+    """What is wrong with the worked call an operation's description ends with: none at all, a
+    required value left out, a name the operation does not take, or a value the gateway refuses."""
+    parameters = {parameter["name"]: parameter for parameter in operation.get("parameters", [])}
+    body = operation.get("requestBody")
+    if not parameters and body is None:
+        return []
+    call = worked_call(operation.get("description", ""))
+    if not call:
+        return ["no worked call, such as Example: name=value, name=value."]
+    required = {name for name, parameter in parameters.items() if parameter.get("required")}
+    if body is not None and body.get("required"):
+        required.add("body")
+    problems = [f"leaves out {name}" for name in sorted(required - set(call))]
+    for name, written in call.items():
+        if name == "body" and body is not None:
+            schema = body["content"]["application/json"]["schema"]
+            try:
+                value = json.loads(written[0])
+            except ValueError:
+                problems.append(f"body is not JSON: {written[0]}")
+                continue
+        elif name in parameters:
+            schema = parameters[name]["schema"]
+            if parameters[name]["in"] == "path" and not all(
+                re.fullmatch(r"[^/\s]+", text) for text in written
+            ):
+                problems.append(f"{name} is not one segment of a path: {written}")
+                continue
+            if schema.get("type") == "array":
+                value = [as_sent(text, schema["items"], document) for text in written]
+            elif len(written) > 1:
+                problems.append(f"{name} is given {len(written)} times")
+                continue
+            else:
+                value = as_sent(written[0], schema, document)
+        else:
+            problems.append(f"{name} is not a parameter of the operation")
+            continue
+        if found := refusal(value, schema, document):
+            problems.append(f"{name}={', '.join(written)}: {found}")
+    return problems
 
 
 async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None:
@@ -130,3 +293,19 @@ async def test_accepting_an_invitation_is_a_low_risk_write(client: AsyncClient) 
     accept = document["paths"]["/contracts/v1/calendar/invitations/{event_id}/accept"]["post"]
 
     assert accept["x-twake-risk"] == "low"
+
+
+async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(
+    client: AsyncClient,
+) -> None:
+    # Since a demo in which the model sent times that the gateway refused: each value written in
+    # the exact format its parameter takes
+    document = (await client.get("/openapi.json")).json()
+
+    problems = [
+        f"{operation['operationId']}: {problem}"
+        for _, _, operation in operations_of(document)
+        for problem in worked_call_problems(operation, document)
+    ]
+
+    assert problems == []
