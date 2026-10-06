@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from psycopg_pool import AsyncConnectionPool
 
 from twake_space_agent_contracts import events, freebusy, problems
+from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import TokenVerifier, caller_dependency
 from twake_space_agent_contracts.settings import Settings
 
@@ -34,7 +35,7 @@ def create_app(
     app = FastAPI(title="Twake Space agent contracts", lifespan=lifespan)
     problems.install(app)
     app.include_router(events.router(pool, caller))
-    app.include_router(freebusy.router(freebusy.Calendar(settings.calendar_url, http), caller))
+    app.include_router(freebusy.router(Calendar(settings.calendar_url, http), caller))
     return app
 
 
