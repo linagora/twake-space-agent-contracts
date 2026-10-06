@@ -188,9 +188,10 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         description=(
             "Reads one email of the user you act for, from their own mailboxes only, as text: "
             "who it is from and to, its subject and its text, cut after 32 KiB when "
-            "body_truncated is true. external_sender is true when it is from an address outside "
-            "the user's domain, and reply_to_differs when a reply would go to another address "
-            "than the one it is from. Reading does not mark the email as read. "
+            "body_truncated is true. body_unreadable is true when TMail could not decode the "
+            "text, which may then read wrong. external_sender is true when it is from an address "
+            "outside the user's domain, and reply_to_differs when a reply would go to another "
+            "address than the one it is from. Reading does not mark the email as read. "
             f"{UNTRUSTED} Example, for an email that list_emails gave with the id "
             "0f9c7a50-a2b1-11f0-8de9-0242ac120002: "
             "email_id=0f9c7a50-a2b1-11f0-8de9-0242ac120002."

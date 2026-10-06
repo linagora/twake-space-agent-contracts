@@ -36,6 +36,7 @@ async def test_the_user_reads_an_email_as_text(client: AsyncClient, boundary: Fa
         "external_sender": False,
         "reply_to_differs": False,
         "body_truncated": False,
+        "body_unreadable": False,
         "untrusted": {
             "from": [PAUL],
             "to": [{"name": "Michel-Marie", "email": MMAUDET}],
@@ -104,6 +105,16 @@ async def test_a_long_body_is_cut(client: AsyncClient, boundary: FakeBoundary) -
     assert 32_000 < len(email["untrusted"]["body"]) <= 32_768
     [get] = [call for call in boundary.tmail.calls if call.name == "Email/get"]
     assert get.arguments["maxBodyValueBytes"] == 32_768
+
+
+async def test_a_text_tmail_could_not_decode_is_said_so(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX, encodingProblem=True)
+
+    email = await read(client, "email-1")
+
+    assert email["body_unreadable"] is True
 
 
 async def test_an_email_outside_the_users_own_mailboxes_is_not_found(

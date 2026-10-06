@@ -163,6 +163,8 @@ class Email(_Facts):
     external_sender: bool
     reply_to_differs: bool
     body_truncated: bool
+    body_unreadable: bool
+    """Whether TMail could not decode the text, which may then read wrong."""
     untrusted: EmailText
 
 
@@ -193,6 +195,7 @@ class _BodyPart(_Jmap):
 class _BodyValue(_Jmap):
     value: str
     is_truncated: bool = False
+    is_encoding_problem: bool = False
 
 
 class _Email(_Jmap):
@@ -249,6 +252,7 @@ class _Email(_Jmap):
             external_sender=not senders or any(_domain(sender) != domain for sender in senders),
             reply_to_differs=bool(_emails(reply_to) - _emails(senders)),
             body_truncated=any(value.is_truncated for value in values) or len(body) > longest,
+            body_unreadable=any(value.is_encoding_problem for value in values),
             untrusted=EmailText(
                 sender=senders,
                 to=_cleaned(self.to),

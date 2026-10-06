@@ -662,7 +662,7 @@ class FakeTMail:
                 {
                     "1": {
                         "value": body[:cut],
-                        "isEncodingProblem": False,
+                        "isEncodingProblem": email.get("encodingProblem", False),
                         "isTruncated": len(body) > cut,
                     }
                 }
