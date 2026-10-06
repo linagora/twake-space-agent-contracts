@@ -8,7 +8,15 @@ import httpx
 from fastapi import APIRouter
 from psycopg_pool import AsyncConnectionPool
 
-from twake_space_agent_contracts import drive_contents, drive_files, events, freebusy, invitations
+from twake_space_agent_contracts import (
+    boards,
+    drive_contents,
+    drive_files,
+    events,
+    freebusy,
+    invitations,
+    task_reads,
+)
 from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.chat import members, messages, rooms
@@ -17,6 +25,7 @@ from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import emails, mailboxes, threads
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
+from twake_space_agent_contracts.tasks import Tasks
 
 # An application's entry in x-twake-domains: by level, name included, its words in each language
 Description = dict[str, dict[str, str]]
@@ -115,6 +124,14 @@ def _drive(context: Context) -> list[APIRouter]:
     return [drive_files.router(drive, drive_owner), drive_contents.router(drive, drive_owner)]
 
 
+def _tasks(context: Context) -> list[APIRouter]:
+    # A deployment that does not publish Tasks has no need to know where it is
+    if context.settings.tasks_url is None:
+        raise ValueError("PUBLISHED_APPS names tasks, which needs TASKS_URL")
+    tasks = Tasks(context.settings.tasks_url, context.http)
+    return [boards.router(tasks, context.caller), task_reads.router(tasks, context.caller)]
+
+
 APPLICATIONS = (
     Application(
         domain="events",
@@ -168,6 +185,16 @@ APPLICATIONS = (
         # The words of writing come with its first write contract
         write=None,
         routers=_drive,
+    ),
+    Application(
+        domain="tasks",
+        name=Words(en="Twake Tasks", fr="Twake Tasks"),
+        read=Words(
+            en="list your boards, and list, search and read your tasks",
+            fr="lister tes tableaux, et lister, chercher et lire tes tâches",
+        ),
+        write=None,
+        routers=_tasks,
     ),
 )
 
