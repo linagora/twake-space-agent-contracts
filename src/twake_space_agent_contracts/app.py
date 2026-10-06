@@ -51,7 +51,7 @@ def create_app(
         lifespan=lifespan,
     )
     problems.install(app)
-    context = applications.Context(settings, pool, http, caller)
+    context = applications.Context(settings, pool, http, caller, clock)
     for application in published:
         for router in application.routers(context):
             app.include_router(router)

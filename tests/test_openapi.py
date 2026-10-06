@@ -226,6 +226,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "read_room": ["chat.rooms.read.v1"],
         "list_room_members": ["chat.members.read.v1"],
         "list_messages": ["chat.messages.read.v1"],
+        "list_mailboxes": ["mail.mailboxes.read.v1"],
     }
 
 

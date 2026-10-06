@@ -13,6 +13,8 @@ from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.chat import members, messages, rooms
 from twake_space_agent_contracts.chat.synapse import Synapse
+from twake_space_agent_contracts.mail import mailboxes
+from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
 
 # An application's entry in x-twake-domains: by level, name included, its words in each language
@@ -28,6 +30,9 @@ class Context:
     """The events database."""
     http: httpx.AsyncClient
     caller: CallerDependency
+    clock: Callable[[], float]
+    """Seconds, as time.monotonic counts them, by which what an application keeps for a while
+    expires."""
 
 
 @dataclass(frozen=True)
@@ -87,6 +92,14 @@ def _chat(context: Context) -> list[APIRouter]:
     ]
 
 
+def _mail(context: Context) -> list[APIRouter]:
+    # Needed once Mail is published only, so that the service starts without it otherwise
+    if context.settings.mail_url is None:
+        raise ValueError("PUBLISHED_APPS names mail, but MAIL_URL is not set")
+    tmail = TMail(context.settings.mail_url, context.http, context.clock)
+    return [mailboxes.router(tmail, context.caller)]
+
+
 APPLICATIONS = (
     Application(
         domain="events",
@@ -122,6 +135,13 @@ APPLICATIONS = (
         ),
         write=None,
         routers=_chat,
+    ),
+    Application(
+        domain="mail",
+        name=Words(en="Twake Mail", fr="Twake Mail"),
+        read=Words(en="list, search and read your mail", fr="lister, chercher et lire tes mails"),
+        write=None,
+        routers=_mail,
     ),
 )
 
