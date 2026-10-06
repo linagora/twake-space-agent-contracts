@@ -4,7 +4,15 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET
-from tests.fakes import INBOX, MMAUDET, TRASH, FakeBoundary, StoredMailbox, email_of
+from tests.fakes import (
+    INBOX,
+    MMAUDET,
+    TRASH,
+    FakeBoundary,
+    MethodCall,
+    StoredMailbox,
+    email_of,
+)
 
 PAUL = {"name": "Paul Martin", "email": "paul.martin@twake.test"}
 
@@ -15,6 +23,15 @@ def thread_of(thread_id: str) -> str:
 
 def ids(answer: dict[str, Any]) -> list[str]:
     return [email["id"] for email in answer["emails"]]
+
+
+def texts_fetched(boundary: FakeBoundary) -> list[MethodCall]:
+    """The calls of Email/get that asked TMail for the text of emails."""
+    return [
+        call
+        for call in boundary.tmail.calls
+        if call.name == "Email/get" and call.arguments.get("fetchTextBodyValues")
+    ]
 
 
 def share_a_mailbox_with_mmaudet(boundary: FakeBoundary) -> None:
@@ -74,9 +91,31 @@ async def test_a_long_conversation_gives_its_last_emails(
     response = await client.get(thread_of("thread-a"), params={"limit": 2}, headers=AS_MMAUDET)
 
     assert ids(response.json()) == ["email-4", "email-5"]
-    [get] = [call for call in boundary.tmail.calls if call.name == "Email/get"]
+    [get] = texts_fetched(boundary)
     assert get.arguments["ids"] == ["email-4", "email-5"]
     assert get.arguments["maxBodyValueBytes"] == 8_192
+
+
+async def test_the_last_emails_of_a_conversation_are_the_users_own(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    share_a_mailbox_with_mmaudet(boundary)
+    tmail = boundary.tmail
+    tmail.deliver("email-1", INBOX, threadId="thread-a", receivedAt="2026-10-05T08:00:00Z")
+    tmail.deliver("email-2", INBOX, threadId="thread-a", receivedAt="2026-10-05T09:00:00Z")
+    # The newest, in a mailbox shared with the user
+    tmail.deliver("email-boss", "mbx-boss", threadId="thread-a", receivedAt="2026-10-05T10:00:00Z")
+
+    last = await client.get(thread_of("thread-a"), params={"limit": 1}, headers=AS_MMAUDET)
+    both = await client.get(thread_of("thread-a"), params={"limit": 2}, headers=AS_MMAUDET)
+
+    assert ids(last.json()) == ["email-2"]
+    assert ids(both.json()) == ["email-1", "email-2"]
+    # The text of an email that is not the user's own is never fetched
+    assert [get.arguments["ids"] for get in texts_fetched(boundary)] == [
+        ["email-2"],
+        ["email-1", "email-2"],
+    ]
 
 
 @pytest.mark.parametrize("thread_id", ["thread-boss", "thread-unknown"], ids=["shared", "unknown"])

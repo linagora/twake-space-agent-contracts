@@ -432,6 +432,17 @@ CONDITIONS: dict[str, Callable[[dict[str, Any], Any], bool]] = {
 }
 
 
+def _pointed(value: Any, path: list[str]) -> Any:
+    """What a JMAP result reference points at (RFC 8620): a * maps the rest of the path over a
+    list, whose lists it flattens."""
+    if not path:
+        return value
+    if path[0] == "*":
+        found = [_pointed(item, path[1:]) for item in value]
+        return [part for item in found for part in (item if isinstance(item, list) else [item])]
+    return _pointed(value[path[0]], path[1:])
+
+
 class FakeTMail:
     """TMail's JMAP API, as the contracts go through it with the bearer's token, answering the way
     James does.
@@ -553,7 +564,8 @@ class FakeTMail:
             if key.startswith("#"):
                 if value["resultOf"] not in results:
                     raise MethodError("invalidResultReference")
-                key, value = key[1:], results[value["resultOf"]][value["path"].strip("/")]
+                path = value["path"].strip("/").split("/")
+                key, value = key[1:], _pointed(results[value["resultOf"]], path)
             resolved[key] = value
         return resolved
 

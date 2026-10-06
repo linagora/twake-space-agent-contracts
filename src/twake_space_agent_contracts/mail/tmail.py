@@ -266,6 +266,17 @@ class _Thread(_Jmap):
     email_ids: list[str]
 
 
+class _Place(_Jmap):
+    """Where an email is: its mailboxes."""
+
+    id: str
+    mailbox_ids: dict[str, bool]
+
+
+class _Places(_Jmap):
+    found: list[_Place] = Field(validation_alias="list")
+
+
 class _Threads(_Jmap):
     found: list[_Thread] = Field(validation_alias="list")
 
@@ -316,6 +327,12 @@ def _own(results: dict[str, Any]) -> set[str]:
     return {mailbox.id for mailbox in mailboxes}
 
 
+def _in_own(mailbox_ids: dict[str, bool], own: set[str]) -> bool:
+    """Whether an email is in one of the user's own mailboxes: TMail gives the emails of mailboxes
+    shared with the user too, whatever the capabilities."""
+    return bool(own & mailbox_ids.keys())
+
+
 def _texts(
     user: User, results: dict[str, Any], ids: list[str], own: set[str], longest: int
 ) -> list[Email]:
@@ -326,7 +343,7 @@ def _texts(
     return [
         found[email_id].text(own, domain, longest)
         for email_id in ids
-        if email_id in found and own & found[email_id].mailbox_ids.keys()
+        if email_id in found and _in_own(found[email_id].mailbox_ids, own)
     ]
 
 
@@ -488,11 +505,31 @@ class TMail:
     async def thread(self, user: User, thread_id: str, limit: int) -> list[Email]:
         """The last emails of one of the user's conversations, at most limit, oldest first, as
         text, but for those outside the user's own mailboxes."""
-        results = await self._call(user, _MAILBOXES, ("Thread/get", {"ids": [thread_id]}))
+        results = await self._call(
+            user,
+            _MAILBOXES,
+            ("Thread/get", {"ids": [thread_id]}),
+            # Where each of its emails is, so that the last ones are taken among the user's own
+            (
+                "Email/get",
+                {
+                    "#ids": {
+                        "resultOf": "Thread/get",
+                        "name": "Thread/get",
+                        "path": "/list/*/emailIds",
+                    },
+                    "properties": ["id", "mailboxIds"],
+                },
+            ),
+        )
         own = _own(results)
         threads = _parsed(_Threads, results["Thread/get"], "the conversation").found
+        places = _parsed(_Places, results["Email/get"], "the conversation").found
+        mailboxes = {place.id: place.mailbox_ids for place in places}
         # The ids of a thread's emails come oldest first (RFC 8621)
-        last = next((thread.email_ids for thread in threads if thread.id == thread_id), [])[-limit:]
+        in_thread = next((thread.email_ids for thread in threads if thread.id == thread_id), [])
+        last = [email_id for email_id in in_thread if _in_own(mailboxes.get(email_id, {}), own)]
+        last = last[-limit:]
         emails = []
         if last:
             results = await self._call(
