@@ -135,7 +135,7 @@ async def test_a_room_is_read_with_what_it_shows_of_itself(
 
 
 @pytest.mark.parametrize("room_id", [PAULS, "!unknown:chat.twake.test"], ids=["others", "unknown"])
-@pytest.mark.parametrize("operation", [""], ids=["read_room"])
+@pytest.mark.parametrize("operation", ["", "/members"], ids=["read_room", "list_room_members"])
 async def test_a_room_the_user_has_not_joined_is_not_found(
     client: AsyncClient, boundary: FakeBoundary, room_id: str, operation: str
 ) -> None:
@@ -154,7 +154,9 @@ async def test_a_room_the_user_has_not_joined_is_not_found(
 
 
 @pytest.mark.parametrize("limit", [0, 101])
-@pytest.mark.parametrize("operation", [""], ids=["list_rooms"])
+@pytest.mark.parametrize(
+    "operation", ["", f"/{PROJECT}/members"], ids=["list_rooms", "list_room_members"]
+)
 async def test_a_limit_out_of_range_is_an_invalid_request(
     client: AsyncClient, boundary: FakeBoundary, limit: int, operation: str
 ) -> None:

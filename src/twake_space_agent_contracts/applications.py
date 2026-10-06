@@ -11,7 +11,7 @@ from psycopg_pool import AsyncConnectionPool
 from twake_space_agent_contracts import events, freebusy, invitations
 from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
-from twake_space_agent_contracts.chat import rooms
+from twake_space_agent_contracts.chat import members, rooms
 from twake_space_agent_contracts.chat.synapse import Synapse
 from twake_space_agent_contracts.settings import Settings
 
@@ -80,7 +80,7 @@ def _chat(context: Context) -> list[APIRouter]:
     # The users' mail domain is the server name unless told otherwise, as the harness maps them
     mail_domain = context.settings.matrix_mail_domain or server_name
     synapse = Synapse(url, server_name, mail_domain, context.http)
-    return [rooms.router(synapse, context.caller)]
+    return [rooms.router(synapse, context.caller), members.router(synapse, context.caller)]
 
 
 APPLICATIONS = (
@@ -111,7 +111,7 @@ APPLICATIONS = (
     Application(
         domain="chat",
         name=Words(en="Twake Chat", fr="Twake Chat"),
-        read=Words(en="list your rooms", fr="lister tes salons"),
+        read=Words(en="list your rooms and their members", fr="lister tes salons et leurs membres"),
         write=None,
         routers=_chat,
     ),

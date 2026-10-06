@@ -349,25 +349,22 @@ class Synapse:
         )
 
     async def members(self, room: JoinedRoom) -> list[Member]:
-        """The room's joined members by Matrix id, with the name each chose, and nothing else of
-        their profiles."""
+        """The room's joined members, with the name each chose, and nothing else of their
+        profiles."""
         answer = await self._get(
             room.owner, room.path("joined_members"), refusals={403: room_not_found(room.room_id)}
         )
         joined = answer.get("joined") if isinstance(answer, dict) else None
         if not isinstance(joined, dict):
             raise _unavailable("Chat gave the members of the room in an unexpected form.")
-        return sorted(
-            (
-                Member(
-                    user_id=user_id,
-                    untrusted=MemberTexts(
-                        display_name=_text(profile.get("display_name"))
-                        if isinstance(profile, dict)
-                        else None
-                    ),
-                )
-                for user_id, profile in joined.items()
-            ),
-            key=lambda member: member.user_id,
-        )
+        return [
+            Member(
+                user_id=user_id,
+                untrusted=MemberTexts(
+                    display_name=_text(profile.get("display_name"))
+                    if isinstance(profile, dict)
+                    else None
+                ),
+            )
+            for user_id, profile in joined.items()
+        ]
