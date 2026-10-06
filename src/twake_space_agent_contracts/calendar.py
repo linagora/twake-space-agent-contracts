@@ -22,6 +22,10 @@ def _calendar_problem(code: str, title: str, detail: str) -> Problem:
     return Problem(status=502, code=code, title=title, detail=detail)
 
 
+def _unavailable(detail: str) -> Problem:
+    return _calendar_problem("calendar_unavailable", "Calendar unavailable", detail)
+
+
 class Calendar:
     """The Calendar side service, called as the user with their own token."""
 
@@ -44,17 +48,11 @@ class Calendar:
                     "Calendar refused the user's token",
                     f"Calendar answered {error.response.status_code} to {method} {path}.",
                 ) from error
-            raise _calendar_problem(
-                "calendar_unavailable",
-                "Calendar unavailable",
-                f"Calendar answered {error.response.status_code} to {method} {path}.",
+            raise _unavailable(
+                f"Calendar answered {error.response.status_code} to {method} {path}."
             ) from error
         except (httpx.HTTPError, ValueError) as error:
-            raise _calendar_problem(
-                "calendar_unavailable",
-                "Calendar unavailable",
-                f"Calendar did not answer {method} {path}.",
-            ) from error
+            raise _unavailable(f"Calendar did not answer {method} {path}.") from error
 
     async def user_id(self, user: User) -> str:
         found = await self._call(user, "GET", "/api/users", params={"email": user.email})
@@ -94,9 +92,5 @@ class Calendar:
                 for slot in calendar.get("busy", [])
             ]
         except (KeyError, TypeError, ValueError) as error:
-            raise _calendar_problem(
-                "calendar_unavailable",
-                "Calendar unavailable",
-                "Calendar gave free/busy in an unexpected form.",
-            ) from error
+            raise _unavailable("Calendar gave free/busy in an unexpected form.") from error
         return sorted(slots, key=lambda slot: slot.start)
