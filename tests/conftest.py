@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
 import psycopg
 import pytest
 from asgi_lifespan import LifespanManager
@@ -9,13 +10,14 @@ from httpx import ASGITransport, AsyncClient
 from psycopg.types.json import Jsonb
 from testcontainers.community.postgres import PostgresContainer
 
+from tests.fakes import SETTINGS, FakeBoundary, FakeClock, as_user, email_of
 from twake_space_agent_contracts.app import create_app
 
 SCHEMA = Path(__file__).parent.parent / "sql" / "workplace_events.sql"
 
 INVITED = "com.twake.calendar.event.invited.v1"
 
-AS_MMAUDET = {"X-Twake-User": "mmaudet"}
+AS_MMAUDET = as_user(email_of("mmaudet"))
 
 
 class Store(Protocol):
@@ -32,7 +34,10 @@ def invitation(event_id: str, *, targets: list[str], time: str) -> dict[str, Any
         "subject": f"calendars/e2e.organizer/{event_id}.ics",
         "time": time,
         "data": {
-            "object": {"title": "Point Twake Space E2E", "start": "2026-10-13T17:00:00+02:00"}
+            "object": {"title": "Point Twake Space E2E", "start": "2026-10-13T17:00:00+02:00"},
+            "targets": [
+                {"uid": uid, "native_id": email_of(uid), "role": "invitee"} for uid in targets
+            ],
         },
     }
 
@@ -72,8 +77,21 @@ async def store(database_url: str) -> AsyncIterator[Store]:
 
 
 @pytest.fixture
-async def client(database_url: str) -> AsyncIterator[AsyncClient]:
-    app = create_app(database_url)
+def boundary() -> FakeBoundary:
+    return FakeBoundary()
+
+
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock()
+
+
+@pytest.fixture
+async def client(
+    database_url: str, boundary: FakeBoundary, clock: FakeClock
+) -> AsyncIterator[AsyncClient]:
+    http = httpx.AsyncClient(transport=httpx.MockTransport(boundary.handle))
+    app = create_app(database_url, SETTINGS, http=http, clock=clock)
     async with (
         LifespanManager(app) as manager,
         AsyncClient(
