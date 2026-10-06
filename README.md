@@ -49,6 +49,7 @@ Every contract keeps the rules of the capability catalog, which the tests check 
 - A `GET` contract reads, and any other writes. Every write declares in `x-twake-risk` whether it is `low`, which the owner's consent to write in its application covers, or `high`, which the owner confirms call by call; the harness takes a write that declares neither for a high one.
 - Every operation's description ends with a worked call, its values in the exact format the gateway checks: `Example: event_id=f7c9….`, or `Example, <what it is an example of>: name=value, name=value.`. A list gives its name once per value, and a body is written `body=<JSON>`. The tests check each value against the operation's schema in the document, as the gateway does.
 - A contract that makes the application notify other people says so in its description, as `accept_invitation` does of the organizer.
+- Text other people wrote, which an agent reads as data and never as instructions, comes back in an `untrusted` object, apart from what the contract computed.
 
 ### `events.read.v1`
 
@@ -62,6 +63,7 @@ Reads the workplace events stored for the user the agent acts for: those whose t
 - `limit` goes from 1 to 100 and is 20 by default.
 - Pass `type=com.twake.calendar.event.invited.v1` to list meeting invitations.
 - An event the user is not a target of answers exactly like an unknown one, so the contract never reveals that an event exists.
+- The title of the event's object, which its author wrote, comes back in `untrusted.title` rather than in `data.object`, where the rest is what the producer computed, such as the `uid` and the times of an invitation.
 
 ### `calendar.freebusy.read.v1`
 

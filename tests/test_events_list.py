@@ -49,6 +49,21 @@ async def test_the_list_keeps_only_the_requested_type(client: AsyncClient, store
     assert [event["id"] for event in response.json()["events"]] == ["evt-invite"]
 
 
+async def test_what_others_wrote_in_each_event_comes_apart(
+    client: AsyncClient, store: Store
+) -> None:
+    await store(
+        invitation("evt-1", targets=["mmaudet"], time="2026-10-01T08:00:00Z", uid="event-a")
+    )
+
+    response = await client.get("/contracts/v1/events", headers=AS_MMAUDET)
+
+    [event] = response.json()["events"]
+    assert event["untrusted"] == {"title": "Point Twake Space E2E"}
+    # What the harness reads of an invitation stays where it was
+    assert event["data"]["object"] == {"start": "2026-10-13T17:00:00+02:00", "uid": "event-a"}
+
+
 @pytest.mark.parametrize("limit", [0, 101])
 async def test_a_limit_out_of_range_is_an_invalid_request(client: AsyncClient, limit: int) -> None:
     response = await client.get("/contracts/v1/events", params={"limit": limit}, headers=AS_MMAUDET)
