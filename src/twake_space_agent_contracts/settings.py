@@ -1,4 +1,4 @@
-"""Where the service finds the issuer of the users' tokens."""
+"""Where the service finds the issuer of the users' tokens and the applications it relays to."""
 
 import os
 from dataclasses import dataclass
@@ -12,6 +12,8 @@ class Settings:
     """The client the token broker gets those tokens for: tokens of any other client are refused."""
     jwks_url: str
     """Where the issuer publishes its signing keys."""
+    calendar_url: str
+    """The Calendar side service, which free/busy goes through with the user's token."""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -21,4 +23,5 @@ class Settings:
             audience=os.environ.get("OIDC_AUDIENCE", "twake-space-agents"),
             # Where LemonLDAP-NG publishes them, unless told otherwise
             jwks_url=os.environ.get("OIDC_JWKS_URL", issuer.rstrip("/") + "/oauth2/jwks"),
+            calendar_url=os.environ["CALENDAR_URL"].rstrip("/"),
         )

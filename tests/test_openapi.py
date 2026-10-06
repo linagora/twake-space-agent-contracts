@@ -15,6 +15,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
     assert {name: operation["tags"] for name, operation in operations.items()} == {
         "read_event": ["events.read.v1"],
         "list_events": ["events.read.v1"],
+        "read_freebusy": ["calendar.freebusy.read.v1"],
     }
 
 

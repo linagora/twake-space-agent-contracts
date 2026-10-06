@@ -17,6 +17,8 @@ from twake_space_agent_contracts.settings import Settings
 class User:
     email: str
     """The user, by the email that is their subject on Twake's LemonLDAP-NG, lowercased."""
+    token: str
+    """Their access token, which contracts relay to the applications they go through."""
 
 
 def _refused(*, code: str, title: str, detail: str) -> Problem:
@@ -127,7 +129,7 @@ class TokenVerifier:
         # Another client may list this audience too: only the broker's own tokens serve
         if claims["client_id"] != self._settings.audience:
             raise invalid
-        return User(email=str(claims["sub"]).lower())
+        return User(email=str(claims["sub"]).lower(), token=token)
 
 
 CallerDependency = Callable[..., Awaitable[User]]
