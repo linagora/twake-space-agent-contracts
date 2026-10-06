@@ -42,11 +42,28 @@ Before an assistant first reads in an application, and before it first writes th
 
 The words are in English and in French, addressed to the owner, and plain text on one line without a final period: no markup character (`` \ ` * _ ~ [ ] < > & ``), and nothing that looks like a link, an address or a domain name, such as a dot inside a word. A name takes at most 64 characters and what a level covers 200. `read` and `write` are given for the levels the application offers only: a `GET` contract reads, any other writes. The harness ignores an entry that breaks these rules; the tests refuse it first.
 
+### Adding an application
+
+An application comes as a module of its own, as Calendar does: its client, its `<APP>_URL` setting, its typed problems, its routers, one per contract, its tests at the HTTP boundary and its section below. It is declared by one entry of `APPLICATIONS`, in `applications.py`: its domain, its words, and a function that builds its routers from the service's settings, events database, HTTP client and caller dependency. The tests publish every declared application; a deployment publishes it once `PUBLISHED_APPS` names it.
+
+### Putting an application in service
+
+In this order:
+
+1. **LemonLDAP-NG.** Give the `twake-space-agents` client the audience the application checks and the attributes it needs, then restart the token broker: it keeps each user's access token until shortly before it expires, and a token carries a new audience only from its next refresh.
+2. **The gateway's routes**, in the `apisix-contracts` values of the deployment repository, applied before the new image of this service or with it: the agents see a contract's tool as soon as the service publishes it, and without its route a call answers 404.
+3. **The address of the OpenAPI document** in those values, against which the gateway checks every call. It must change whenever the document does, since APISIX keeps a document an hour by its address: with each image, as `?image=<digest>`, and with each change of `PUBLISHED_APPS`.
+4. **`PUBLISHED_APPS`**, with the application's domain added, kept equal to the applications the gateway routes.
+5. **The network path** from this service to the application, at its `<APP>_URL`: the application must accept traffic from this service's namespace.
+6. **A check end to end** on dev, with a test owner's real token, through the gateway and the harness: the consent question, the answer, the call and its audit record.
+
+To switch an application off, take it out of `PUBLISHED_APPS`, with a new address of the document: its paths answer 404 at once, and its tools leave the agents when the harness next reads the document, within minutes. Then remove its routes.
+
 ## Contracts
 
-Every contract keeps the rules of the capability catalog, which the tests check on the OpenAPI document:
+Every contract keeps the rules of the capability catalog:
 
-- A `GET` contract reads, and any other writes. Every write declares in `x-twake-risk` whether it is `low`, which the owner's consent to write in its application covers, or `high`, which the owner confirms call by call; the harness takes a write that declares neither for a high one.
+- A `GET` contract reads, and any other writes. Every write declares in `x-twake-risk` whether it is `low`, which the owner's consent to write in its application covers, or `high`, which the owner confirms call by call; the harness takes a write that declares neither for a high one, and the tests refuse it.
 - Every operation's description ends with a worked call, its values in the exact format the gateway checks: `Example: event_id=f7c9….`, or `Example, <what it is an example of>: name=value, name=value.`. A list gives its name once per value, and a body is written `body=<JSON>`. The tests check each value against the operation's schema in the document, as the gateway does.
 - A contract that makes the application notify other people says so in its description, as `accept_invitation` does of the organizer.
 - Text other people wrote, which an agent reads as data and never as instructions, comes back in an `untrusted` object, apart from what the contract computed.
@@ -141,7 +158,7 @@ The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user
 
 ## Test
 
-The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys and the Calendar side service are faked at the HTTP boundary.
+The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys and the Calendar side service are faked at the HTTP boundary. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the words of every published application, and a worked call in every description.
 
 ```sh
 uv run pytest
