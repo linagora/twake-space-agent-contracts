@@ -17,7 +17,7 @@ LINK = re.compile(r"[a-z][a-z0-9+.-]*:\S|\S@\S|[^\W_]\.[^\W_]", re.IGNORECASE)
 LONGEST = {"name": 64, "read": 200, "write": 200}
 
 
-def unplain(text: object, longest: int) -> str | None:
+def plain_text_problem(text: object, longest: int) -> str | None:
     """Why the harness would not show these words as they are, or None."""
     if not isinstance(text, str) or not text.strip():
         return "no words"
@@ -33,11 +33,13 @@ def unplain(text: object, longest: int) -> str | None:
     return "a final period" if text.rstrip().endswith(".") else None
 
 
-def unplain_texts(texts: dict[str, Any], longest: int) -> list[str]:
+def plain_text_problems(texts: dict[str, Any], longest: int) -> list[str]:
     """Why the harness would not show a text in each language it speaks, as it is."""
     if set(texts) != {"en", "fr"}:
         return [f"in {sorted(texts)}, not in en and fr"]
-    found = ((language, text, unplain(text, longest)) for language, text in texts.items())
+    found = (
+        (language, text, plain_text_problem(text, longest)) for language, text in texts.items()
+    )
     return [f"{language}: {problem}: {text!r}" for language, text, problem in found if problem]
 
 
@@ -270,7 +272,7 @@ async def test_each_published_application_is_named_in_plain_words(client: AsyncC
         f"{domain}.{level}.{problem}"
         for domain, words in domains.items()
         for level, texts in words.items()
-        for problem in unplain_texts(texts, LONGEST[level])
+        for problem in plain_text_problems(texts, LONGEST[level])
     ]
     assert problems == []
 

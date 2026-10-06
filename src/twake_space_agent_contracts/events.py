@@ -45,7 +45,7 @@ class Event(BaseModel):
         uid = invited.get("uid") if isinstance(invited, dict) else None
         return uid if isinstance(uid, str) and uid else None
 
-    def with_untrusted_apart(self) -> "Event":
+    def with_untrusted_separated(self) -> "Event":
         """The event as the contracts give it: the title of its object, the one text its author
         wrote that the producers publish, moved from data to untrusted."""
         data = copy.deepcopy(self.data)
@@ -74,7 +74,7 @@ async def _user_events(
     async with pool.connection() as connection:
         cursor = connection.cursor(row_factory=class_row(Event))
         await cursor.execute(_USER_EVENTS + refinement, params)
-        return [event.with_untrusted_apart() for event in await cursor.fetchall()]
+        return [event.with_untrusted_separated() for event in await cursor.fetchall()]
 
 
 async def user_event(pool: AsyncConnectionPool, email: str, event_id: str) -> Event | None:
