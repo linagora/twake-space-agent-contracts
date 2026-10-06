@@ -6,6 +6,9 @@ from tests.conftest import AS_MMAUDET
 from tests.fakes import INBOX, MMAUDET, FakeBoundary, StoredMailbox, email_of
 
 PAUL = {"name": "Paul Martin", "email": "paul.martin@twake.test"}
+# Invisible format characters too: a soft hyphen, an Arabic letter mark, a word joiner, an
+# invisible plus and tags; and a surrogate left alone, which no text can hold
+INVISIBLE = "".join(map(chr, [0x00AD, 0x061C, 0x2060, 0x2064, 0xE0001, 0xE0041, 0xE007F, 0xD800]))
 
 
 async def read(client: AsyncClient, email_id: str) -> dict[str, Any]:
@@ -73,10 +76,10 @@ async def test_what_others_wrote_loses_its_hidden_characters(
     boundary.tmail.deliver(
         "email-1",
         INBOX,
-        subject="Budget\u202e Q4\u200b",
-        preview="Hello,\u2066 here is\nthe budget",
-        body="Hello,\u200b\r\n\r\n\r\n\r\n  here   is\tthe budget.\u0000\ufeff",
-        **{"from": [{"name": "Paul\u2067 Martin", "email": "paul.martin@twake.test"}]},
+        subject=f"{INVISIBLE}Budget\u202e Q4\u200b",
+        preview=f"Hello,{INVISIBLE}\u2066 here is\nthe budget",
+        body=f"Hello,{INVISIBLE}\u200b\r\n\r\n\r\n\r\n  here   is\tthe budget.\u0000\ufeff",
+        **{"from": [{"name": f"Paul{INVISIBLE}\u2067 Martin", "email": "paul.martin@twake.test"}]},
     )
 
     email = await read(client, "email-1")

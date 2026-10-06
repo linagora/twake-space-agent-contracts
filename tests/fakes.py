@@ -557,7 +557,9 @@ class FakeTMail:
                 continue
             results[call_id] = result
             responses.append([name, result, call_id])
-        return httpx.Response(200, json={"methodResponses": responses, "sessionState": "0"})
+        # In ASCII, as JSON may write any text, a surrogate left alone included
+        answer = json.dumps({"methodResponses": responses, "sessionState": "0"})
+        return httpx.Response(200, content=answer, headers={"Content-Type": "application/json"})
 
     @staticmethod
     def _resolved(arguments: dict[str, Any], results: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -650,15 +652,16 @@ class FakeTMail:
 
     @staticmethod
     def _properties(email: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
-        """The email as Email/get gives it: its only text part, cut at maxBodyValueBytes."""
-        body = email["body"].encode()
+        """The email as Email/get gives it: its only text part, cut at maxBodyValueBytes, counted
+        in characters, which are bytes in the ASCII of the tests' long bodies."""
+        body = email["body"]
         cut = arguments.get("maxBodyValueBytes") or len(body)
         parts = {
             "textBody": [{"partId": "1", "type": "text/plain"}],
             "bodyValues": (
                 {
                     "1": {
-                        "value": body[:cut].decode(errors="ignore"),
+                        "value": body[:cut],
                         "isEncodingProblem": False,
                         "isTruncated": len(body) > cut,
                     }

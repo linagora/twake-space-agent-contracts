@@ -6,6 +6,7 @@ mailboxes, and every call goes to the user's personal account."""
 
 import hashlib
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,9 +42,10 @@ _MAILBOXES = ("Mailbox/get", {"ids": None, "properties": MAILBOX_PROPERTIES})
 # spam, where JMAP's registry names it junk
 LEFT_OUT = {"trash", "spam", "junk"}
 
-# What a reader does not see, and could hide or reorder text: the control characters but for
-# whitespace, which is collapsed, and the invisible and bidirectional marks
-_HIDDEN = re.compile(r"[\x00-\x08\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
+# What a reader does not see (Unicode's Cc, Cf and Cs): the control characters but for whitespace,
+# which is collapsed; the format characters, which are invisible and can reorder text, such as
+# bidirectional marks, zero-width spaces and tags; and surrogates left alone, which no text holds
+UNSEEN = {"Cc", "Cf", "Cs"}
 
 
 def _mail_problem(code: str, title: str, detail: str) -> Problem:
@@ -58,14 +60,19 @@ def _not_found(code: str, title: str, detail: str) -> Problem:
     return Problem(status=404, code=code, title=title, detail=detail)
 
 
+def _seen(text: str) -> str:
+    """The text without what a reader does not see."""
+    return "".join(c for c in text if c.isspace() or unicodedata.category(c) not in UNSEEN)
+
+
 def _line(text: str | None) -> str:
     """Text other people wrote, on one line, without what a reader does not see."""
-    return " ".join(_HIDDEN.sub("", text or "").split())
+    return " ".join(_seen(text or "").split())
 
 
 def _paragraphs(text: str) -> str:
     """Text other people wrote, without what a reader does not see, its blank runs collapsed."""
-    lines = (" ".join(line.split()) for line in _HIDDEN.sub("", text).splitlines())
+    lines = (" ".join(line.split()) for line in _seen(text).splitlines())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
