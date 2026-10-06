@@ -5,7 +5,10 @@ never any other. None uses James's shares capability, so that TMail keeps to the
 mailboxes, and every call goes to the user's personal account."""
 
 import hashlib
+import re
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -19,8 +22,26 @@ CORE = "urn:ietf:params:jmap:core"
 MAIL = "urn:ietf:params:jmap:mail"
 # The JMAP of RFC 8620 and 8621, as James's clients ask for it
 JMAP_JSON = "application/json;jmapVersion=rfc-8621"
+# What a JMAP id is made of (RFC 8620): TMail is never asked for anything else
+JMAP_ID = r"^[A-Za-z0-9_-]{1,255}$"
+
+BODY_BYTES = 32 * 1024
+"""How much of an email's text read_email gives, at most."""
 
 MAILBOX_PROPERTIES = ["id", "name", "parentId", "role", "totalEmails", "unreadEmails"]
+# What TMail itself tells of an email, then what other people wrote of it
+FACTS = ["id", "threadId", "mailboxIds", "keywords", "receivedAt", "hasAttachment"]
+SUMMARY_PROPERTIES = [*FACTS, "from", "subject", "preview"]
+EMAIL_PROPERTIES = [*FACTS, "from", "to", "cc", "replyTo", "subject", "textBody", "bodyValues"]
+NEWEST_FIRST = [{"property": "receivedAt", "isAscending": False}]
+_MAILBOXES = ("Mailbox/get", {"ids": None, "properties": MAILBOX_PROPERTIES})
+# What a list or a search leaves out unless asked for: James names the role of the spam mailbox
+# spam, where JMAP's registry names it junk
+LEFT_OUT = {"trash", "spam", "junk"}
+
+# What a reader does not see, and could hide or reorder text: the control characters but for
+# whitespace, which is collapsed, and the invisible and bidirectional marks
+_HIDDEN = re.compile(r"[\x00-\x08\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
 
 def _mail_problem(code: str, title: str, detail: str) -> Problem:
@@ -29,6 +50,26 @@ def _mail_problem(code: str, title: str, detail: str) -> Problem:
 
 def _unavailable(detail: str) -> Problem:
     return _mail_problem("mail_unavailable", "Mail unavailable", detail)
+
+
+def _not_found(code: str, title: str, detail: str) -> Problem:
+    return Problem(status=404, code=code, title=title, detail=detail)
+
+
+def _line(text: str | None) -> str:
+    """Text other people wrote, on one line, without what a reader does not see."""
+    return " ".join(_HIDDEN.sub("", text or "").split())
+
+
+def _paragraphs(text: str) -> str:
+    """Text other people wrote, without what a reader does not see, its blank runs collapsed."""
+    lines = (" ".join(line.split()) for line in _HIDDEN.sub("", text).splitlines())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def _utc(time: datetime | None) -> str | None:
+    """The time as JMAP writes dates, in UTC."""
+    return None if time is None else time.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class _Jmap(BaseModel):
@@ -63,6 +104,210 @@ class Mailbox(_Jmap):
 
 class _Mailboxes(_Jmap):
     found: list[Mailbox] = Field(validation_alias="list")
+
+
+class Address(BaseModel):
+    name: str | None
+    email: str | None
+
+
+class EmailSummaryText(BaseModel):
+    """What other people wrote of an email, as a list shows it."""
+
+    sender: list[Address] = Field(serialization_alias="from")
+    subject: str
+    preview: str
+
+
+class EmailText(BaseModel):
+    """What other people wrote of an email."""
+
+    sender: list[Address] = Field(serialization_alias="from")
+    to: list[Address]
+    cc: list[Address]
+    reply_to: list[Address]
+    subject: str
+    body: str
+
+
+class _Facts(BaseModel):
+    """What TMail itself tells of an email: ids, time and flags."""
+
+    id: str
+    thread_id: str
+    mailbox_ids: list[str]
+    received_at: datetime
+    unread: bool
+    flagged: bool
+    has_attachment: bool
+
+
+class EmailSummary(_Facts):
+    """An email of the user, as a list shows it."""
+
+    untrusted: EmailSummaryText
+
+
+class Email(_Facts):
+    """An email of the user, as text."""
+
+    external_sender: bool
+    reply_to_differs: bool
+    body_truncated: bool
+    untrusted: EmailText
+
+
+class _Address(_Jmap):
+    name: str | None = None
+    email: str | None = None
+
+
+def _cleaned(addresses: list[_Address] | None) -> list[Address]:
+    return [
+        Address(name=_line(address.name) or None, email=_line(address.email) or None)
+        for address in addresses or []
+    ]
+
+
+def _emails(addresses: list[Address]) -> set[str]:
+    return {(address.email or "").lower() for address in addresses}
+
+
+def _domain(address: Address) -> str:
+    return (address.email or "").lower().rpartition("@")[2]
+
+
+class _BodyPart(_Jmap):
+    part_id: str | None = None
+
+
+class _BodyValue(_Jmap):
+    value: str
+    is_truncated: bool = False
+
+
+class _Email(_Jmap):
+    id: str
+    thread_id: str
+    mailbox_ids: dict[str, bool]
+    keywords: dict[str, bool] = Field(default_factory=dict)
+    received_at: datetime
+    has_attachment: bool = False
+    sender: list[_Address] | None = Field(default=None, validation_alias="from")
+    to: list[_Address] | None = None
+    cc: list[_Address] | None = None
+    reply_to: list[_Address] | None = None
+    subject: str | None = None
+    preview: str | None = None
+    text_body: list[_BodyPart] = Field(default_factory=list)
+    body_values: dict[str, _BodyValue] = Field(default_factory=dict)
+
+    def _facts(self, own: set[str]) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "thread_id": self.thread_id,
+            # A mailbox shared with the user is not theirs to tell of
+            "mailbox_ids": [mailbox for mailbox in self.mailbox_ids if mailbox in own],
+            "received_at": self.received_at,
+            "unread": not self.keywords.get("$seen", False),
+            "flagged": self.keywords.get("$flagged", False),
+            "has_attachment": self.has_attachment,
+        }
+
+    def summary(self, own: set[str]) -> EmailSummary:
+        """The email as a list shows it, for a user whose own mailboxes are those."""
+        return EmailSummary(
+            **self._facts(own),
+            untrusted=EmailSummaryText(
+                sender=_cleaned(self.sender),
+                subject=_line(self.subject),
+                preview=_line(self.preview),
+            ),
+        )
+
+    def text(self, own: set[str], domain: str, longest: int) -> Email:
+        """The email as text, for a user of that domain whose own mailboxes are those, its text
+        cut after `longest` characters."""
+        values = [
+            self.body_values[part.part_id]
+            for part in self.text_body
+            if part.part_id in self.body_values
+        ]
+        body = _paragraphs("\n\n".join(value.value for value in values))
+        senders, reply_to = _cleaned(self.sender), _cleaned(self.reply_to)
+        return Email(
+            **self._facts(own),
+            external_sender=not senders or any(_domain(sender) != domain for sender in senders),
+            reply_to_differs=bool(_emails(reply_to) - _emails(senders)),
+            body_truncated=any(value.is_truncated for value in values) or len(body) > longest,
+            untrusted=EmailText(
+                sender=senders,
+                to=_cleaned(self.to),
+                cc=_cleaned(self.cc),
+                reply_to=reply_to,
+                subject=_line(self.subject),
+                body=body[:longest],
+            ),
+        )
+
+
+class _Emails(_Jmap):
+    found: list[_Email] = Field(validation_alias="list")
+
+
+class _Query(_Jmap):
+    ids: list[str]
+
+
+@dataclass(frozen=True)
+class Search:
+    """What a list or a search of the user's mail keeps: the emails that match all it says."""
+
+    mailbox: str | None = None
+    """One of the user's own mailboxes; without it, all of them but trash and spam."""
+    text: str | None = None
+    sender: str | None = None
+    unread: bool = False
+    flagged: bool = False
+    after: datetime | None = None
+    before: datetime | None = None
+
+
+def _condition(search: Search, mailboxes: list[Mailbox]) -> dict[str, Any]:
+    """The search as one JMAP filter condition: James refuses mailboxes inside an operator."""
+    condition: dict[str, Any] = {}
+    if search.mailbox is None:
+        left_out = [mailbox.id for mailbox in mailboxes if mailbox.role in LEFT_OUT]
+        if left_out:
+            condition["inMailboxOtherThan"] = left_out
+    elif any(mailbox.id == search.mailbox for mailbox in mailboxes):
+        condition["inMailbox"] = search.mailbox
+    else:
+        raise _not_found(
+            "mailbox_not_found",
+            "Mailbox not found",
+            f"The user has no mailbox {search.mailbox} of their own.",
+        )
+    wanted = {
+        "text": search.text,
+        "from": search.sender,
+        "notKeyword": "$seen" if search.unread else None,
+        "hasKeyword": "$flagged" if search.flagged else None,
+        "after": _utc(search.after),
+        "before": _utc(search.before),
+    }
+    return condition | {key: value for key, value in wanted.items() if value is not None}
+
+
+def _as_text(longest: int) -> dict[str, Any]:
+    """Email/get's arguments for emails as text: TMail turns the HTML parts into text, and cuts
+    each part after `longest` bytes."""
+    return {
+        "properties": EMAIL_PROPERTIES,
+        "bodyProperties": ["partId"],
+        "fetchTextBodyValues": True,
+        "maxBodyValueBytes": longest,
+    }
 
 
 class TMail:
@@ -123,7 +368,7 @@ class TMail:
         if account is None:
             raise _unavailable("Mail gave a session without a mail account.")
         # The accounts of expired tokens go as new ones come, so that they do not pile up
-        self._accounts = {token: held for token, held in self._accounts.items() if now < held[1]}
+        self._accounts = {token: kept for token, kept in self._accounts.items() if now < kept[1]}
         self._accounts[key] = (account, now + self.SESSION_MAX_AGE)
         return account
 
@@ -147,17 +392,69 @@ class TMail:
             raise _unavailable("Mail answered in an unexpected form.") from error
         results = {}
         for name, _ in calls:
-            answered, result = responses.get(name, ("error", {"type": "nothing"}))
+            answered, result = responses.get(name, ("nothing", None))
             if answered != name or not isinstance(result, dict):
-                error_type = result.get("type") if isinstance(result, dict) else None
-                raise _unavailable(f"Mail answered {error_type or 'an error'} to {name}.")
+                # A method that fails answers an error of a type instead (RFC 8620)
+                what = result.get("type", answered) if isinstance(result, dict) else answered
+                raise _unavailable(f"Mail answered {what} to {name}.")
             results[name] = result
         return results
 
     async def mailboxes(self, user: User) -> list[Mailbox]:
         """The user's own mailboxes: without the shares capability, TMail leaves out those
         shared with them."""
-        results = await self._call(
-            user, ("Mailbox/get", {"ids": None, "properties": MAILBOX_PROPERTIES})
-        )
+        results = await self._call(user, _MAILBOXES)
         return _parsed(_Mailboxes, results["Mailbox/get"], "the mailboxes").found
+
+    async def emails(
+        self, user: User, search: Search, position: int, limit: int
+    ) -> tuple[list[EmailSummary], bool]:
+        """The emails found, newest first, from that position on; and whether they fill the
+        page, so that more may follow."""
+        mailboxes = await self.mailboxes(user)
+        results = await self._call(
+            user,
+            (
+                "Email/query",
+                {
+                    "filter": _condition(search, mailboxes),
+                    "sort": NEWEST_FIRST,
+                    "position": position,
+                    "limit": limit,
+                },
+            ),
+            (
+                "Email/get",
+                {
+                    "#ids": {"resultOf": "Email/query", "name": "Email/query", "path": "/ids"},
+                    "properties": SUMMARY_PROPERTIES,
+                },
+            ),
+        )
+        found = _parsed(_Query, results["Email/query"], "the emails found").ids
+        emails = {
+            email.id: email
+            for email in _parsed(_Emails, results["Email/get"], "the emails found").found
+        }
+        own = {mailbox.id for mailbox in mailboxes}
+        summaries = [emails[email_id].summary(own) for email_id in found if email_id in emails]
+        return summaries, len(found) == limit
+
+    async def email(self, user: User, email_id: str) -> Email:
+        """One of the user's emails, as text, if it is in one of their own mailboxes."""
+        results = await self._call(
+            user, _MAILBOXES, ("Email/get", {"ids": [email_id]} | _as_text(BODY_BYTES))
+        )
+        own = {
+            mailbox.id
+            for mailbox in _parsed(_Mailboxes, results["Mailbox/get"], "the mailboxes").found
+        }
+        for email in _parsed(_Emails, results["Email/get"], "the email").found:
+            # TMail gives an email of a mailbox shared with the user too: it is not their own
+            if email.id == email_id and own & email.mailbox_ids.keys():
+                return email.text(own, user.email.rpartition("@")[2], BODY_BYTES)
+        raise _not_found(
+            "email_not_found",
+            "Email not found",
+            f"The user has no email {email_id} in their own mailboxes.",
+        )

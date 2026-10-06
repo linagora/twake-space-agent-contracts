@@ -13,7 +13,7 @@ from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.chat import members, messages, rooms
 from twake_space_agent_contracts.chat.synapse import Synapse
-from twake_space_agent_contracts.mail import mailboxes
+from twake_space_agent_contracts.mail import emails, mailboxes
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
 
@@ -97,7 +97,7 @@ def _mail(context: Context) -> list[APIRouter]:
     if context.settings.mail_url is None:
         raise ValueError("PUBLISHED_APPS names mail, but MAIL_URL is not set")
     tmail = TMail(context.settings.mail_url, context.http, context.clock)
-    return [mailboxes.router(tmail, context.caller)]
+    return [mailboxes.router(tmail, context.caller), emails.router(tmail, context.caller)]
 
 
 APPLICATIONS = (
