@@ -24,8 +24,12 @@ class Store(Protocol):
     async def __call__(self, event: dict[str, Any]) -> None: ...
 
 
-def invitation(event_id: str, *, targets: list[str], time: str) -> dict[str, Any]:
-    return {
+def invitation(
+    event_id: str, *, targets: list[str], time: str, uid: str | None = None
+) -> dict[str, Any]:
+    """A stored invitation, as the calendar producer and the normalizer write it; with the UID of
+    the calendar event when a test reaches Calendar."""
+    event: dict[str, Any] = {
         "id": event_id,
         "type": INVITED,
         "org": "linagora",
@@ -36,10 +40,14 @@ def invitation(event_id: str, *, targets: list[str], time: str) -> dict[str, Any
         "data": {
             "object": {"title": "Point Twake Space E2E", "start": "2026-10-13T17:00:00+02:00"},
             "targets": [
-                {"uid": uid, "native_id": email_of(uid), "role": "invitee"} for uid in targets
+                {"uid": target, "native_id": email_of(target), "role": "invitee"}
+                for target in targets
             ],
         },
     }
+    if uid is not None:
+        event["data"]["object"]["uid"] = uid
+    return event
 
 
 @pytest.fixture(scope="session")

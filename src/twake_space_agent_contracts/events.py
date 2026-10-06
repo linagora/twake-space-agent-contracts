@@ -29,6 +29,12 @@ class Event(BaseModel):
     subject: str | None
     data: dict[str, Any]
 
+    def invitation_uid(self) -> str | None:
+        """The UID of the calendar event, if this is an invitation that names one."""
+        invited = self.data.get("object") if self.type == INVITED else None
+        uid = invited.get("uid") if isinstance(invited, dict) else None
+        return uid if isinstance(uid, str) and uid else None
+
 
 class EventList(BaseModel):
     events: list[Event]
