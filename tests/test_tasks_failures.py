@@ -6,7 +6,6 @@ from tests.fakes import FakeBoundary, tasks_id, tasks_member
 
 BOARD = tasks_id("Website")
 OPERATIONS = [
-    pytest.param("/contracts/v1/tasks/boards", {}, id="list_boards"),
     pytest.param("/contracts/v1/tasks/mine", {"zone": "Europe/Paris"}, id="list_my_tasks"),
     pytest.param(
         "/contracts/v1/tasks/mine", {"zone": "Europe/Paris", "due": "today"}, id="list_my_tasks due"

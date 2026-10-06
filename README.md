@@ -248,20 +248,12 @@ Reads the text of one of the user's files.
 - A file encrypted on the user's devices answers `file_encrypted`; one the antivirus found infected, or whose download it blocks, `file_blocked`.
 - The service reads the file with `POST /files/_all_docs`, then its content with `GET /files/download/{file_id}`.
 
-### `tasks.board.read.v1`
-
-Lists the boards of Twake Tasks the user is a member of.
+### Tasks, as the user
 
 The Tasks contracts call the REST API of Twake Tasks 0.1.1 with the user's token. Tasks accepts it once the token broker's client has the audience `twaketasks` and LemonLDAP-NG gives Tasks the user's `uuid`, `org_id` and `sid`: Tasks then acts for the user's `uuid` in their `org_id`, and shows them the boards of the projects they are a member of. The service publishes them once `PUBLISHED_APPS` names `tasks`, and then needs `TASKS_URL`: without it, it refuses to start.
 
-| Operation | Request | Answer |
-|---|---|---|
-| `list_boards` | `GET /contracts/v1/tasks/boards?include_archived=…` | `{"boards": [...], "truncated"}`, the user's Inbox first, then by name |
-
-- Archived boards are left out unless `include_archived=true`. The list holds 100 boards at most.
-- Each board gives the user's `role` (`viewer`, `editor` or `admin`), whether it is their Inbox, and whether its project is a Twake Space's (`space`).
-- Like opening the Tasks web app, `GET /api/boards` creates the user's Inbox if they have none yet, and makes them a member of the projects they were invited to.
-- A user whose token gives Tasks no `org_id` is a personal account for Tasks, which then shows them only what lies outside any organization, their own Inbox included: an organization's boards answer like unknown ones. Nothing in Tasks' answers tells the contracts which of the two the user is.
+- A user whose token gives Tasks no `org_id` is a personal account for Tasks, which then shows them only what lies outside any organization: an organization's boards answer like unknown ones. Nothing in Tasks' answers tells the contracts which of the two the user is.
+- No contract lists the user's boards. Tasks 0.1.1 lists them only with `GET /api/boards`, which, as opening its web app does, creates the user's Inbox if they have none and accepts their pending invitations to projects, and a read must never act for the user. Until Tasks lists boards without side effects, an agent finds a board through the tasks it lists or searches.
 
 ### `tasks.task.read.v1`
 

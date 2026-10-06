@@ -140,6 +140,28 @@ async def test_a_task_comes_with_what_members_wrote_apart(
     }
 
 
+async def test_a_personal_account_sees_only_the_tasks_outside_organizations(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # A token whose user has no org_id: Tasks takes them for a personal account, and the
+    # contracts show what Tasks shows them, an organization's board answering like an unknown one
+    boundary.tasks.organizations[MMAUDET.email] = None
+    owned = tasks_member("mmaudet", "admin")
+    inbox = boundary.tasks.board("Inbox", "INBOX", owned, inbox=True, organization=None)
+    website = boundary.tasks.board("Website", "WEB", MMAUDET, ALICE)
+    boundary.tasks.task(inbox, "Call the plumber", assignees=[owned])
+    task = boundary.tasks.task(website, "Launch the new site", assignees=[MMAUDET])
+
+    answer = await my_tasks(client)
+    read = await client.get(
+        f"/contracts/v1/tasks/boards/{website.id}/tasks/{task.id}", headers=AS_MMAUDET
+    )
+
+    assert keys(answer) == ["INBOX-1"]
+    assert read.status_code == 404
+    assert read.json()["code"] == "board_not_found"
+
+
 @pytest.mark.parametrize(("limit", "truncated"), [("2", True), ("5", False)])
 async def test_the_list_says_when_it_holds_less_than_all(
     client: AsyncClient, boundary: FakeBoundary, limit: str, truncated: bool

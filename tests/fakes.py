@@ -1137,11 +1137,9 @@ class FakeTasks:
         if request.method != "GET":
             return httpx.Response(404)
         if request.url.path == "/api/boards":
-            listed = sorted(
-                (board for board in self.boards.values() if self._role(board, person)),
-                key=lambda board: (not board.inbox, board.name),
-            )
-            return httpx.Response(200, json={"boards": [self._listed(b, person) for b in listed]})
+            # Like opening the web app, it creates the person's Inbox and accepts their pending
+            # invitations to projects: a read never acts for the user
+            raise AssertionError("GET /api/boards acts for the user: no contract may call it")
         if request.url.path == "/api/my-tasks":
             return httpx.Response(
                 200,
@@ -1271,26 +1269,6 @@ class FakeTasks:
             "name": board.project,
             "personal": board.inbox,
             "managed": board.managed,
-        }
-
-    def _listed(self, board: TasksBoard, person: TasksPerson) -> dict[str, Any]:
-        return {
-            "id": board.id,
-            "name": board.name,
-            "keyPrefix": board.key_prefix,
-            "project": self._project(board),
-            "inbox": board.inbox,
-            "role": self._role(board, person),
-            "archived": board.archived,
-            "favorite": False,
-            "openTasks": sum(
-                1
-                for task in self.tasks.values()
-                if task.board == board.id
-                and task.parent_id is None
-                and task.state == "open"
-                and not task.hidden
-            ),
         }
 
     def _board(self, board: TasksBoard, person: TasksPerson) -> dict[str, Any]:

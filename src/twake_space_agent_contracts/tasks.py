@@ -28,30 +28,6 @@ def _unavailable(detail: str) -> Problem:
     return _tasks_problem("tasks_unavailable", "Tasks unavailable", detail)
 
 
-class BoardText(BaseModel):
-    """What members wrote: the names of the board and of its project."""
-
-    name: str
-    project_name: str
-
-
-class Board(BaseModel):
-    """A board of a project the user is a member of."""
-
-    board_id: str
-    key_prefix: str
-    role: str = Field(
-        description="The user's role in the project: viewer, editor or admin. A viewer only reads."
-    )
-    inbox: bool = Field(description="Whether this is the user's Inbox, their personal board.")
-    space: bool = Field(
-        description="Whether the project is a Twake Space's, whose members are the space's."
-    )
-    archived: bool
-    open_tasks: int
-    untrusted: BoardText
-
-
 class TaskText(BaseModel):
     """What members wrote: the task's title, and the names of its board and labels."""
 
@@ -209,29 +185,6 @@ class Tasks:
             return response.json()
         except ValueError as error:
             raise _unavailable(f"Tasks did not answer GET {path}.") from error
-
-    async def boards(self, user: User) -> list[Board]:
-        """The boards of the projects the user is a member of: their Inbox, then by name.
-
-        Like opening the Tasks web app, this creates the user's Inbox if they have none, and
-        makes them a member of the projects they were invited to."""
-        found = await self._get(user, "/api/boards")
-        try:
-            return [
-                Board(
-                    board_id=board["id"],
-                    key_prefix=board["keyPrefix"],
-                    role=board["role"],
-                    inbox=board["inbox"],
-                    space=board["project"]["managed"],
-                    archived=board["archived"],
-                    open_tasks=board["openTasks"],
-                    untrusted=BoardText(name=board["name"], project_name=board["project"]["name"]),
-                )
-                for board in found["boards"]
-            ]
-        except (KeyError, TypeError, ValueError) as error:
-            raise _unavailable("Tasks gave the boards in an unexpected form.") from error
 
     def _tasks(self, user: User, found: Any) -> list[TaskSummary]:
         try:
