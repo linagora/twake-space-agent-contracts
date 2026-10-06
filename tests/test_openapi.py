@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from httpx import AsyncClient
@@ -30,3 +31,20 @@ async def test_agents_neither_hold_a_token_nor_choose_the_user(client: AsyncClie
         for parameter in operation.get("parameters", [])
     }
     assert not parameters & {"authorization", "x-twake-user"}
+
+
+async def test_list_parameters_are_plain_arrays_the_gateway_can_check(client: AsyncClient) -> None:
+    # APISIX's oas-validator turns a query value into a list only for a schema of type array: a
+    # list wrapped in anyOf, as for an optional list, refuses even a valid single value
+    document = (await client.get("/openapi.json")).json()
+
+    lists = {
+        parameter["name"]: parameter["schema"]
+        for path in document["paths"].values()
+        for operation in path.values()
+        for parameter in operation.get("parameters", [])
+        if "array" in json.dumps(parameter["schema"])
+    }
+    assert lists, "no list parameter found"
+    for name, schema in lists.items():
+        assert schema.get("type") == "array", f"{name}: {schema}"

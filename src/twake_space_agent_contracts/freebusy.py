@@ -74,15 +74,18 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             ),
         ],
         exclude: Annotated[
-            list[str] | None,
+            list[str],
+            # A plain array, not an optional one: APISIX's oas-validator only turns a query value
+            # into a list for a schema of type array
             Query(
+                default_factory=list,
                 description="UIDs of the calendar events to leave out. For an invitation, its "
-                "UID is data.object.uid of the invitation event."
+                "UID is data.object.uid of the invitation event.",
             ),
-        ] = None,
+        ],
     ) -> FreeBusy:
         period = Period.checked(start, end)
-        busy = await calendar.busy(user, period.start, period.end, exclude or [])
+        busy = await calendar.busy(user, period.start, period.end, exclude)
         return FreeBusy(start=period.start, end=period.end, free=not busy, busy=busy)
 
     return routes
