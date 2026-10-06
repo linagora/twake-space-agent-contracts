@@ -30,6 +30,12 @@ BODY_BYTES = 32 * 1024
 """How much of an email's text read_email gives, at most."""
 THREAD_BODY_BYTES = 8 * 1024
 """How much of each email's text read_thread gives, at most."""
+# How much of the rest of what others wrote comes back, at most: characters of a subject or a
+# preview, of a name and of an address, and the addresses of a header
+LONGEST_LINE = 1000
+LONGEST_NAME = 200
+LONGEST_ADDRESS = 320
+MOST_ADDRESSES = 100
 
 MAILBOX_PROPERTIES = ["id", "name", "parentId", "role", "totalEmails", "unreadEmails"]
 # What TMail itself tells of an email, then what other people wrote of it
@@ -65,9 +71,10 @@ def _seen(text: str) -> str:
     return "".join(c for c in text if c.isspace() or unicodedata.category(c) not in UNSEEN)
 
 
-def _line(text: str | None) -> str:
-    """Text other people wrote, on one line, without what a reader does not see."""
-    return " ".join(_seen(text or "").split())
+def _line(text: str | None, longest: int = LONGEST_LINE) -> str:
+    """Text other people wrote, on one line, without what a reader does not see, cut after
+    `longest` characters."""
+    return " ".join(_seen(text or "").split())[:longest]
 
 
 def _paragraphs(text: str) -> str:
@@ -165,6 +172,8 @@ class Email(_Facts):
     body_truncated: bool
     body_unreadable: bool
     """Whether TMail could not decode the text, which may then read wrong."""
+    recipients_truncated: bool
+    """Whether to or cc gives only the first of its addresses."""
     untrusted: EmailText
 
 
@@ -175,8 +184,11 @@ class _Address(_Jmap):
 
 def _cleaned(addresses: list[_Address] | None) -> list[Address]:
     return [
-        Address(name=_line(address.name) or None, email=_line(address.email) or None)
-        for address in addresses or []
+        Address(
+            name=_line(address.name, LONGEST_NAME) or None,
+            email=_line(address.email, LONGEST_ADDRESS) or None,
+        )
+        for address in (addresses or [])[:MOST_ADDRESSES]
     ]
 
 
@@ -253,6 +265,9 @@ class _Email(_Jmap):
             reply_to_differs=bool(_emails(reply_to) - _emails(senders)),
             body_truncated=any(value.is_truncated for value in values) or len(body) > longest,
             body_unreadable=any(value.is_encoding_problem for value in values),
+            recipients_truncated=any(
+                len(header or []) > MOST_ADDRESSES for header in (self.to, self.cc)
+            ),
             untrusted=EmailText(
                 sender=senders,
                 to=_cleaned(self.to),

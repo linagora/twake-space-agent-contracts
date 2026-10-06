@@ -37,6 +37,7 @@ async def test_the_user_reads_an_email_as_text(client: AsyncClient, boundary: Fa
         "reply_to_differs": False,
         "body_truncated": False,
         "body_unreadable": False,
+        "recipients_truncated": False,
         "untrusted": {
             "from": [PAUL],
             "to": [{"name": "Michel-Marie", "email": MMAUDET}],
@@ -94,6 +95,29 @@ async def test_what_others_wrote_loses_its_hidden_characters(
         "subject": "Budget Q4",
         "preview": "Hello, here is the budget",
     }
+
+
+async def test_what_others_wrote_is_capped_in_size(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    colleagues = [
+        {"name": f"Colleague {number}", "email": f"colleague.{number}@twake.test"}
+        for number in range(150)
+    ]
+    boundary.tmail.deliver(
+        "email-1",
+        INBOX,
+        subject="budget " * 1000,
+        to=colleagues,
+        **{"from": [{"name": "Paul " * 100, "email": "paul.martin@twake.test"}]},
+    )
+
+    email = await read(client, "email-1")
+
+    assert len(email["untrusted"]["subject"]) == 1000
+    assert len(email["untrusted"]["from"][0]["name"]) == 200
+    assert email["untrusted"]["to"] == colleagues[:100]
+    assert email["recipients_truncated"] is True
 
 
 async def test_a_long_body_is_cut(client: AsyncClient, boundary: FakeBoundary) -> None:

@@ -70,6 +70,7 @@ async def test_the_user_reads_a_conversation_oldest_first(
         "reply_to_differs": False,
         "body_truncated": False,
         "body_unreadable": False,
+        "recipients_truncated": False,
         "untrusted": {
             "from": [PAUL],
             "to": [{"name": "Michel-Marie", "email": MMAUDET}],
