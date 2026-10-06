@@ -3,6 +3,7 @@ and the Calendar side service. Also the clock the token checks read."""
 
 import json
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -86,11 +87,24 @@ class FakeIssuer:
         return httpx.Response(200, json={"keys": published})
 
 
-class FakeCalendar:
-    """The Calendar side service, as free/busy goes through it with the bearer's token.
+@dataclass
+class CalendarObject:
+    """An event in a user's calendar: whose calendar, and the event in jCal."""
 
-    The user lookup by email, then the JSON free/busy of esn-sabre, which leaves out the events
-    whose UIDs it is given. Times are written as esn-sabre writes them, 20261006T150000Z.
+    owner: str
+    jcal: list[Any]
+
+
+def uids_of(jcal: list[Any]) -> set[str]:
+    return {prop[3] for component in jcal[2] for prop in component[1] if prop[0] == "uid"}
+
+
+class FakeCalendar:
+    """The Calendar side service, as the contracts go through it with the bearer's token.
+
+    The user lookup by email; the JSON free/busy of esn-sabre, which leaves out the events whose
+    UIDs it is given, with times written as esn-sabre writes them, 20261006T150000Z; and the
+    user's own events, found by UID with esn-sabre's JSON REPORT and written back with PUT.
     """
 
     def __init__(self) -> None:
@@ -100,6 +114,10 @@ class FakeCalendar:
         self.down = False
         self.refused_tokens = False
         self.free_busy_requests: list[dict[str, Any]] = []
+        self.objects: dict[str, CalendarObject] = {}
+        """Events by href, as esn-sabre writes it: without the /dav of the side service."""
+        self.writes: list[str] = []
+        """The hrefs written, in order."""
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if self.down:
@@ -121,7 +139,39 @@ class FakeCalendar:
             )
         if request.method == "POST" and request.url.path == "/dav/calendars/freebusy":
             return self._free_busy(request, self.users.get(caller))
+        if request.method == "REPORT" and request.url.path.endswith(".json"):
+            return self._find_by_uid(request, self.users.get(caller))
+        if request.method == "PUT" and request.url.path.startswith("/dav/calendars/"):
+            return self._write(request, self.users.get(caller))
         return httpx.Response(404)
+
+    def _find_by_uid(self, request: httpx.Request, user: str | None) -> httpx.Response:
+        # esn-sabre answers JSON for this exact Accept only, and searches the calendars of the
+        # home it is given, which must be the caller's
+        if request.headers.get("accept") != "application/json":
+            return httpx.Response(406)
+        if user is None or request.url.path != f"/dav/calendars/{user}.json":
+            return httpx.Response(403)
+        uid = json.loads(request.content).get("uid")
+        if not uid:
+            return httpx.Response(400)
+        for href, stored in self.objects.items():
+            if stored.owner == user and uid in uids_of(stored.jcal):
+                item = {"_links": {"self": {"href": href}}, "etag": '"1"', "data": stored.jcal}
+                return httpx.Response(200, json={"_embedded": {"dav:item": [item]}})
+        return httpx.Response(404)
+
+    def _write(self, request: httpx.Request, user: str | None) -> httpx.Response:
+        href = request.url.path.removeprefix("/dav")
+        stored = self.objects.get(href)
+        if stored is None or stored.owner != user:
+            return httpx.Response(403)
+        # esn-sabre reads jCal whenever the body starts with "[", whatever its Content-Type
+        if not request.content.startswith(b"["):
+            return httpx.Response(415)
+        stored.jcal = json.loads(request.content)
+        self.writes.append(href)
+        return httpx.Response(204)
 
     def _free_busy(self, request: httpx.Request, user: str | None) -> httpx.Response:
         # esn-sabre answers JSON for this exact Accept only

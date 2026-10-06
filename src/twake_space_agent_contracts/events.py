@@ -29,6 +29,12 @@ class Event(BaseModel):
     subject: str | None
     data: dict[str, Any]
 
+    def invitation_uid(self) -> str | None:
+        """The UID of the calendar event, if this is an invitation that names one."""
+        invited = self.data.get("object") if self.type == INVITED else None
+        uid = invited.get("uid") if isinstance(invited, dict) else None
+        return uid if isinstance(uid, str) and uid else None
+
 
 class EventList(BaseModel):
     events: list[Event]
@@ -49,6 +55,12 @@ async def _user_events(
         cursor = connection.cursor(row_factory=class_row(Event))
         await cursor.execute(_USER_EVENTS + refinement, params)
         return await cursor.fetchall()
+
+
+async def user_event(pool: AsyncConnectionPool, email: str, event_id: str) -> Event | None:
+    """The event of that id, if it concerns the user of that email."""
+    events = await _user_events(pool, " AND id = %(id)s", {"email": email, "id": event_id})
+    return events[0] if events else None
 
 
 def router(pool: AsyncConnectionPool, caller: CallerDependency) -> APIRouter:
@@ -96,14 +108,14 @@ def router(pool: AsyncConnectionPool, caller: CallerDependency) -> APIRouter:
         event_id: Annotated[str, Path(description="The id of the event, as notified.")],
         user: Annotated[User, Depends(caller)],
     ) -> Event:
-        events = await _user_events(pool, " AND id = %(id)s", {"email": user.email, "id": event_id})
-        if not events:
+        event = await user_event(pool, user.email, event_id)
+        if event is None:
             raise Problem(
                 status=404,
                 code="event_not_found",
                 title="Event not found",
                 detail=f"No event {event_id} concerns this user.",
             )
-        return events[0]
+        return event
 
     return routes
