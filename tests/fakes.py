@@ -1,9 +1,11 @@
 """What the service reaches over HTTP, faked at that boundary: the signing keys of LemonLDAP-NG,
-the Calendar side service, TMail, and Synapse behind the gateway's outbound route. Also the clock
-the token checks read."""
+the Calendar side service, TMail, Synapse behind the gateway's outbound route, and the owner's
+cozy-stack instance. Also the clock the token checks read."""
 
 import hashlib
 import json
+import posixpath
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -73,6 +75,21 @@ def token_for(
 
 def as_user(email: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token_for(email)}"}
+
+
+# The owner's Drive: the host of their cozy-stack instance, and the access token of that instance
+# the token broker holds for them
+MMAUDET_INSTANCE = "mmaudet.twake.test"
+MMAUDET_DRIVE_TOKEN = "cozy-access-token-of-mmaudet"
+
+
+def as_drive_owner() -> dict[str, str]:
+    """What APISIX sends on a Drive contract: the user's token, as on every contract, then the
+    Drive token and instance that the broker gives."""
+    return as_user(email_of("mmaudet")) | {
+        "X-Twake-Drive-Token": MMAUDET_DRIVE_TOKEN,
+        "X-Twake-Drive-Instance": MMAUDET_INSTANCE,
+    }
 
 
 class FakeClock:
@@ -691,6 +708,276 @@ class FakeTMail:
         }
 
 
+ROOT_ID = "io.cozy.files.root-dir"
+TRASH_ID = "io.cozy.files.trash-dir"
+# The class cozy-stack gives a file, when it is not the first part of its MIME type
+CLASSES = {
+    "application/pdf": "pdf",
+    "application/vnd.oasis.opendocument.spreadsheet": "spreadsheet",
+}
+
+
+@dataclass
+class DriveDoc:
+    """A file or folder of the owner's instance, as cozy-stack keeps it in CouchDB."""
+
+    id: str
+    type: str
+    name: str
+    dir_id: str
+    updated_at: str = "2026-10-05T09:00:00Z"
+    mime: str = ""
+    content: bytes = b""
+    trashed: bool = False
+    encrypted: bool = False
+    antivirus: str | None = None
+    """The status of the antivirus scan, once the stack scanned the file."""
+
+
+def folder(doc_id: str, name: str, parent: str = ROOT_ID, **more: Any) -> DriveDoc:
+    return DriveDoc(doc_id, "directory", name, parent, **more)
+
+
+def text_file(
+    doc_id: str,
+    name: str,
+    parent: str = ROOT_ID,
+    content: bytes = b"",
+    mime: str = "text/plain",
+    **more: Any,
+) -> DriveDoc:
+    return DriveDoc(doc_id, "file", name, parent, mime=mime, content=content, **more)
+
+
+MISSING = object()
+
+
+def mango_matches(selector: dict[str, Any], doc: dict[str, Any]) -> bool:
+    """Whether a CouchDB document matches a Mango selector, for the operators the contracts use. As
+    in CouchDB, a field the document lacks matches no condition but a negated one."""
+    for key, condition in selector.items():
+        if key == "$or":
+            if not any(mango_matches(part, doc) for part in condition):
+                return False
+        elif not _satisfies(doc.get(key, MISSING), condition):
+            return False
+    return True
+
+
+def _satisfies(value: Any, condition: Any) -> bool:
+    if not isinstance(condition, dict):
+        return value is not MISSING and value == condition
+    for operator, operand in condition.items():
+        if operator == "$regex":
+            matched = isinstance(value, str) and re.search(operand, value) is not None
+        elif operator == "$gt":
+            matched = isinstance(value, str) and value > operand
+        elif operator == "$nin":
+            matched = value is not MISSING and value not in operand
+        elif operator == "$not":
+            matched = not _satisfies(value, operand)
+        else:
+            raise AssertionError(f"the fake knows no {operator}")
+        if not matched:
+            return False
+    return True
+
+
+class FakeDrive:
+    """The owner's cozy-stack instance, as the Drive contracts reach it with the Drive token.
+
+    Files and folders by id, under the root and the trash. GET /files/:id gives a folder with its
+    items, folders first then by name, page by page with page[limit] and page[skip], the trash left
+    out of the root. POST /files/_all_docs gives items with their path. POST /files/_find evaluates
+    a Mango selector, sorts only along an index made with POST /data/io.cozy.files/_index, as
+    CouchDB does, and pages with bookmarks. Also GET /files/download/:id and the capabilities.
+    """
+
+    def __init__(self) -> None:
+        self.docs: dict[str, DriveDoc] = {}
+        self.add(DriveDoc(ROOT_ID, "directory", "", ""), folder(TRASH_ID, ".cozy_trash"))
+        self.flat_subdomains = True
+        self.down = False
+        self.refused_tokens = False
+        self.forbidden: set[str] = set()
+        """Ids the Drive token may not read, which the stack answers 403."""
+        self.blocked: set[str] = set()
+        """Ids of the files whose download the antivirus blocks, which the stack answers 451."""
+        self.indexes: dict[str, dict[str, Any]] = {}
+        """Mango indexes, by design document."""
+        self.bookmarks: dict[str, int] = {}
+        self.requests: list[httpx.Request] = []
+        self.downloads: list[str] = []
+        """The ids of the files whose content was downloaded, in order."""
+
+    def add(self, *docs: DriveDoc) -> None:
+        for doc in docs:
+            self.docs[doc.id] = doc
+
+    def path_of(self, doc: DriveDoc) -> str:
+        if doc.id == ROOT_ID:
+            return "/"
+        return posixpath.join(self.path_of(self.docs[doc.dir_id]), doc.name)
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if self.down:
+            return httpx.Response(503)
+        bearer = request.headers.get("authorization")
+        if self.refused_tokens or bearer != f"Bearer {MMAUDET_DRIVE_TOKEN}":
+            return httpx.Response(401)
+        method, path = request.method, request.url.path
+        if (method, path) == ("GET", "/settings/capabilities"):
+            capabilities = {"file_versioning": True, "flat_subdomains": self.flat_subdomains}
+            return httpx.Response(
+                200,
+                json={"data": {"id": "io.cozy.settings.capabilities", "attributes": capabilities}},
+            )
+        if (method, path) == ("POST", "/files/_all_docs"):
+            keys = json.loads(request.content)["keys"]
+            found = [self.docs[key] for key in keys if key in self.docs and key != TRASH_ID]
+            return httpx.Response(200, json={"data": [self._resource(doc) for doc in found]})
+        if (method, path) == ("POST", "/files/_find"):
+            return self._find(json.loads(request.content))
+        if (method, path) == ("POST", "/data/io.cozy.files/_index"):
+            return self._define_index(json.loads(request.content))
+        if method == "GET" and path.startswith("/files/download/"):
+            return self._download(path.removeprefix("/files/download/"))
+        if method == "GET" and path.startswith("/files/"):
+            return self._read(request, path.removeprefix("/files/"))
+        return httpx.Response(404)
+
+    def _couch_doc(self, doc: DriveDoc) -> dict[str, Any]:
+        """The document as CouchDB keeps it, which Mango selectors read: a folder keeps its path,
+        a file does not."""
+        stored: dict[str, Any] = {
+            "_id": doc.id,
+            "type": doc.type,
+            "created_at": "2026-09-01T08:00:00Z",
+            "updated_at": doc.updated_at,
+            "cozyMetadata": {"createdOn": f"https://{MMAUDET_INSTANCE}/", "sourceAccount": "a1"},
+        }
+        if doc.id != ROOT_ID:
+            stored |= {"name": doc.name, "dir_id": doc.dir_id}
+        if doc.type == "directory":
+            return stored | {"path": self.path_of(doc)}
+        stored |= {
+            "mime": doc.mime,
+            "class": CLASSES.get(doc.mime, doc.mime.partition("/")[0]),
+            "size": str(len(doc.content)),
+            "md5sum": "ODZmYjI2OWQxOTBkMmM4NQo=",
+            "trashed": doc.trashed,
+            "encrypted": doc.encrypted,
+            "executable": False,
+            "metadata": {"gps": {"lat": 48.8566, "long": 2.3522}},
+        }
+        if doc.antivirus is not None:
+            stored["antivirus_scan"] = {"status": doc.antivirus}
+        return stored
+
+    def _resource(self, doc: DriveDoc, *, with_path: bool = True) -> dict[str, Any]:
+        """The document in the stack's JSON:API: with the path of a file only when asked, and the
+        links to its thumbnails."""
+        attributes = {
+            key: value for key, value in self._couch_doc(doc).items() if not key.startswith("_")
+        }
+        if with_path:
+            attributes["path"] = self.path_of(doc)
+        return {
+            "type": "io.cozy.files",
+            "id": doc.id,
+            "attributes": attributes,
+            "meta": {"rev": "1-6c3f2b"},
+            "links": {
+                "self": f"/files/{doc.id}",
+                "small": f"/files/{doc.id}/thumbnails/0f9cda56674282ac/small",
+            },
+        }
+
+    def _read(self, request: httpx.Request, doc_id: str) -> httpx.Response:
+        doc = self.docs.get(doc_id)
+        if doc is None:
+            return httpx.Response(404)
+        if doc_id in self.forbidden:
+            return httpx.Response(403)
+        if doc.type == "file":
+            return httpx.Response(200, json={"data": self._resource(doc, with_path=False)})
+        limit = int(request.url.params.get("page[limit]", "30"))
+        skip = int(request.url.params.get("page[skip]", "0"))
+        items = sorted(
+            (item for item in self.docs.values() if item.dir_id == doc_id and item.id != TRASH_ID),
+            key=lambda item: (item.type, item.name),
+        )
+        page = items[skip : skip + limit]
+        links = {}
+        if skip + limit < len(items):
+            query = httpx.QueryParams({"page[limit]": limit, "page[skip]": skip + limit})
+            links["next"] = f"/files/{doc_id}?{query}"
+        return httpx.Response(
+            200,
+            json={
+                "data": self._resource(doc, with_path=False),
+                "included": [self._resource(item, with_path=False) for item in page],
+                "links": links,
+            },
+        )
+
+    def _find(self, body: dict[str, Any]) -> httpx.Response:
+        index = self.indexes.get(body.get("use_index", ""))
+        sort = [(name, order) for part in body.get("sort", []) for name, order in part.items()]
+        # CouchDB sorts only along an index, here the one the request names
+        if sort and (index is None or [name for name, _ in sort] != index["index"]["fields"]):
+            return httpx.Response(400, json={"error": "no_usable_index"})
+        bookmark = body.get("bookmark")
+        if bookmark is not None and bookmark not in self.bookmarks:
+            return httpx.Response(400, json={"error": "invalid_bookmark"})
+        partial = index["index"].get("partial_filter_selector", {}) if index else {}
+        found = [
+            doc
+            for doc in self.docs.values()
+            if mango_matches(partial, self._couch_doc(doc))
+            and mango_matches(body["selector"], self._couch_doc(doc))
+        ]
+        if sort:
+            assert sort == [("updated_at", "desc")], sort
+            found.sort(key=lambda doc: doc.updated_at, reverse=True)
+        start = self.bookmarks.get(bookmark, 0) if bookmark else 0
+        limit = body.get("limit", 100)
+        page = found[start : start + limit]
+        links = {}
+        # As the stack does, a next page whenever this one is full
+        if len(page) >= limit:
+            next_bookmark = f"g1AAAAB{len(self.bookmarks)}x"
+            self.bookmarks[next_bookmark] = start + limit
+            links["next"] = f"/files/_find?page[cursor]={next_bookmark}"
+        return httpx.Response(
+            200,
+            json={
+                "data": [self._resource(doc) for doc in page],
+                "links": links,
+                "meta": {"count": start + len(page)},
+            },
+        )
+
+    def _define_index(self, definition: dict[str, Any]) -> httpx.Response:
+        name = hashlib.sha1(json.dumps(definition["index"], sort_keys=True).encode()).hexdigest()
+        design = f"_design/{name}"
+        result = "exists" if design in self.indexes else "created"
+        self.indexes[design] = definition
+        return httpx.Response(200, json={"result": result, "id": design, "name": name})
+
+    def _download(self, doc_id: str) -> httpx.Response:
+        doc = self.docs.get(doc_id)
+        if doc is None or doc.type != "file":
+            return httpx.Response(404)
+        if doc_id in self.forbidden:
+            return httpx.Response(403)
+        if doc_id in self.blocked:
+            return httpx.Response(451, json={"errors": [{"code": "antivirus_blocked"}]})
+        self.downloads.append(doc_id)
+        return httpx.Response(200, content=doc.content, headers={"Content-Type": doc.mime})
+
+
 class FakeBoundary:
     """Routes the service's HTTP calls to the fakes."""
 
@@ -699,6 +986,7 @@ class FakeBoundary:
         self.calendar = FakeCalendar()
         self.synapse = FakeSynapse()
         self.tmail = FakeTMail()
+        self.drive = FakeDrive()
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if request.url == SETTINGS.jwks_url:
@@ -709,4 +997,6 @@ class FakeBoundary:
             return self.synapse.handle(request)
         if request.url.host == "tmail.test":
             return self.tmail.handle(request)
+        if request.url.host == MMAUDET_INSTANCE:
+            return self.drive.handle(request)
         return httpx.Response(404)

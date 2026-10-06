@@ -231,6 +231,11 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "search_emails": ["mail.emails.read.v1"],
         "read_email": ["mail.emails.read.v1"],
         "read_thread": ["mail.threads.read.v1"],
+        "list_folder_items": ["drive.file.read.v1"],
+        "read_file": ["drive.file.read.v1"],
+        "search_files": ["drive.file.read.v1"],
+        "list_recent_files": ["drive.file.read.v1"],
+        "read_file_content": ["drive.content.read.v1"],
     }
 
 
@@ -243,7 +248,12 @@ async def test_agents_neither_hold_a_token_nor_choose_the_user(client: AsyncClie
         for operation in path.values()
         for parameter in operation.get("parameters", [])
     }
-    assert not parameters & {"authorization", "x-twake-user"}
+    assert not parameters & {
+        "authorization",
+        "x-twake-user",
+        "x-twake-drive-token",
+        "x-twake-drive-instance",
+    }
 
 
 async def test_list_parameters_are_plain_arrays_the_gateway_can_check(client: AsyncClient) -> None:

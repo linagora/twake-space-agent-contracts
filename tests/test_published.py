@@ -188,3 +188,20 @@ async def test_tmail_is_needed_once_mail_is_published_only(
 
     with pytest.raises(ValueError, match="MAIL_URL"):
         create_app_from_env()
+
+
+@pytest.mark.parametrize("apps", ["events,calendar", "events,calendar,drive"])
+async def test_the_service_starts_without_the_settings_of_drive(
+    environment: pytest.MonkeyPatch, apps: str
+) -> None:
+    # Published or not, Drive has none to require: the host of each user's instance comes with
+    # each call, and the service reaches it over HTTPS
+    environment.setenv("PUBLISHED_APPS", apps)
+    environment.delenv("DRIVE_SCHEME", raising=False)
+    environment.delenv("DRIVE_PORT", raising=False)
+
+    async with serving(create_app_from_env()) as client:
+        document = await document_of(client)
+
+    assert ("drive" in document["x-twake-domains"]) == ("drive" in apps)
+    assert ("read_file_content" in operation_ids(document)) == ("drive" in apps)
