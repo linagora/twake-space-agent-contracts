@@ -241,6 +241,8 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "read_task": ["tasks.task.read.v1"],
         "create_reply_draft": ["mail.draft.create.v1"],
         "create_file": ["drive.file.create.v1"],
+        "move_email": ["mail.email.move.v1"],
+        "archive_email": ["mail.email.move.v1"],
     }
 
 
@@ -356,6 +358,21 @@ async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:
     create = document["paths"]["/contracts/v1/drive/files"]["post"]
 
     assert create["x-twake-risk"] == "low"
+
+
+async def test_moving_an_email_is_a_low_risk_write(client: AsyncClient) -> None:
+    # The email can be moved back: once the owner allowed writing in Mail, it runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, _, operation in operations_of(document)
+    }
+
+    assert {name: risks.get(name) for name in ("move_email", "archive_email")} == {
+        "move_email": "low",
+        "archive_email": "low",
+    }
 
 
 async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(

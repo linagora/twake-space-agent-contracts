@@ -65,6 +65,7 @@ _MAILBOXES = ("Mailbox/get", {"ids": None, "properties": MAILBOX_PROPERTIES})
 # What a list or a search leaves out unless asked for: James names the role of the spam mailbox
 # spam, where JMAP's registry names it junk
 LEFT_OUT = {"trash", "spam", "junk"}
+SPAM_ROLES = {"spam", "junk"}
 
 # What a reader does not see (Unicode's Cc, Cf and Cs): the control characters but for whitespace,
 # which is collapsed; the format characters, which are invisible and can reorder text, such as
@@ -352,6 +353,8 @@ class _Created(_Jmap):
 class _EmailSet(_Jmap):
     created: dict[str, _Created] | None = None
     not_created: dict[str, dict[str, Any]] | None = None
+    updated: dict[str, Any] | None = None
+    not_updated: dict[str, dict[str, Any]] | None = None
 
 
 class ReplyText(BaseModel):
@@ -504,6 +507,78 @@ def _as_text(longest: int) -> dict[str, Any]:
         "fetchTextBodyValues": True,
         "maxBodyValueBytes": longest,
     }
+
+
+class Moved(BaseModel):
+    """An email of the user, and the one of their own mailboxes it is now in."""
+
+    email_id: str
+    mailbox_id: str
+    mailbox_name: str
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Where an email of the user is: in which of their own mailboxes."""
+
+    email_id: str
+    mailboxes: list[Mailbox]
+    """All the user's own mailboxes."""
+    mailbox_ids: list[str]
+    """Those the email is in."""
+
+    @property
+    def in_spam(self) -> bool:
+        return any(
+            mailbox.role in SPAM_ROLES
+            for mailbox in self.mailboxes
+            if mailbox.id in self.mailbox_ids
+        )
+
+    def with_id(self, mailbox_id: str) -> Mailbox:
+        """The user's own mailbox of that id."""
+        for mailbox in self.mailboxes:
+            if mailbox.id == mailbox_id:
+                return mailbox
+        raise _not_found(
+            "mailbox_not_found",
+            "Mailbox not found",
+            f"The user has no mailbox {mailbox_id} of their own.",
+        )
+
+    def named(self, name: str) -> Mailbox:
+        """The user's own mailbox of that name, whatever its case."""
+        wanted = name.casefold()
+        found = [mailbox for mailbox in self.mailboxes if mailbox.name.casefold() == wanted]
+        return _one(
+            found,
+            f"The user has no mailbox of their own named {name}.",
+            f"Several of the user's mailboxes are named {name}",
+        )
+
+    def with_role(self, role: str) -> Mailbox:
+        """The user's own mailbox of that role, such as archive."""
+        found = [mailbox for mailbox in self.mailboxes if mailbox.role == role]
+        return _one(
+            found,
+            f"The user has no {role} mailbox.",
+            f"Several of the user's mailboxes have the role {role}",
+        )
+
+
+def _one(found: list[Mailbox], missing: str, several: str) -> Mailbox:
+    """The one mailbox found: none is not found, and several are refused rather than guessed."""
+    if not found:
+        raise _not_found("mailbox_not_found", "Mailbox not found", missing)
+    if len(found) > 1:
+        ids = ", ".join(mailbox.id for mailbox in found)
+        raise Problem(
+            status=409,
+            code="mailbox_ambiguous",
+            title="Ambiguous mailbox",
+            detail=f"{several}: {ids}. Ask the user which one they mean.",
+        )
+    return found[0]
 
 
 class TMail:
@@ -762,3 +837,39 @@ class TMail:
             recipients_truncated=any(len(header) > MOST_ADDRESSES for header in (to, cc)),
             untrusted=ReplyText(to=_cleaned(to), cc=_cleaned(cc), subject=_line(subject)),
         )
+
+    async def placement(self, user: User, email_id: str) -> Placement:
+        """Where one of the user's emails is, if it is in one of their own mailboxes."""
+        results = await self._call(
+            user, _MAILBOXES, ("Email/get", {"ids": [email_id], "properties": ["id", "mailboxIds"]})
+        )
+        mailboxes = _parsed(_Mailboxes, results["Mailbox/get"], "the mailboxes").found
+        own = {mailbox.id for mailbox in mailboxes}
+        places = _parsed(_Places, results["Email/get"], "the email").found
+        # TMail gives the emails of mailboxes shared with the user too
+        mailbox_ids = [
+            mailbox
+            for place in places
+            if place.id == email_id
+            for mailbox in place.mailbox_ids
+            if mailbox in own
+        ]
+        if not mailbox_ids:
+            raise _email_not_found(email_id)
+        return Placement(email_id, mailboxes, mailbox_ids)
+
+    async def move(self, user: User, placement: Placement, mailbox: Mailbox) -> Moved:
+        """Moves the email to one of the user's own mailboxes, out of their others. A patch rather
+        than the whole set, so that a mailbox of someone else, shared with the user, keeps it."""
+        patch: dict[str, bool | None] = {
+            f"mailboxIds/{mailbox_id}": None
+            for mailbox_id in placement.mailbox_ids
+            if mailbox_id != mailbox.id
+        }
+        patch[f"mailboxIds/{mailbox.id}"] = True
+        results = await self._call(user, ("Email/set", {"update": {placement.email_id: patch}}))
+        answer = _parsed(_EmailSet, results["Email/set"], "the update")
+        if placement.email_id not in (answer.updated or {}):
+            refusal = (answer.not_updated or {}).get(placement.email_id, {}).get("type", "nothing")
+            raise _unavailable(f"Mail answered {refusal} to Email/set.")
+        return Moved(email_id=placement.email_id, mailbox_id=mailbox.id, mailbox_name=mailbox.name)

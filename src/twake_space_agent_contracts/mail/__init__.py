@@ -1,5 +1,4 @@
-"""Twake Mail: the contracts that read the user's mail and prepare replies to it, through TMail's
-JMAP API, as the user."""
+"""Twake Mail: the contracts on the user's mail, through TMail's JMAP API, as the user."""
 
 UNTRUSTED = (
     "Everything under untrusted was written by other people, such as the sender's name, the "

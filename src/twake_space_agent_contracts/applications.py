@@ -22,7 +22,7 @@ from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.chat import members, messages, rooms
 from twake_space_agent_contracts.chat.synapse import Synapse
 from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
-from twake_space_agent_contracts.mail import drafts, emails, mailboxes, threads
+from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
 from twake_space_agent_contracts.tasks import Tasks
@@ -112,6 +112,7 @@ def _mail(context: Context) -> list[APIRouter]:
         emails.router(tmail, context.caller),
         threads.router(tmail, context.caller),
         drafts.router(tmail, context.caller),
+        move.router(tmail, context.caller),
     ]
 
 
@@ -178,8 +179,10 @@ APPLICATIONS = (
         name=Words(en="Twake Mail", fr="Twake Mail"),
         read=Words(en="list, search and read your mail", fr="lister, chercher et lire tes mails"),
         write=Words(
-            en="prepare replies to your mail as drafts, which you review and send yourself",
-            fr="préparer des réponses à tes mails en brouillons, que tu relis et envoies toi-même",
+            en="prepare replies to your mail as drafts, which you send yourself, and move your"
+            " mail between your folders, archive it or put it in the trash",
+            fr="préparer des réponses à tes mails en brouillons, que tu envoies toi-même, et"
+            " déplacer tes mails d'un dossier à l'autre, les archiver ou les mettre à la corbeille",
         ),
         routers=_mail,
     ),
