@@ -64,7 +64,7 @@ To switch an application off, take it out of `PUBLISHED_APPS`: its paths answer 
 Every contract keeps the rules of the capability catalog:
 
 - A `GET` contract reads, and any other writes. Every write declares in `x-twake-risk` whether it is `low`, which the owner's consent to write in its application covers, or `high`, which the owner confirms call by call; the harness takes a write that declares neither for a high one, and the tests refuse it.
-- Every operation's description ends with a worked call, its values in the exact format the gateway checks: `Example: event_id=f7c9….`, or `Example, <what it is an example of>: name=value, name=value.`. A list gives its name once per value, and a body is written `body=<JSON>`. The tests check each value against the operation's schema in the document, as the gateway does.
+- Every operation's description ends with a worked call, its values in the exact format the gateway checks: `Example: event_id=f7c9….`, or `Example, <what it is an example of>: name=value, name=value.`, and `Example: (no parameters).` for an operation that takes none. A list gives its name once per value, and a body is written `body=<JSON>`. The tests check each value against the operation's schema in the document, as the gateway does.
 - A contract that makes the application notify other people says so in its description, as `accept_invitation` does of the organizer.
 - Text other people wrote, which an agent reads as data and never as instructions, comes back in an `untrusted` object, apart from what the contract computed.
 

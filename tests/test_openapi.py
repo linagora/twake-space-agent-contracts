@@ -60,6 +60,8 @@ TYPES: dict[str, Callable[[Any], bool]] = {
 }
 # What a schema says that checks nothing
 ANNOTATIONS = {"title", "description", "default", "examples", "deprecated"}
+# How the description of an operation without parameters ends: a worked call with no value
+NO_PARAMETERS = "Example: (no parameters)."
 
 
 def worked_call(description: str) -> dict[str, list[str]]:
@@ -164,9 +166,10 @@ def worked_call_problems(operation: dict[str, Any], document: dict[str, Any]) ->
     required value left out, a name the operation does not take, or a value the gateway refuses."""
     parameters = {parameter["name"]: parameter for parameter in operation.get("parameters", [])}
     body = operation.get("requestBody")
+    description = operation.get("description", "")
     if not parameters and body is None:
-        return []
-    call = worked_call(operation.get("description", ""))
+        return [] if description.endswith(NO_PARAMETERS) else [f"no worked call: {NO_PARAMETERS}"]
+    call = worked_call(description)
     if not call:
         return ["no worked call, such as Example: name=value, name=value."]
     required = {name for name, parameter in parameters.items() if parameter.get("required")}
@@ -309,3 +312,14 @@ async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(
     ]
 
     assert problems == []
+
+
+def test_an_operation_without_parameters_ends_with_an_empty_worked_call() -> None:
+    # None has yet: the first, such as a list of the user's boards, shows the model its call too
+    operation = {"operationId": "list_boards", "description": "Lists the user's boards."}
+
+    assert worked_call_problems(operation, {}) != []
+    operation["description"] += " Example: none."
+    assert worked_call_problems(operation, {}) != []
+    operation["description"] = "Lists the user's boards. Example: (no parameters)."
+    assert worked_call_problems(operation, {}) == []
