@@ -26,11 +26,12 @@ def operation_ids(document: dict[str, Any]) -> set[str]:
 
 @pytest.fixture
 def environment(database_url: str, monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    """The environment the image reads, without PUBLISHED_APPS nor any setting of Chat."""
+    """The environment the image reads, without PUBLISHED_APPS nor any setting of Chat or
+    Mail."""
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("CALENDAR_URL", SETTINGS.calendar_url)
-    for name in ("PUBLISHED_APPS", *CHAT_SETTINGS, "MATRIX_MAIL_DOMAIN"):
+    for name in ("PUBLISHED_APPS", *CHAT_SETTINGS, "MATRIX_MAIL_DOMAIN", "MAIL_URL"):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
@@ -158,3 +159,32 @@ async def test_chat_published_with_its_settings_is_served(
 
     assert set(document["x-twake-domains"]) == {"events", "chat"}
     assert rooms.status_code == 200, rooms.text
+
+
+async def test_mail_is_published_once_the_setting_names_it(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    environment.setenv("PUBLISHED_APPS", "events,mail")
+    environment.setenv("MAIL_URL", "https://tmail.test/")
+
+    async with serving(create_app_from_env()) as client:
+        document = await document_of(client)
+
+    # The domain of an operation is the first segment of its contract id
+    domains = {operation["tags"][0].split(".")[0] for _, _, operation in operations_of(document)}
+    assert domains == {"events", "mail"}
+    assert set(document["x-twake-domains"]) == {"events", "mail"}
+
+
+async def test_tmail_is_needed_once_mail_is_published_only(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    # Unpublished, Mail needs no address: the service starts without MAIL_URL
+    async with serving(create_app_from_env()) as client:
+        document = await document_of(client)
+    assert "mail" not in document["x-twake-domains"]
+
+    environment.setenv("PUBLISHED_APPS", "events,calendar,mail")
+
+    with pytest.raises(ValueError, match="MAIL_URL"):
+        create_app_from_env()

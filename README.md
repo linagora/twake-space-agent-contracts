@@ -154,6 +154,49 @@ Lists and reads the rooms the user has joined in Twake Chat, without their messa
 - `limit` goes from 1 to 100 and is 20 by default. Pass `next`, Synapse's own pagination token, as `before` for older messages; it is `null` once there are none.
 - Only messages are read (`GET /rooms/{room_id}/messages?dir=b`, filtered on `m.room.message`). Their text is their `body`, never their HTML (`formatted_body`) nor the address of a file: for an attachment, it is its name, and `kind` says what it is, such as `image` or `file`. A deleted message, which has no text left, is left out.
 
+### Mail, as the user
+
+The mail contracts go through TMail's JMAP API as the user, with their token:
+
+- The service reads the JMAP session first (`GET /jmap/session`). Its `username` must be the token's subject, whatever its case, or the contract answers `mail_account_mismatch`. Only its primary mail account (`primaryAccounts["urn:ietf:params:jmap:mail"]`) is used, the user's own: never an account delegated to the user. The account is kept 5 minutes at most per token.
+- Everything else is one `POST /jmap` per step, with the method calls the contract needs and no other: `Mailbox/get`, `Email/query`, `Email/get` and `Thread/get`. None uses James's shares capability, so that TMail keeps to the user's own mailboxes, and the service goes to the base URL it is given, never to the URLs of the session.
+- A mailbox, an email or a conversation outside the user's own mailboxes, such as in a mailbox shared with them, answers exactly like an unknown one: 404.
+- Text other people wrote comes back under `untrusted`: names and addresses, subjects, previews and bodies, without what a reader does not see, Unicode's control and format characters, invisible or bidirectional. A subject or a preview stops at 1,000 characters, a name at 200, an address at 320, and a header gives 100 addresses at most. What TMail itself tells, ids, times and flags, stays outside.
+- Reading never marks an email as read.
+- Mail is published once `PUBLISHED_APPS` names `mail`, and then needs `MAIL_URL`: the service does not start without it.
+
+### `mail.mailboxes.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_mailboxes` | `GET /contracts/v1/mail/mailboxes` | `{"mailboxes": [{"id", "name", "role", "parent_id", "total_emails", "unread_emails"}]}` |
+
+- `role` names the special mailboxes as TMail does, such as `inbox`, `sent`, `drafts`, `archive`, `trash` and `spam`.
+
+### `mail.emails.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_emails` | `GET /contracts/v1/mail/emails?mailbox=…&unread=…&flagged=…&from=…&after=…&before=…&limit=…&cursor=…` | `{"emails": [...], "next_cursor"}`, newest first |
+| `search_emails` | `GET /contracts/v1/mail/search?text=…&mailbox=…&after=…&before=…&limit=…&cursor=…` | the same |
+| `read_email` | `GET /contracts/v1/mail/emails/{email_id}` | the email, as text |
+
+- Without `mailbox`, trash and spam are left out; with it, the mailbox must be one of the user's own.
+- `unread=true` and `flagged=true` keep the unread and the flagged emails. `from` keeps the emails whose sender's address or name holds its text, and `text` the emails whose addresses, subject, body or attachments hold it, both from 2 to 200 characters. `after` and `before` are RFC 3339 times with their offset, `before` later than `after`.
+- `limit` goes from 1 to 100 and is 20 by default. When `next_cursor` is not null, it reads the next emails with the same parameters, up to 500.
+- A listed email gives its `id`, `thread_id`, `mailbox_ids`, `received_at`, `unread`, `flagged` and `has_attachment`, and `from`, `subject` and `preview` under `untrusted`.
+- `read_email` adds `to`, `cc`, `reply_to` and `body` under `untrusted`, the body being the text TMail gives of the email, its HTML turned into text, cut after 32 KiB (`body_truncated`); `body_unreadable` tells that TMail could not decode it. `external_sender` tells that a From address is outside the user's domain, `reply_to_differs` that a reply would go to another address than the sender's, and `recipients_truncated` that `to` or `cc` had more than 100 addresses.
+- A list or a search is one `Email/query`, with a single filter condition since James refuses mailboxes inside a filter operator, then `Email/get` by back-reference, which leaves out any email outside the user's own mailboxes.
+
+### `mail.threads.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `read_thread` | `GET /contracts/v1/mail/threads/{thread_id}?limit=…` | `{"thread_id", "emails": [...]}`, oldest first |
+
+- The last emails of the conversation, `limit` going from 1 to 20 and being 10 by default, each as `read_email` gives it, its text cut after 8 KiB.
+- `Thread/get`, with `Email/get` of the mailboxes of all its emails by back-reference, so that the last emails are taken among those in the user's own mailboxes; then `Email/get` of their text only. A conversation that has none in them is not found.
+
 ## Errors
 
 Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`application/problem+json`) with a stable `code`:
@@ -169,6 +212,9 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `chat_account_not_found` | Chat has no account for the user's email |
 | 404 | `room_not_found` | the user has joined no room with this id |
+| 404 | `mailbox_not_found` | the user has no mailbox of their own with this id |
+| 404 | `email_not_found` | the user has no email with this id in their own mailboxes |
+| 404 | `thread_not_found` | the user has no conversation with this id in their own mailboxes |
 | 409 | `not_an_attendee` | the invitation in the user's calendar does not list the user as an attendee |
 | 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series |
 | 409 | `invitation_cancelled` | the organizer cancelled the event |
@@ -179,6 +225,9 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 502 | `calendar_unavailable` | Calendar did not answer, or answered in an unexpected form |
 | 502 | `chat_refused` | Chat, or the gateway's route to it, refused the contracts |
 | 502 | `chat_unavailable` | Chat did not answer, or answered in an unexpected form |
+| 502 | `mail_account_mismatch` | the JMAP session TMail opened for the token is another user's |
+| 502 | `mail_refused` | TMail refused the user's token |
+| 502 | `mail_unavailable` | TMail did not answer, answered an error, or in an unexpected form |
 | 503 | `keys_unavailable` | the signing keys of LemonLDAP-NG could not be fetched, and none are held |
 
 Routing errors, such as an unknown path, use the same format, with a `code` named after their HTTP status (`not_found`, `method_not_allowed`).
@@ -207,12 +256,13 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `CHAT_URL` | the gateway's outbound route to Synapse, which adds the token of the contracts' application service; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `MATRIX_SERVER_NAME` | the name of Chat's homeserver, which ends its users' Matrix ids; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `MATRIX_MAIL_DOMAIN` | the mail domain of its users, the server name by default |
+| `MAIL_URL` | TMail's JMAP API, under which the service calls `/jmap/session` and `/jmap`; needed once `PUBLISHED_APPS` names `mail`, and only then |
 
 The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user 10001 and reads the same variables. It is published as `latest` from `main` and with the version from `v*` tags.
 
 ## Test
 
-The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service and Synapse, behind the gateway's outbound route, are faked at the HTTP boundary. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the words of every published application, and a worked call in every description.
+The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, TMail, and Synapse, behind the gateway's outbound route, are faked at the HTTP boundary. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the words of every published application, and a worked call in every description.
 
 ```sh
 uv run pytest

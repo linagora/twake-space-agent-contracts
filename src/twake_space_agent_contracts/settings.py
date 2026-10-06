@@ -31,6 +31,9 @@ class Settings:
     matrix_mail_domain: str | None = None
     """The mail domain of the homeserver's users, the server name unless set: alice@<domain> is
     @alice:<server name>."""
+    mail_url: str | None = None
+    """TMail, the Twake Mail backend, whose JMAP API mail goes through with the user's token:
+    needed once Mail is published only."""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -51,4 +54,5 @@ class Settings:
             chat_url=os.environ.get("CHAT_URL", "").rstrip("/") or None,
             matrix_server_name=os.environ.get("MATRIX_SERVER_NAME") or None,
             matrix_mail_domain=os.environ.get("MATRIX_MAIL_DOMAIN") or None,
+            mail_url=os.environ.get("MAIL_URL", "").rstrip("/") or None,
         )
