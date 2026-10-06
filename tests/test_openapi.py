@@ -12,11 +12,13 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         for operation in path.values()
     }
     assert document["info"]["title"] == "Twake Space agent contracts"
-    assert set(operations) == {"read_event", "list_events"}
-    assert all(operation["tags"] == ["events.read.v1"] for operation in operations.values())
+    assert {name: operation["tags"] for name, operation in operations.items()} == {
+        "read_event": ["events.read.v1"],
+        "list_events": ["events.read.v1"],
+    }
 
 
-async def test_agents_cannot_choose_the_user_they_act_for(client: AsyncClient) -> None:
+async def test_agents_neither_hold_a_token_nor_choose_the_user(client: AsyncClient) -> None:
     document = (await client.get("/openapi.json")).json()
 
     parameters = {
@@ -25,4 +27,4 @@ async def test_agents_cannot_choose_the_user_they_act_for(client: AsyncClient) -
         for operation in path.values()
         for parameter in operation.get("parameters", [])
     }
-    assert "x-twake-user" not in parameters
+    assert not parameters & {"authorization", "x-twake-user"}

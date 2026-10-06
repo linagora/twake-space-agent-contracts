@@ -14,3 +14,7 @@ CREATE TABLE IF NOT EXISTS workplace_events (
 
 CREATE INDEX IF NOT EXISTS workplace_events_targets_idx ON workplace_events USING gin (targets);
 CREATE INDEX IF NOT EXISTS workplace_events_time_idx ON workplace_events (time DESC);
+
+-- The contracts find a user's events by the email of their targets, the subject of their token
+CREATE INDEX IF NOT EXISTS workplace_events_target_emails_idx
+    ON workplace_events USING gin ((data -> 'targets') jsonb_path_ops);

@@ -1,12 +1,12 @@
 from datetime import datetime
 from typing import Annotated, Any, LiteralString
 
-from fastapi import APIRouter, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 from psycopg.rows import class_row
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
 
-from twake_space_agent_contracts.caller import Caller
+from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.problems import Problem
 
 DATA_NOT_INSTRUCTIONS = (
@@ -34,23 +34,24 @@ class EventList(BaseModel):
     events: list[Event]
 
 
-_CALLER_EVENTS = (
+# The user's events: those whose targets name their email, the subject of their token
+_USER_EVENTS = (
     "SELECT id, type, time, org, actor, targets, subject, data FROM workplace_events"
-    " WHERE targets @> ARRAY[%(caller)s::text]"
+    " WHERE data->'targets' @> jsonb_build_array(jsonb_build_object('native_id', %(email)s::text))"
 )
 
 
-async def _caller_events(
+async def _user_events(
     pool: AsyncConnectionPool, refinement: LiteralString, params: dict[str, object]
 ) -> list[Event]:
-    """The caller's events, narrowed and ordered by the given SQL refinement."""
+    """The user's events, narrowed and ordered by the given SQL refinement."""
     async with pool.connection() as connection:
         cursor = connection.cursor(row_factory=class_row(Event))
-        await cursor.execute(_CALLER_EVENTS + refinement, params)
+        await cursor.execute(_USER_EVENTS + refinement, params)
         return await cursor.fetchall()
 
 
-def router(pool: AsyncConnectionPool) -> APIRouter:
+def router(pool: AsyncConnectionPool, caller: CallerDependency) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/events", tags=["events.read.v1"])
 
     @routes.get(
@@ -63,7 +64,7 @@ def router(pool: AsyncConnectionPool) -> APIRouter:
         ),
     )
     async def list_events(
-        caller: Caller,
+        user: Annotated[User, Depends(caller)],
         event_type: Annotated[
             str | None,
             Query(
@@ -75,10 +76,10 @@ def router(pool: AsyncConnectionPool) -> APIRouter:
             int, Query(ge=1, le=100, description="How many events to return, 20 by default.")
         ] = 20,
     ) -> EventList:
-        events = await _caller_events(
+        events = await _user_events(
             pool,
             " AND (%(type)s::text IS NULL OR type = %(type)s) ORDER BY time DESC LIMIT %(limit)s",
-            {"caller": caller, "type": event_type, "limit": limit},
+            {"email": user.email, "type": event_type, "limit": limit},
         )
         return EventList(events=events)
 
@@ -93,9 +94,9 @@ def router(pool: AsyncConnectionPool) -> APIRouter:
     )
     async def read_event(
         event_id: Annotated[str, Path(description="The id of the event, as notified.")],
-        caller: Caller,
+        user: Annotated[User, Depends(caller)],
     ) -> Event:
-        events = await _caller_events(pool, " AND id = %(id)s", {"caller": caller, "id": event_id})
+        events = await _user_events(pool, " AND id = %(id)s", {"email": user.email, "id": event_id})
         if not events:
             raise Problem(
                 status=404,
