@@ -49,7 +49,7 @@ async def test_the_list_keeps_only_the_requested_type(client: AsyncClient, store
     assert [event["id"] for event in response.json()["events"]] == ["evt-invite"]
 
 
-async def test_what_others_wrote_in_each_event_comes_apart(
+async def test_what_others_wrote_in_each_event_comes_back_separately(
     client: AsyncClient, store: Store
 ) -> None:
     await store(

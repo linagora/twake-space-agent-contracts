@@ -31,6 +31,7 @@ class Settings:
             # Where LemonLDAP-NG publishes them, unless told otherwise
             jwks_url=os.environ.get("OIDC_JWKS_URL", issuer.rstrip("/") + "/oauth2/jwks"),
             calendar_url=os.environ["CALENDAR_URL"].rstrip("/"),
+            # Unset or empty, as a chart may render a value it lacks: what it published before
             published_apps=frozenset(
                 domain.strip().lower()
                 for domain in os.environ.get("PUBLISHED_APPS", "").split(",")

@@ -13,6 +13,9 @@ from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.settings import Settings
 
+# An application's entry in x-twake-domains: by level, name included, its words in each language
+Description = dict[str, dict[str, str]]
+
 
 @dataclass(frozen=True)
 class Context:
@@ -48,7 +51,7 @@ class Application:
     routers: Callable[[Context], Sequence[APIRouter]]
     """The routers of its contracts, one per contract."""
 
-    def described(self) -> dict[str, dict[str, str]]:
+    def described(self) -> Description:
         """Its entry in x-twake-domains, as the harness reads it."""
         levels = {"name": self.name, "read": self.read, "write": self.write}
         return {level: asdict(words) for level, words in levels.items() if words is not None}
@@ -90,9 +93,19 @@ APPLICATIONS = (
 )
 
 
+# The assistant's own feed of workplace events, which the harness reads without asking and checks
+# the invitations it brings with: published whatever PUBLISHED_APPS says
+ALWAYS_PUBLISHED = frozenset({"events"})
+
+
 def published(domains: Collection[str]) -> list[Application]:
-    """The applications of these domains, in the order they are declared in."""
+    """The applications of these domains and those always published, in the order they are
+    declared in."""
     unknown = ", ".join(sorted(set(domains) - {application.domain for application in APPLICATIONS}))
     if unknown:
         raise ValueError(f"PUBLISHED_APPS names applications the service does not have: {unknown}")
-    return [application for application in APPLICATIONS if application.domain in domains]
+    return [
+        application
+        for application in APPLICATIONS
+        if application.domain in domains or application.domain in ALWAYS_PUBLISHED
+    ]
