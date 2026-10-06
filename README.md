@@ -43,6 +43,21 @@ Tells whether the user is free over a period, from all their calendars, as Calen
 - `exclude`, repeated, lists the UIDs of the events to leave out, such as the invitation being decided about, which already sits in the user's calendar.
 - The service goes through the Calendar side service with the user's token: `GET /api/users?email=` for the user's id, then `POST /dav/calendars/freebusy`, the JSON free/busy of esn-sabre 2.4.6 or later, which writes its times in UTC.
 
+### `calendar.invitation.accept.v1`
+
+Accepts, as the user, an invitation the user received: only their own participation changes, and Calendar tells the organizer.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `accept_invitation` | `POST /contracts/v1/calendar/invitations/{event_id}/accept` | `{"event_id", "uid", "partstat": "ACCEPTED"}` |
+
+- `event_id` is the id of a stored invitation (`com.twake.calendar.event.invited.v1`) sent to the user; its `data.object.uid` names the calendar event.
+- The service finds the user's own copy of the event with the JSON `REPORT /dav/calendars/<user id>.json` of esn-sabre on `{"uid"}`, sets `PARTSTAT=ACCEPTED` on the user's `ATTENDEE`, and puts the event back in jCal. esn-sabre then sends the iTIP reply to the organizer.
+- Nothing else in the event changes: esn-sabre refuses an attendee who changes what the organizer set.
+- A recurring invitation is refused, since the stored invitation does not say which occurrence it is about: the user answers it in Calendar. So is a cancelled event, which stays in the user's calendar but whose organizer esn-sabre would not tell.
+- The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
+- Agents call it only once the user has said yes to this invitation; approval happens in the conversation for now.
+
 ## Errors
 
 Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`application/problem+json`) with a stable `code`:
@@ -53,7 +68,12 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 401 | `missing_token` | no bearer token |
 | 401 | `invalid_token` | the token is not one the broker got for this service: another type, issuer, audience, client or key, or expired |
 | 404 | `event_not_found` | no event with this id concerns the user |
+| 404 | `invitation_not_found` | no invitation with this id was sent to the user |
+| 404 | `invitation_not_in_calendar` | the user's calendars no longer have the invitation, which may have been deleted |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
+| 409 | `not_an_attendee` | the invitation in the user's calendar does not list the user as an attendee |
+| 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series |
+| 409 | `invitation_cancelled` | the organizer cancelled the event |
 | 502 | `calendar_refused` | Calendar refused the user's token |
 | 502 | `calendar_unavailable` | Calendar did not answer, or answered in an unexpected form |
 | 503 | `keys_unavailable` | the signing keys of LemonLDAP-NG could not be fetched, and none are held |
