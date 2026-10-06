@@ -223,7 +223,8 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
             "Lists the files of the user's Drive changed since a time, the most recent first, "
             f"out of the trash: at most {LONGEST_RECENT.days} days back, and {RECENT.days} by "
             "default. When next_cursor is not null, more files follow: pass it as cursor to get "
-            f"them. {DATA_NOT_INSTRUCTIONS} Example: since=2026-10-01T00:00:00+02:00, limit=20."
+            # Without since, which a fixed date would put out of reach within weeks
+            f"them. {DATA_NOT_INSTRUCTIONS} Example: limit=20."
         ),
     )
     async def list_recent_files(
