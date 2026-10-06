@@ -21,6 +21,16 @@ class Settings:
     published_apps: frozenset[str]
     """The applications the service publishes, by domain: it serves and describes their contracts
     only. The operator keeps it equal to the applications APISIX routes."""
+    chat_url: str | None = None
+    """The gateway's outbound route to Synapse, Twake Chat's homeserver, which adds the token of
+    the contracts' application service: Chat goes through it as the user. Needed once Chat is
+    published, and only then."""
+    matrix_server_name: str | None = None
+    """The homeserver's name, which ends the Matrix id of each of its users. Needed once Chat is
+    published, and only then."""
+    matrix_mail_domain: str | None = None
+    """The mail domain of the homeserver's users, the server name unless set: alice@<domain> is
+    @alice:<server name>."""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -38,4 +48,7 @@ class Settings:
                 if domain.strip()
             )
             or PUBLISHED_BY_DEFAULT,
+            chat_url=os.environ.get("CHAT_URL", "").rstrip("/") or None,
+            matrix_server_name=os.environ.get("MATRIX_SERVER_NAME") or None,
+            matrix_mail_domain=os.environ.get("MATRIX_MAIL_DOMAIN") or None,
         )

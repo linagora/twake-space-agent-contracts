@@ -11,6 +11,8 @@ from psycopg_pool import AsyncConnectionPool
 from twake_space_agent_contracts import events, freebusy, invitations
 from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
+from twake_space_agent_contracts.chat import members, messages, rooms
+from twake_space_agent_contracts.chat.synapse import Synapse
 from twake_space_agent_contracts.settings import Settings
 
 # An application's entry in x-twake-domains: by level, name included, its words in each language
@@ -65,6 +67,26 @@ def _calendar(context: Context) -> list[APIRouter]:
     ]
 
 
+def _chat(context: Context) -> list[APIRouter]:
+    url, server_name = context.settings.chat_url, context.settings.matrix_server_name
+    # Required once Chat is published, and only then: the service runs before Chat goes live
+    if url is None or server_name is None:
+        missing = [
+            name
+            for name, value in (("CHAT_URL", url), ("MATRIX_SERVER_NAME", server_name))
+            if value is None
+        ]
+        raise ValueError(f"PUBLISHED_APPS names chat, which needs {' and '.join(missing)}")
+    # The users' mail domain is the server name unless told otherwise, as the harness maps them
+    mail_domain = context.settings.matrix_mail_domain or server_name
+    synapse = Synapse(url, server_name, mail_domain, context.http)
+    return [
+        rooms.router(synapse, context.caller),
+        members.router(synapse, context.caller),
+        messages.router(synapse, context.caller),
+    ]
+
+
 APPLICATIONS = (
     Application(
         domain="events",
@@ -89,6 +111,17 @@ APPLICATIONS = (
             fr="accepter les invitations que tu as reçues, ce qui prévient leur organisateur",
         ),
         routers=_calendar,
+    ),
+    Application(
+        domain="chat",
+        name=Words(en="Twake Chat", fr="Twake Chat"),
+        read=Words(
+            en="list your rooms and their members, and read the messages of your unencrypted rooms",
+            fr="lister tes salons et leurs membres, et lire les messages de tes salons non"
+            " chiffrés",
+        ),
+        write=None,
+        routers=_chat,
     ),
 )
 

@@ -1,6 +1,7 @@
 """RFC 9457 problem details, the one error format of every contract."""
 
 from http import HTTPStatus
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -9,18 +10,29 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 class Problem(Exception):
-    def __init__(self, *, status: int, code: str, title: str, detail: str) -> None:
+    def __init__(
+        self,
+        *,
+        status: int,
+        code: str,
+        title: str,
+        detail: str,
+        extensions: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(detail)
         self.status = status
         self.code = code
         self.title = title
         self.detail = detail
+        self.extensions = extensions or {}
+        """Members of this problem's own, such as when to try again, in JSON."""
 
     def response(self) -> JSONResponse:
         return JSONResponse(
             status_code=self.status,
             media_type="application/problem+json",
-            content={
+            content=self.extensions
+            | {
                 "type": f"urn:twake:problem:{self.code}",
                 "title": self.title,
                 "status": self.status,
