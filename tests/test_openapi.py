@@ -107,3 +107,26 @@ async def test_each_published_application_is_named_in_plain_words(client: AsyncC
         for problem in unplain_texts(texts, LONGEST[level])
     ]
     assert problems == []
+
+
+async def test_each_write_declares_its_risk(client: AsyncClient) -> None:
+    # The harness confirms a write without a risk it knows each time, as a high one
+    document = (await client.get("/openapi.json")).json()
+
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, method, operation in operations_of(document)
+        if method != "get"
+    }
+
+    assert risks, "no write found"
+    assert {name: risk for name, risk in risks.items() if risk not in ("low", "high")} == {}
+
+
+async def test_accepting_an_invitation_is_a_low_risk_write(client: AsyncClient) -> None:
+    # The user's own answer: once the owner allowed writing in Calendar, it runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    accept = document["paths"]["/contracts/v1/calendar/invitations/{event_id}/accept"]["post"]
+
+    assert accept["x-twake-risk"] == "low"

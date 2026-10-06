@@ -44,6 +44,10 @@ The words are in English and in French, addressed to the owner, and plain text o
 
 ## Contracts
 
+Every contract keeps the rules of the capability catalog, which the tests check on the OpenAPI document:
+
+- A `GET` contract reads, and any other writes. Every write declares in `x-twake-risk` whether it is `low`, which the owner's consent to write in its application covers, or `high`, which the owner confirms call by call; the harness takes a write that declares neither for a high one.
+
 ### `events.read.v1`
 
 Reads the workplace events stored for the user the agent acts for: those whose targets name the user's email (`data.targets[].native_id`). An event sent to another address of the user, such as an alias, is not found.
@@ -83,6 +87,7 @@ Accepts, as the user, an invitation the user received: only their own participat
 - A recurring invitation is refused, since the stored invitation does not say which occurrence it is about: the user answers it in Calendar. So is a cancelled event, which stays in the user's calendar but whose organizer esn-sabre would not tell.
 - The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
 - Agents call it only once the user has said yes to this invitation; approval happens in the conversation for now.
+- It is a low-risk write (`x-twake-risk: low`): the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
 
 ## Errors
 
