@@ -31,15 +31,15 @@ def is_text(mime: str) -> bool:
 
 
 class FileText(BaseModel):
-    """What people wrote: the name of the file, and its text."""
+    """What people gave the file: its name, the type its uploader declared, and its text."""
 
     name: str
+    mime: str
     content: str
 
 
 class FileContent(BaseModel):
     id: str
-    mime: str
     size: int
     truncated: bool
     untrusted: FileText
@@ -97,8 +97,7 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
                 status=415,
                 code="content_not_extractable",
                 title="Content not extractable",
-                detail=f"The file is {mime or 'of no known type'}, not text: its content cannot "
-                "be read as text.",
+                detail="The file is not text: its content cannot be read as text.",
             )
         content = await drive.content(owner, file_id, max_bytes)
         if content is None:
@@ -108,10 +107,11 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
         size = file.size if file.size is not None else len(content)
         return FileContent(
             id=file_id,
-            mime=mime,
             size=size,
             truncated=size > max_bytes,
-            untrusted=FileText(name=plain_line(file.name), content=plain_text(text)),
+            untrusted=FileText(
+                name=plain_line(file.name), mime=plain_line(mime), content=plain_text(text)
+            ),
         )
 
     return routes

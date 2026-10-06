@@ -33,13 +33,16 @@ async def test_reading_a_file_gives_its_details_and_a_link_to_open_it(
         "id": "budget",
         "type": "file",
         "folder_id": "documents",
-        "mime": "text/csv",
-        "class": "text",
         "size": 4,
         "created_at": "2026-09-01T08:00:00Z",
         "updated_at": "2026-10-05T07:14:22.123456Z",
         "web_url": f"{DRIVE_APP}/#/folder/documents/file/budget",
-        "untrusted": {"name": "Budget 2026.csv", "path": "/Documents/Budget 2026.csv"},
+        "untrusted": {
+            "name": "Budget 2026.csv",
+            "path": "/Documents/Budget 2026.csv",
+            "mime": "text/csv",
+            "class": "text",
+        },
     }
 
 
@@ -53,7 +56,12 @@ async def test_reading_a_folder_gives_its_details(
     assert answer["type"] == "directory"
     assert answer["folder_id"] == "documents"
     assert answer["web_url"] == f"{DRIVE_APP}/#/folder/projects"
-    assert answer["untrusted"] == {"name": "Projets", "path": "/Documents/Projets"}
+    assert answer["untrusted"] == {
+        "name": "Projets",
+        "path": "/Documents/Projets",
+        "mime": None,
+        "class": None,
+    }
 
 
 async def test_drive_is_on_its_own_subdomain_without_flat_subdomains(
@@ -74,7 +82,8 @@ async def test_names_come_without_their_control_characters(
 
     answer = (await read(client, "notes")).json()
 
-    assert answer["untrusted"] == {"name": "notes[31m.txt", "path": "/notes[31m.txt"}
+    assert answer["untrusted"]["name"] == "notes[31m.txt"
+    assert answer["untrusted"]["path"] == "/notes[31m.txt"
 
 
 @pytest.mark.parametrize(

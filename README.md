@@ -213,7 +213,7 @@ The Drive contracts act in the user's cozy-stack instance, which accepts only it
 - Drive is published once `PUBLISHED_APPS` names `drive`. The service then needs `DRIVE_INSTANCE_DOMAIN`, and does not start without it; while Drive is not published, it needs none of its settings.
 - An instance is one name under `DRIVE_INSTANCE_DOMAIN`, such as `alice.<domain>`. Without an instance, or with any other host, such as an address or a host of another domain, a Drive contract answers `drive_instance_unknown`, and the Drive token goes nowhere. Without a Drive token, it answers `missing_drive_token`.
 - The service calls the instance over HTTPS, with the Drive token as a bearer token: it must reach the users' instances. What is in the trash, or out of the token's reach, answers exactly like what does not exist.
-- Names, paths and contents come in an `untrusted` object, apart from what the contract computed: the user wrote them, or anyone who shared a file with them. They come without control characters, but for the tabs and line breaks of a text.
+- Names, paths, types and contents come in an `untrusted` object, apart from what the contract computed: the user wrote them, or anyone who shared a file with them, and the type of a file is the one its uploader declared. They come without control characters, but for the tabs and line breaks of a text.
 - `web_url` opens the item in the Drive web app, for the user: on `<name>-drive.<domain>` when the stack serves its apps on flat subdomains, as its capabilities say, else on `drive.<instance>`.
 - Lists hold 1 to 100 items, 20 by default. When `next_cursor` is not null, more follow: pass it as `cursor`.
 - Its words in `x-twake-domains` say what reading covers: the words of writing come with its first write contract.
@@ -229,7 +229,7 @@ Reads the user's files and folders, as they see them in Drive.
 | `search_files` | `GET /contracts/v1/drive/files?name=…&kind=…&class=…&limit=…&cursor=…` | `{"items": [...], "next_cursor"}` |
 | `list_recent_files` | `GET /contracts/v1/drive/recent-files?since=…&limit=…&cursor=…` | `{"items": [...], "next_cursor"}`, the most recent first |
 
-- An item is `{"id", "type", "folder_id", "mime", "class", "size", "created_at", "updated_at", "web_url", "untrusted": {"name", "path"}}`, its times in UTC. Nothing else of what the stack keeps comes back, such as checksums, the location of a photo or the links to thumbnails.
+- An item is `{"id", "type", "folder_id", "size", "created_at", "updated_at", "web_url", "untrusted": {"name", "path", "mime", "class"}}`, its times in UTC; the class of a file follows from its type. Nothing else of what the stack keeps comes back, such as checksums, the location of a photo or the links to thumbnails.
 - `folder_id` is `root` for the top of the user's Drive. The trash is never listed.
 - `search_files` finds the names that hold `name`, 1 to 100 characters, whatever their case, out of the trash. `kind` (`file` or `directory`) and `class` (of files, such as `text`, `pdf` or `image`) narrow it. CouchDB holds no index of names: a search reads all the user's files.
 - `list_recent_files` gives the files changed since `since`, an RFC 3339 time with its offset, at most 31 days back and 7 by default, out of the trash and of the shared drives, as the recent view of Drive does. CouchDB sorts them along an index like the one that view makes: the first call adds it to the user's database (`POST /data/io.cozy.files/_index`), and is slower.
@@ -241,7 +241,7 @@ Reads the text of one of the user's files.
 
 | Operation | Request | Answer |
 |---|---|---|
-| `read_file_content` | `GET /contracts/v1/drive/contents/{file_id}?max_bytes=…` | `{"id", "mime", "size", "truncated", "untrusted": {"name", "content"}}` |
+| `read_file_content` | `GET /contracts/v1/drive/contents/{file_id}?max_bytes=…` | `{"id", "size", "truncated", "untrusted": {"name", "mime", "content"}}` |
 
 - Only text is read: `text/*`, JSON, XML and YAML. Any other file, such as a PDF, an office document or a note, answers `content_not_extractable`.
 - At most `max_bytes` bytes are read from the stack, 65,536 by default and 262,144 at most, and `truncated` tells that the file is longer. A character cut at the end is left out, and bytes that are not UTF-8 are replaced.

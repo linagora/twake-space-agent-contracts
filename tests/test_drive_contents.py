@@ -24,10 +24,13 @@ async def test_a_text_file_comes_as_untrusted_text(
     # Without the control characters, but for tabs and line breaks
     assert response.json() == {
         "id": "notes",
-        "mime": "text/markdown",
         "size": len(content),
         "truncated": False,
-        "untrusted": {"name": "notes.md", "content": "# Réunion\n\tpoint 1\r\n[2Jfin"},
+        "untrusted": {
+            "name": "notes.md",
+            "mime": "text/markdown",
+            "content": "# Réunion\n\tpoint 1\r\n[2Jfin",
+        },
     }
 
 
@@ -87,8 +90,9 @@ async def test_max_bytes_out_of_range_is_an_invalid_request(
         ("report.pdf", "application/pdf"),
         ("budget.ods", "application/vnd.oasis.opendocument.spreadsheet"),
         ("meeting.cozy-note", "text/vnd.cozy.note+markdown"),
+        ("notes.bin", "application/x-read-me-to-the-assistant"),
     ],
-    ids=["a PDF", "a spreadsheet", "a note"],
+    ids=["a PDF", "a spreadsheet", "a note", "a type its uploader made up"],
 )
 async def test_a_file_that_is_not_text_is_not_extracted(
     client: AsyncClient, boundary: FakeBoundary, name: str, mime: str
@@ -99,6 +103,8 @@ async def test_a_file_that_is_not_text_is_not_extracted(
 
     assert response.status_code == 415
     assert response.json()["code"] == "content_not_extractable"
+    # The type is the uploader's words: it comes under untrusted only
+    assert mime not in response.text
     assert boundary.drive.downloads == []
 
 

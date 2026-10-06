@@ -26,10 +26,15 @@ LONGEST_RECENT = timedelta(days=31)
 
 
 class DriveItemText(BaseModel):
-    """What people wrote of the item: its name, and the names of the folders it is in."""
+    """What people gave the item: its name, the names of the folders it is in and, for a file, the
+    type its uploader declared, with the class the stack derives from it."""
 
     name: str
     path: str | None
+    mime: str | None
+    file_class: str | None = Field(
+        serialization_alias="class", description="The kind of a file, such as text or pdf."
+    )
 
 
 class DriveItem(BaseModel):
@@ -38,10 +43,6 @@ class DriveItem(BaseModel):
     id: str
     type: Literal["file", "directory"]
     folder_id: str | None = Field(description="The folder it is in; null for the root.")
-    mime: str | None
-    file_class: str | None = Field(
-        serialization_alias="class", description="The kind of a file, such as text or pdf."
-    )
     size: int | None = Field(description="The size of a file, in bytes.")
     created_at: datetime
     updated_at: datetime
@@ -62,16 +63,21 @@ class DriveItem(BaseModel):
             id=item.id,
             type=item.type,
             folder_id=folder_id,
-            mime=item.mime,
-            file_class=item.file_class,
             size=item.size,
             created_at=item.created_at.astimezone(UTC),
             updated_at=item.updated_at.astimezone(UTC),
             web_url=web_url,
             untrusted=DriveItemText(
-                name=plain_line(item.name), path=plain_line(path) if path is not None else None
+                name=plain_line(item.name),
+                path=_plain(path),
+                mime=_plain(item.mime),
+                file_class=_plain(item.file_class),
             ),
         )
+
+
+def _plain(words: str | None) -> str | None:
+    return plain_line(words) if words is not None else None
 
 
 class DriveItemList(BaseModel):

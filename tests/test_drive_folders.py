@@ -36,13 +36,17 @@ async def test_the_top_of_the_drive_lists_its_folders_then_its_files(
         "id": "notes",
         "type": "file",
         "folder_id": ROOT_ID,
-        "mime": "text/plain",
-        "class": "text",
         "size": 5,
         "created_at": "2026-09-01T08:00:00Z",
         "updated_at": "2026-10-05T09:14:22Z",
         "web_url": f"{DRIVE_APP}/#/folder/{ROOT_ID}/file/notes",
-        "untrusted": {"name": "notes.txt", "path": "/notes.txt"},
+        # The type is the one the uploader declared, and the class follows from it
+        "untrusted": {
+            "name": "notes.txt",
+            "path": "/notes.txt",
+            "mime": "text/plain",
+            "class": "text",
+        },
     }
     assert answer["next_cursor"] is None
 
@@ -62,13 +66,11 @@ async def test_a_folder_lists_its_items_with_their_paths(
         "id": "documents",
         "type": "directory",
         "folder_id": ROOT_ID,
-        "mime": None,
-        "class": None,
         "size": None,
         "created_at": "2026-09-01T08:00:00Z",
         "updated_at": "2026-10-05T09:00:00Z",
         "web_url": f"{DRIVE_APP}/#/folder/documents",
-        "untrusted": {"name": "Documents", "path": "/Documents"},
+        "untrusted": {"name": "Documents", "path": "/Documents", "mime": None, "class": None},
     }
     assert [(item["id"], item["untrusted"]["path"]) for item in answer["items"]] == [
         ("projects", "/Documents/Projets"),
