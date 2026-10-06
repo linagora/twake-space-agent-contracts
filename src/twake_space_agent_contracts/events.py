@@ -51,6 +51,12 @@ async def _user_events(
         return await cursor.fetchall()
 
 
+async def user_event(pool: AsyncConnectionPool, email: str, event_id: str) -> Event | None:
+    """The event of that id, if it concerns the user of that email."""
+    events = await _user_events(pool, " AND id = %(id)s", {"email": email, "id": event_id})
+    return events[0] if events else None
+
+
 def router(pool: AsyncConnectionPool, caller: CallerDependency) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/events", tags=["events.read.v1"])
 
@@ -96,14 +102,14 @@ def router(pool: AsyncConnectionPool, caller: CallerDependency) -> APIRouter:
         event_id: Annotated[str, Path(description="The id of the event, as notified.")],
         user: Annotated[User, Depends(caller)],
     ) -> Event:
-        events = await _user_events(pool, " AND id = %(id)s", {"email": user.email, "id": event_id})
-        if not events:
+        event = await user_event(pool, user.email, event_id)
+        if event is None:
             raise Problem(
                 status=404,
                 code="event_not_found",
                 title="Event not found",
                 detail=f"No event {event_id} concerns this user.",
             )
-        return events[0]
+        return event
 
     return routes
