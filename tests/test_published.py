@@ -7,10 +7,12 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET, Serve, operations_of, serving
-from tests.fakes import ISSUER, SETTINGS
+from tests.fakes import ISSUER, SETTINGS, FakeBoundary, email_of
 from twake_space_agent_contracts.app import create_app_from_env
+from twake_space_agent_contracts.settings import Settings
 
 PERIOD = {"start": "2026-10-13T17:00:00+02:00", "end": "2026-10-13T18:00:00+02:00"}
+CHAT_SETTINGS = {"CHAT_URL": "https://gateway.test/synapse/", "MATRIX_SERVER_NAME": "twake.test"}
 
 
 async def document_of(client: AsyncClient) -> dict[str, Any]:
@@ -24,11 +26,12 @@ def operation_ids(document: dict[str, Any]) -> set[str]:
 
 @pytest.fixture
 def environment(database_url: str, monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    """The environment the image reads, without PUBLISHED_APPS."""
+    """The environment the image reads, without PUBLISHED_APPS nor any setting of Chat."""
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("CALENDAR_URL", SETTINGS.calendar_url)
-    monkeypatch.delenv("PUBLISHED_APPS", raising=False)
+    for name in ("PUBLISHED_APPS", *CHAT_SETTINGS, "MATRIX_MAIL_DOMAIN"):
+        monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
 
@@ -44,8 +47,8 @@ async def test_calendar_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> 
             "/contracts/v1/calendar/invitations/invitation-a/accept", headers=AS_MMAUDET
         )
 
-    assert operation_ids(document) == {"read_event", "list_events"}
-    assert set(document["x-twake-domains"]) == {"events"}
+    assert not {"read_freebusy", "accept_invitation"} & operation_ids(document)
+    assert set(document["x-twake-domains"]) == SETTINGS.published_apps - {"calendar"}
     # Its paths answer exactly like paths the service never had
     for response in (freebusy, accept):
         assert response.status_code == 404
@@ -113,3 +116,45 @@ def test_an_application_the_service_does_not_have_stops_it_from_starting(
 
     with pytest.raises(ValueError, match="calender"):
         create_app_from_env()
+
+
+async def test_chat_unpublished_needs_none_of_its_settings(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    # The image runs on dev before Chat goes live there
+    environment.setenv("PUBLISHED_APPS", "events,calendar")
+
+    async with serving(create_app_from_env()) as client:
+        document = await document_of(client)
+
+    assert set(document["x-twake-domains"]) == {"events", "calendar"}
+
+
+@pytest.mark.parametrize("missing", list(CHAT_SETTINGS))
+def test_chat_published_without_its_settings_stops_the_service_from_starting(
+    environment: pytest.MonkeyPatch, missing: str
+) -> None:
+    environment.setenv("PUBLISHED_APPS", "events,calendar,chat")
+    for name, value in CHAT_SETTINGS.items():
+        if name != missing:
+            environment.setenv(name, value)
+
+    with pytest.raises(ValueError, match=f"chat, which needs {missing}$"):
+        create_app_from_env()
+
+
+async def test_chat_published_with_its_settings_is_served(
+    environment: pytest.MonkeyPatch, serve: Serve, boundary: FakeBoundary
+) -> None:
+    environment.setenv("PUBLISHED_APPS", "chat")
+    for name, value in CHAT_SETTINGS.items():
+        environment.setenv(name, value)
+    # Without MATRIX_MAIL_DOMAIN, the users' mail domain is the server name
+    boundary.synapse.accounts["@mmaudet:twake.test"] = [email_of("mmaudet")]
+
+    async with serve(Settings.from_env()) as client:
+        document = await document_of(client)
+        rooms = await client.get("/contracts/v1/chat/rooms", headers=AS_MMAUDET)
+
+    assert set(document["x-twake-domains"]) == {"events", "chat"}
+    assert rooms.status_code == 200, rooms.text

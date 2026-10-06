@@ -53,6 +53,30 @@ def invitation(
     return event
 
 
+async def pages_of(
+    client: AsyncClient,
+    path: str,
+    params: dict[str, str],
+    *,
+    items: str,
+    key: str,
+    cursor: str = "cursor",
+) -> list[list[str]]:
+    """The key of each item of a list as the user, page by page, passing the next of each answer
+    as the cursor: ten pages at most, so that a cursor that never ends fails."""
+    pages: list[list[str]] = []
+    params = dict(params)
+    for _ in range(10):
+        response = await client.get(path, params=params, headers=AS_MMAUDET)
+        assert response.status_code == 200, response.text
+        answer = response.json()
+        pages.append([item[key] for item in answer[items]])
+        if answer["next"] is None:
+            return pages
+        params[cursor] = answer["next"]
+    raise AssertionError(f"More than ten pages: {pages}")
+
+
 @pytest.fixture(scope="session")
 def database_url() -> Iterator[str]:
     with PostgresContainer("postgres:18-alpine", driver=None) as postgres:
