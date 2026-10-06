@@ -150,6 +150,7 @@ async def test_a_mailbox_that_is_not_the_users_own_is_not_found(
     [
         pytest.param("move", {"mailbox_id": PROJECTS}, id="move"),
         pytest.param("archive", None, id="archive"),
+        pytest.param("trash", None, id="trash"),
     ],
 )
 async def test_an_email_outside_the_users_own_mailboxes_is_not_found(
@@ -237,38 +238,63 @@ async def test_the_user_archives_an_email(client: AsyncClient, boundary: FakeBou
     assert mailboxes_of(boundary, "email-1") == {ARCHIVE}
 
 
-async def test_without_an_archive_nothing_is_archived(
-    client: AsyncClient, boundary: FakeBoundary
+ROLES = [
+    pytest.param("archive", "archive", ARCHIVE, id="archive"),
+    pytest.param("trash", "trash", TRASH, id="trash"),
+]
+"""Each operation that moves an email to the mailbox of a role: its role, and that mailbox."""
+
+
+@pytest.mark.parametrize(("operation", "role", "mailbox_id"), ROLES)
+async def test_without_the_mailbox_of_its_role_nothing_is_moved(
+    client: AsyncClient, boundary: FakeBoundary, operation: str, role: str, mailbox_id: str
 ) -> None:
-    del boundary.tmail.mailboxes[ARCHIVE]
+    del boundary.tmail.mailboxes[mailbox_id]
     boundary.tmail.deliver("email-1", INBOX)
 
-    response = await post(client, "email-1", "archive")
+    response = await post(client, "email-1", operation)
 
     assert response.status_code == 404
     assert response.json() == problem(
-        "mailbox_not_found", "Mailbox not found", 404, "The user has no archive mailbox."
+        "mailbox_not_found", "Mailbox not found", 404, f"The user has no {role} mailbox."
     )
     assert writes(boundary) == []
 
 
-async def test_two_archives_are_refused_rather_than_guessed(
-    client: AsyncClient, boundary: FakeBoundary
+@pytest.mark.parametrize(("operation", "role", "mailbox_id"), ROLES)
+async def test_two_mailboxes_of_its_role_are_refused_rather_than_guessed(
+    client: AsyncClient, boundary: FakeBoundary, operation: str, role: str, mailbox_id: str
 ) -> None:
-    boundary.tmail.mailboxes["mbx-archive-2"] = own_mailbox("Archive 2", "archive")
+    boundary.tmail.mailboxes[f"{mailbox_id}-2"] = own_mailbox(f"{role} 2", role)
     boundary.tmail.deliver("email-1", INBOX)
 
-    response = await post(client, "email-1", "archive")
+    response = await post(client, "email-1", operation)
 
     assert response.status_code == 409
     assert response.json() == problem(
         "mailbox_ambiguous",
         "Ambiguous mailbox",
         409,
-        "Several of the user's mailboxes have the role archive: mbx-archive, mbx-archive-2. Ask"
-        " the user which one they mean.",
+        f"Several of the user's mailboxes have the role {role}: {mailbox_id}, {mailbox_id}-2."
+        " Ask the user which one they mean.",
     )
     assert writes(boundary) == []
+
+
+@pytest.mark.parametrize("mailbox_id", [INBOX, SPAM], ids=["from the inbox", "from spam"])
+async def test_the_user_puts_an_email_in_the_trash(
+    client: AsyncClient, boundary: FakeBoundary, mailbox_id: str
+) -> None:
+    boundary.tmail.deliver("email-1", mailbox_id)
+
+    response = await post(client, "email-1", "trash")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"email_id": "email-1", "mailbox_id": TRASH, "mailbox_name": "Trash"}
+    assert mailboxes_of(boundary, "email-1") == {TRASH}
+    # Moved, never destroyed: the user can move it back
+    [write] = writes(boundary)
+    assert set(write.arguments) == {"accountId", "update"}
 
 
 async def test_a_move_tmail_refuses_is_a_bad_gateway(
@@ -311,6 +337,7 @@ async def test_a_move_that_names_no_single_mailbox_is_an_invalid_request(
     [
         pytest.param("move", {"mailbox_id": PROJECTS}, id="move"),
         pytest.param("archive", None, id="archive"),
+        pytest.param("trash", None, id="trash"),
     ],
 )
 async def test_an_email_id_that_is_not_one_is_an_invalid_request(

@@ -22,7 +22,7 @@ from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.chat import members, messages, rooms
 from twake_space_agent_contracts.chat.synapse import Synapse
 from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
-from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads
+from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
 from twake_space_agent_contracts.tasks import Tasks
@@ -113,6 +113,7 @@ def _mail(context: Context) -> list[APIRouter]:
         threads.router(tmail, context.caller),
         drafts.router(tmail, context.caller),
         move.router(tmail, context.caller),
+        trash.router(tmail, context.caller),
     ]
 
 

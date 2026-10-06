@@ -243,6 +243,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "create_file": ["drive.file.create.v1"],
         "move_email": ["mail.email.move.v1"],
         "archive_email": ["mail.email.move.v1"],
+        "trash_email": ["mail.email.trash.v1"],
     }
 
 
@@ -369,10 +370,8 @@ async def test_moving_an_email_is_a_low_risk_write(client: AsyncClient) -> None:
         for _, _, operation in operations_of(document)
     }
 
-    assert {name: risks.get(name) for name in ("move_email", "archive_email")} == {
-        "move_email": "low",
-        "archive_email": "low",
-    }
+    moves = ("move_email", "archive_email", "trash_email")
+    assert {name: risks.get(name) for name in moves} == dict.fromkeys(moves, "low")
 
 
 async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(
