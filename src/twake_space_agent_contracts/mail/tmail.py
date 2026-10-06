@@ -27,6 +27,8 @@ JMAP_ID = r"^[A-Za-z0-9_-]{1,255}$"
 
 BODY_BYTES = 32 * 1024
 """How much of an email's text read_email gives, at most."""
+THREAD_BODY_BYTES = 8 * 1024
+"""How much of each email's text read_thread gives, at most."""
 
 MAILBOX_PROPERTIES = ["id", "name", "parentId", "role", "totalEmails", "unreadEmails"]
 # What TMail itself tells of an email, then what other people wrote of it
@@ -259,6 +261,15 @@ class _Query(_Jmap):
     ids: list[str]
 
 
+class _Thread(_Jmap):
+    id: str
+    email_ids: list[str]
+
+
+class _Threads(_Jmap):
+    found: list[_Thread] = Field(validation_alias="list")
+
+
 @dataclass(frozen=True)
 class Search:
     """What a list or a search of the user's mail keeps: the emails that match all it says."""
@@ -297,6 +308,26 @@ def _condition(search: Search, mailboxes: list[Mailbox]) -> dict[str, Any]:
         "before": _utc(search.before),
     }
     return condition | {key: value for key, value in wanted.items() if value is not None}
+
+
+def _own(results: dict[str, Any]) -> set[str]:
+    """The ids of the user's own mailboxes, from the results of a request that got them."""
+    mailboxes = _parsed(_Mailboxes, results["Mailbox/get"], "the mailboxes").found
+    return {mailbox.id for mailbox in mailboxes}
+
+
+def _texts(
+    user: User, results: dict[str, Any], ids: list[str], own: set[str], longest: int
+) -> list[Email]:
+    """The emails of those ids Email/get gave, in that order, as text, but for those outside
+    the user's own mailboxes: TMail gives the emails of mailboxes shared with the user too."""
+    found = {email.id: email for email in _parsed(_Emails, results["Email/get"], "emails").found}
+    domain = user.email.rpartition("@")[2]
+    return [
+        found[email_id].text(own, domain, longest)
+        for email_id in ids
+        if email_id in found and own & found[email_id].mailbox_ids.keys()
+    ]
 
 
 def _as_text(longest: int) -> dict[str, Any]:
@@ -445,16 +476,33 @@ class TMail:
         results = await self._call(
             user, _MAILBOXES, ("Email/get", {"ids": [email_id]} | _as_text(BODY_BYTES))
         )
-        own = {
-            mailbox.id
-            for mailbox in _parsed(_Mailboxes, results["Mailbox/get"], "the mailboxes").found
-        }
-        for email in _parsed(_Emails, results["Email/get"], "the email").found:
-            # TMail gives an email of a mailbox shared with the user too: it is not their own
-            if email.id == email_id and own & email.mailbox_ids.keys():
-                return email.text(own, user.email.rpartition("@")[2], BODY_BYTES)
-        raise _not_found(
-            "email_not_found",
-            "Email not found",
-            f"The user has no email {email_id} in their own mailboxes.",
-        )
+        emails = _texts(user, results, [email_id], _own(results), BODY_BYTES)
+        if not emails:
+            raise _not_found(
+                "email_not_found",
+                "Email not found",
+                f"The user has no email {email_id} in their own mailboxes.",
+            )
+        return emails[0]
+
+    async def thread(self, user: User, thread_id: str, limit: int) -> list[Email]:
+        """The last emails of one of the user's conversations, at most limit, oldest first, as
+        text, but for those outside the user's own mailboxes."""
+        results = await self._call(user, _MAILBOXES, ("Thread/get", {"ids": [thread_id]}))
+        own = _own(results)
+        threads = _parsed(_Threads, results["Thread/get"], "the conversation").found
+        # The ids of a thread's emails come oldest first (RFC 8621)
+        last = next((thread.email_ids for thread in threads if thread.id == thread_id), [])[-limit:]
+        emails = []
+        if last:
+            results = await self._call(
+                user, ("Email/get", {"ids": last} | _as_text(THREAD_BODY_BYTES))
+            )
+            emails = _texts(user, results, last, own, THREAD_BODY_BYTES)
+        if not emails:
+            raise _not_found(
+                "thread_not_found",
+                "Conversation not found",
+                f"The user has no conversation {thread_id} in their own mailboxes.",
+            )
+        return emails

@@ -230,6 +230,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "list_emails": ["mail.emails.read.v1"],
         "search_emails": ["mail.emails.read.v1"],
         "read_email": ["mail.emails.read.v1"],
+        "read_thread": ["mail.threads.read.v1"],
     }
 
 
