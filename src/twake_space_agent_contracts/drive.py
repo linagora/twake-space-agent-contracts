@@ -296,11 +296,12 @@ class Drive:
         None when there is none, or the token may not read it. The trash is left out of the root.
 
         The stack's own cursor would carry the name of the next item, which someone else may have
-        written: the pages follow one another by the number of items before them instead.
+        written: the pages follow one another by the number of items before them instead. The
+        stack pages so only when the request says page[skip], the first page included.
         """
         if cursor is not None and not re.fullmatch(r"[0-9]{1,9}", cursor):
             raise invalid_request("cursor: not a cursor this list gave")
-        params = {"page[limit]": limit} | ({"page[skip]": cursor} if cursor else {})
+        params = {"page[limit]": limit, "page[skip]": cursor or "0"}
         answer = await self._request(
             owner, "GET", f"/files/{quote(folder_id, safe='')}", params=params, missing_ok=True
         )

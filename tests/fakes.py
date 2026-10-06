@@ -787,10 +787,11 @@ class FakeDrive:
     """The owner's cozy-stack instance, as the Drive contracts reach it with the Drive token.
 
     Files and folders by id, under the root and the trash. GET /files/:id gives a folder with its
-    items, folders first then by name, page by page with page[limit] and page[skip], the trash left
-    out of the root. POST /files/_all_docs gives items with their path. POST /files/_find evaluates
-    a Mango selector, sorts only along an index made with POST /data/io.cozy.files/_index, as
-    CouchDB does, and pages with bookmarks. Also GET /files/download/:id and the capabilities.
+    items, folders first then by name, the trash left out of the root, page by page: by page[skip]
+    when the request says it, else by a cursor on the key of the next item. POST /files/_all_docs
+    gives items with their path. POST /files/_find evaluates a Mango selector, sorts only along an
+    index made with POST /data/io.cozy.files/_index, as CouchDB does, and pages with bookmarks.
+    Also GET /files/download/:id and the capabilities.
     """
 
     def __init__(self) -> None:
@@ -902,16 +903,30 @@ class FakeDrive:
             return httpx.Response(403)
         if doc.type == "file":
             return httpx.Response(200, json={"data": self._resource(doc, with_path=False)})
-        limit = int(request.url.params.get("page[limit]", "30"))
-        skip = int(request.url.params.get("page[skip]", "0"))
+        params = request.url.params
+        limit = int(params.get("page[limit]", "30"))
         items = sorted(
             (item for item in self.docs.values() if item.dir_id == doc_id and item.id != TRASH_ID),
             key=lambda item: (item.type, item.name),
         )
-        page = items[skip : skip + limit]
+        # As the stack pages: by skip when the request says page[skip], else by the key of the
+        # next item, its name included, which the next link carries in page[cursor]
+        if "page[skip]" in params:
+            start = int(params["page[skip]"])
+        elif "page[cursor]" in params:
+            following = json.loads(params["page[cursor]"])[1]
+            start = [item.id for item in items].index(following)
+        else:
+            start = 0
+        page = items[start : start + limit]
         links = {}
-        if skip + limit < len(items):
-            query = httpx.QueryParams({"page[limit]": limit, "page[skip]": skip + limit})
+        if start + limit < len(items):
+            if "page[skip]" in params:
+                query = httpx.QueryParams({"page[limit]": limit, "page[skip]": start + limit})
+            else:
+                after = items[start + limit]
+                cursor = json.dumps([[doc_id, after.type, after.name], after.id])
+                query = httpx.QueryParams({"page[limit]": limit, "page[cursor]": cursor})
             links["next"] = f"/files/{doc_id}?{query}"
         return httpx.Response(
             200,
