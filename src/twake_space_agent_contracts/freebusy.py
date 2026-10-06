@@ -50,23 +50,35 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             "Reads the busy slots of the user you act for over a period of at most "
             f"{LONGEST_PERIOD.days} days, from all their calendars. Leave out the events you are "
             "deciding about, such as an invitation, by passing their UIDs as exclude: an "
-            "invitation waiting for an answer is already in the user's calendar. free is true "
-            "when no busy slot is left."
+            "invitation waiting for an answer is already in the user's calendar, so without "
+            "exclude it makes the user look busy. free is true when no busy slot is left. "
+            "Example, for an invitation whose event has data.object.uid twake-space-e2e-a and "
+            "takes place from 17:00 to 18:00 in Paris: start=2026-10-13T17:00:00+02:00, "
+            "end=2026-10-13T18:00:00+02:00, exclude=twake-space-e2e-a."
         ),
     )
     async def read_freebusy(
         user: Annotated[User, Depends(caller)],
         start: Annotated[
             AwareDatetime,
-            Query(description="Start of the period, an RFC 3339 time with its offset."),
+            Query(
+                description="Start of the period, an RFC 3339 time with its offset, such as "
+                "2026-10-13T17:00:00+02:00."
+            ),
         ],
         end: Annotated[
             AwareDatetime,
-            Query(description="End of the period, an RFC 3339 time with its offset."),
+            Query(
+                description="End of the period, an RFC 3339 time with its offset, such as "
+                "2026-10-13T18:00:00+02:00."
+            ),
         ],
         exclude: Annotated[
             list[str] | None,
-            Query(description="UIDs of the calendar events to leave out, such as an invitation."),
+            Query(
+                description="UIDs of the calendar events to leave out. For an invitation, its "
+                "UID is data.object.uid of the invitation event."
+            ),
         ] = None,
     ) -> FreeBusy:
         period = Period.checked(start, end)
