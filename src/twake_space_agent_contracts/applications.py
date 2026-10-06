@@ -13,6 +13,9 @@ from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.settings import Settings
 
+# An application's entry in x-twake-domains: by level, name included, its words in each language
+Description = dict[str, dict[str, str]]
+
 
 @dataclass(frozen=True)
 class Context:
@@ -48,7 +51,7 @@ class Application:
     routers: Callable[[Context], Sequence[APIRouter]]
     """The routers of its contracts, one per contract."""
 
-    def described(self) -> dict[str, dict[str, str]]:
+    def described(self) -> Description:
         """Its entry in x-twake-domains, as the harness reads it."""
         levels = {"name": self.name, "read": self.read, "write": self.write}
         return {level: asdict(words) for level, words in levels.items() if words is not None}
