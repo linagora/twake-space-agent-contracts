@@ -90,9 +90,19 @@ APPLICATIONS = (
 )
 
 
+# The assistant's own feed of workplace events, which the harness reads without asking and checks
+# the invitations it brings with: published whatever PUBLISHED_APPS says
+ALWAYS_PUBLISHED = frozenset({"events"})
+
+
 def published(domains: Collection[str]) -> list[Application]:
-    """The applications of these domains, in the order they are declared in."""
+    """The applications of these domains and those always published, in the order they are
+    declared in."""
     unknown = ", ".join(sorted(set(domains) - {application.domain for application in APPLICATIONS}))
     if unknown:
         raise ValueError(f"PUBLISHED_APPS names applications the service does not have: {unknown}")
-    return [application for application in APPLICATIONS if application.domain in domains]
+    return [
+        application
+        for application in APPLICATIONS
+        if application.domain in domains or application.domain in ALWAYS_PUBLISHED
+    ]

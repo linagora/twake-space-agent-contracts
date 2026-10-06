@@ -62,10 +62,26 @@ async def test_calendar_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> 
     assert freebusy.status_code == 200, freebusy.text
 
 
-async def test_without_the_setting_events_and_calendar_are_published(
-    environment: pytest.MonkeyPatch,
+async def test_events_stay_published_whatever_the_setting_says(serve: Serve) -> None:
+    # The harness reads the assistant's own feed without asking, and checks invitations with it
+    calendar_only = replace(SETTINGS, published_apps=frozenset({"calendar"}))
+    async with serve(calendar_only) as client:
+        document = await document_of(client)
+        events = await client.get("/contracts/v1/events", headers=AS_MMAUDET)
+
+    assert {"read_event", "list_events", "read_freebusy"} <= operation_ids(document)
+    assert set(document["x-twake-domains"]) == {"events", "calendar"}
+    assert events.status_code == 200, events.text
+
+
+@pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])
+async def test_without_applications_set_events_and_calendar_are_published(
+    environment: pytest.MonkeyPatch, value: str | None
 ) -> None:
-    # What the service published before the setting existed
+    # What the service published before the setting existed; a chart may render it empty
+    if value is not None:
+        environment.setenv("PUBLISHED_APPS", value)
+
     async with serving(create_app_from_env()) as client:
         document = await document_of(client)
 
