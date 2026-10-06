@@ -3,7 +3,7 @@ that the token broker holds for them."""
 
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -83,7 +83,8 @@ class DriveOwner:
 
     user: User
     instance: str
-    token: str
+    token: str = field(repr=False)
+    """Out of the owner's representation, so that no trace or log shows it."""
 
 
 DriveOwnerDependency = Callable[..., Awaitable[DriveOwner]]
