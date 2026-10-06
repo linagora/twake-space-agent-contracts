@@ -52,12 +52,12 @@ In this order:
 
 1. **LemonLDAP-NG.** Give the `twake-space-agents` client the audience the application checks and the attributes it needs, then restart the token broker: it keeps each user's access token until shortly before it expires, and a token carries a new audience only from its next refresh.
 2. **The gateway's routes**, in the `apisix-contracts` values of the deployment repository, applied before the new image of this service or with it: the agents see a contract's tool as soon as the service publishes it, and without its route a call answers 404.
-3. **The address of the OpenAPI document** in those values, against which the gateway checks every call. It must change whenever the document does, since APISIX keeps a document an hour by its address: with each image, as `?image=<digest>`, and with each change of `PUBLISHED_APPS`.
-4. **`PUBLISHED_APPS`**, with the application's domain added, kept equal to the applications the gateway routes.
+3. **The new image and `PUBLISHED_APPS`**, with the application's domain added to the setting, kept equal to the applications the gateway routes.
+4. **The address of the OpenAPI document** in the gateway's values, against which it checks every call, once the new pods serve. APISIX fetches the document at the first call that needs it and keeps it an hour by its address: changed earlier, the new address could keep an old pod's document for that hour. Each new document takes a new address: with each image, as `?image=<digest>`, and with each change of `PUBLISHED_APPS`.
 5. **The network path** from this service to the application, at its `<APP>_URL`: the application must accept traffic from this service's namespace.
 6. **A check end to end** on dev, with a test owner's real token, through the gateway and the harness: the consent question, the answer, the call and its audit record.
 
-To switch an application off, take it out of `PUBLISHED_APPS`, with a new address of the document: its paths answer 404 at once, and its tools leave the agents when the harness next reads the document, within minutes. Then remove its routes.
+To switch an application off, take it out of `PUBLISHED_APPS`: its paths answer 404 as soon as the new pods serve, then give the document a new address, and its tools leave the agents when the harness next reads the document, within minutes. Then remove its routes.
 
 ## Contracts
 
