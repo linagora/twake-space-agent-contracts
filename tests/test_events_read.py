@@ -21,7 +21,7 @@ async def test_a_target_reads_a_stored_event(client: AsyncClient, store: Store) 
             "object": {"start": "2026-10-13T17:00:00+02:00"},
             "targets": [{"uid": "mmaudet", "native_id": "mmaudet@twake.test", "role": "invitee"}],
         },
-        # Written by the organizer, apart from what the producer computed
+        # Written by the organizer, separately from what the producer computed
         "untrusted": {"title": "Point Twake Space E2E"},
     }
 
