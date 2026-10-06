@@ -2,15 +2,25 @@ import os
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 from fastapi import FastAPI
 from psycopg_pool import AsyncConnectionPool
 
-from twake_space_agent_contracts import events, freebusy, invitations, problems
-from twake_space_agent_contracts.calendar import Calendar
+from twake_space_agent_contracts import applications, problems
 from twake_space_agent_contracts.caller import TokenVerifier, caller_dependency
 from twake_space_agent_contracts.settings import Settings
+
+
+class Contracts(FastAPI):
+    """The service, whose OpenAPI document also names, at its root, each application it publishes
+    in the words the harness asks their owners with (x-twake-domains)."""
+
+    domains: dict[str, Any]
+
+    def openapi(self) -> dict[str, Any]:
+        return super().openapi() | {"x-twake-domains": self.domains}
 
 
 def create_app(
@@ -19,6 +29,7 @@ def create_app(
     http: httpx.AsyncClient | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
+    published = applications.published(settings.published_apps)
     pool = AsyncConnectionPool(database_url, open=False)
     http = http or httpx.AsyncClient(timeout=10)
 
@@ -32,12 +43,13 @@ def create_app(
             await http.aclose()
 
     caller = caller_dependency(TokenVerifier(settings, http, clock))
-    app = FastAPI(title="Twake Space agent contracts", lifespan=lifespan)
+    app = Contracts(title="Twake Space agent contracts", lifespan=lifespan)
+    app.domains = {application.domain: application.described() for application in published}
     problems.install(app)
-    app.include_router(events.router(pool, caller))
-    calendar = Calendar(settings.calendar_url, http)
-    app.include_router(freebusy.router(calendar, caller))
-    app.include_router(invitations.router(pool, calendar, caller))
+    context = applications.Context(settings, pool, http, caller)
+    for application in published:
+        for router in application.routers(context):
+            app.include_router(router)
     return app
 
 

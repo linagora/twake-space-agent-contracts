@@ -10,6 +10,7 @@ import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from twake_space_agent_contracts.applications import APPLICATIONS
 from twake_space_agent_contracts.settings import Settings
 
 # LemonLDAP-NG as the token broker's tokens come from it: issuer, audiences and signing key
@@ -20,6 +21,8 @@ SETTINGS = Settings(
     audience=AUDIENCE,
     jwks_url="https://sign-up.test/oauth2/jwks",
     calendar_url="https://calendar.test",
+    # Every application the service has, so that the tests reach all their contracts
+    published_apps=frozenset(application.domain for application in APPLICATIONS),
 )
 SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 KEY_ID = "sig-1"

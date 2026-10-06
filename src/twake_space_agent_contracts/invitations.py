@@ -33,8 +33,12 @@ def router(pool: AsyncConnectionPool, calendar: Calendar, caller: CallerDependen
             "Accepts an invitation that the user you act for received: their own participation "
             "becomes accepted in their calendar, and Calendar tells the organizer. Nothing else "
             "in the event changes. Call it only once the user has said yes to this very "
-            "invitation. A recurring invitation is refused: the user answers it in Calendar."
+            "invitation. A recurring invitation is refused: the user answers it in Calendar. "
+            f"Example: event_id={events.EXAMPLE_ID}."
         ),
+        # The user's own answer, though Calendar tells the organizer: the owner's consent to write
+        # in Calendar covers it, and they are not asked to confirm each one
+        openapi_extra={"x-twake-risk": "low"},
     )
     async def accept_invitation(
         event_id: Annotated[str, Path(description="The id of the invitation event, as notified.")],

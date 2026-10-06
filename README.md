@@ -16,7 +16,57 @@ The service checks the token against the signing keys of LemonLDAP-NG:
 
 The user is the token's subject, their email, lowercased. Neither the token nor the user appears in the OpenAPI document: an agent never holds a user's token, nor chooses whom it acts for.
 
+## Applications
+
+A contract belongs to the application its id starts with, its domain, such as `calendar` for `calendar.freebusy.read.v1`. Each application is declared once, in [`applications.py`](src/twake_space_agent_contracts/applications.py): its domain, the words the harness names it with, and the routers of its contracts, one per contract.
+
+The service publishes only the applications `PUBLISHED_APPS` names, `events` and `calendar` when it is unset: it serves their contracts and describes them in its OpenAPI document, while the paths of any other application answer 404 `not_found`, like a path the service never had. The operator keeps it equal to the applications APISIX routes, so that an application leaves the agents' tools when it leaves the gateway. A name the service does not know stops it from starting.
+
+Before an assistant first reads in an application, and before it first writes there, the harness asks its owner, naming the application and saying what reading or writing covers there. It takes those words from the root of the OpenAPI document, in `x-twake-domains`, which holds the published applications only:
+
+```json
+"x-twake-domains": {
+  "calendar": {
+    "name": { "en": "Twake Calendar", "fr": "Twake Agenda" },
+    "read": {
+      "en": "see your free and busy times in your calendars",
+      "fr": "voir tes créneaux libres et occupés dans tes agendas"
+    },
+    "write": {
+      "en": "accept the invitations you received, which tells their organizer",
+      "fr": "accepter les invitations que tu as reçues, ce qui prévient leur organisateur"
+    }
+  }
+}
+```
+
+The words are in English and in French, addressed to the owner, and plain text on one line without a final period: no markup character (`` \ ` * _ ~ [ ] < > & ``), and nothing that looks like a link, an address or a domain name, such as a dot inside a word. A name takes at most 64 characters and what a level covers 200. `read` and `write` are given for the levels the application offers only: a `GET` contract reads, any other writes. The harness ignores an entry that breaks these rules; the tests refuse it first.
+
+### Adding an application
+
+An application comes as a module of its own, as Calendar does: its client, its `<APP>_URL` setting, its typed problems, its routers, one per contract, its tests at the HTTP boundary and its section below. It is declared by one entry of `APPLICATIONS`, in `applications.py`: its domain, its words, and a function that builds its routers from the service's settings, events database, HTTP client and caller dependency. The tests publish every declared application; a deployment publishes it once `PUBLISHED_APPS` names it.
+
+### Putting an application in service
+
+In this order:
+
+1. **LemonLDAP-NG.** Give the `twake-space-agents` client the audience the application checks and the attributes it needs, then restart the token broker: it keeps each user's access token until shortly before it expires, and a token carries a new audience only from its next refresh.
+2. **The gateway's routes**, in the `apisix-contracts` values of the deployment repository, applied before the new image of this service or with it: the agents see a contract's tool as soon as the service publishes it, and without its route a call answers 404.
+3. **The address of the OpenAPI document** in those values, against which the gateway checks every call. It must change whenever the document does, since APISIX keeps a document an hour by its address: with each image, as `?image=<digest>`, and with each change of `PUBLISHED_APPS`.
+4. **`PUBLISHED_APPS`**, with the application's domain added, kept equal to the applications the gateway routes.
+5. **The network path** from this service to the application, at its `<APP>_URL`: the application must accept traffic from this service's namespace.
+6. **A check end to end** on dev, with a test owner's real token, through the gateway and the harness: the consent question, the answer, the call and its audit record.
+
+To switch an application off, take it out of `PUBLISHED_APPS`, with a new address of the document: its paths answer 404 at once, and its tools leave the agents when the harness next reads the document, within minutes. Then remove its routes.
+
 ## Contracts
+
+Every contract keeps the rules of the capability catalog:
+
+- A `GET` contract reads, and any other writes. Every write declares in `x-twake-risk` whether it is `low`, which the owner's consent to write in its application covers, or `high`, which the owner confirms call by call; the harness takes a write that declares neither for a high one, and the tests refuse it.
+- Every operation's description ends with a worked call, its values in the exact format the gateway checks: `Example: event_id=f7c9….`, or `Example, <what it is an example of>: name=value, name=value.`. A list gives its name once per value, and a body is written `body=<JSON>`. The tests check each value against the operation's schema in the document, as the gateway does.
+- A contract that makes the application notify other people says so in its description, as `accept_invitation` does of the organizer.
+- Text other people wrote, which an agent reads as data and never as instructions, comes back in an `untrusted` object, apart from what the contract computed.
 
 ### `events.read.v1`
 
@@ -30,6 +80,7 @@ Reads the workplace events stored for the user the agent acts for: those whose t
 - `limit` goes from 1 to 100 and is 20 by default.
 - Pass `type=com.twake.calendar.event.invited.v1` to list meeting invitations.
 - An event the user is not a target of answers exactly like an unknown one, so the contract never reveals that an event exists.
+- The title of the event's object, which its author wrote, comes back in `untrusted.title` rather than in `data.object`, where the rest is what the producer computed, such as the `uid` and the times of an invitation.
 
 ### `calendar.freebusy.read.v1`
 
@@ -57,6 +108,7 @@ Accepts, as the user, an invitation the user received: only their own participat
 - A recurring invitation is refused, since the stored invitation does not say which occurrence it is about: the user answers it in Calendar. So is a cancelled event, which stays in the user's calendar but whose organizer esn-sabre would not tell.
 - The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
 - Agents call it only once the user has said yes to this invitation; approval happens in the conversation for now.
+- It is a low-risk write (`x-twake-risk: low`): the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
 
 ## Errors
 
@@ -100,12 +152,13 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `OIDC_AUDIENCE` | the audience the tokens must have, `twake-space-agents` by default |
 | `OIDC_JWKS_URL` | the issuer's signing keys, `<issuer>/oauth2/jwks` by default, where LemonLDAP-NG publishes them |
 | `CALENDAR_URL` | the Calendar side service |
+| `PUBLISHED_APPS` | the applications the service publishes, by domain, comma separated: `events,calendar` when unset (see [Applications](#applications)) |
 
 The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user 10001 and reads the same variables. It is published as `latest` from `main` and with the version from `v*` tags.
 
 ## Test
 
-The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys and the Calendar side service are faked at the HTTP boundary.
+The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys and the Calendar side service are faked at the HTTP boundary. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the words of every published application, and a worked call in every description.
 
 ```sh
 uv run pytest
