@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -6,12 +7,14 @@ import httpx
 import psycopg
 import pytest
 from asgi_lifespan import LifespanManager
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from psycopg.types.json import Jsonb
 from testcontainers.community.postgres import PostgresContainer
 
 from tests.fakes import SETTINGS, FakeBoundary, FakeClock, as_user, email_of
 from twake_space_agent_contracts.app import create_app
+from twake_space_agent_contracts.settings import Settings
 
 SCHEMA = Path(__file__).parent.parent / "sql" / "workplace_events.sql"
 
@@ -94,12 +97,9 @@ def clock() -> FakeClock:
     return FakeClock()
 
 
-@pytest.fixture
-async def client(
-    database_url: str, boundary: FakeBoundary, clock: FakeClock
-) -> AsyncIterator[AsyncClient]:
-    http = httpx.AsyncClient(transport=httpx.MockTransport(boundary.handle))
-    app = create_app(database_url, SETTINGS, http=http, clock=clock)
+@asynccontextmanager
+async def serving(app: FastAPI) -> AsyncIterator[AsyncClient]:
+    """A client of the service's HTTP API, the service started as uvicorn starts it."""
     async with (
         LifespanManager(app) as manager,
         AsyncClient(
@@ -107,3 +107,33 @@ async def client(
         ) as client,
     ):
         yield client
+
+
+Serve = Callable[[Settings], AbstractAsyncContextManager[AsyncClient]]
+
+
+@pytest.fixture
+def serve(database_url: str, boundary: FakeBoundary, clock: FakeClock) -> Serve:
+    """Starts the service with the given settings, what it reaches over HTTP faked."""
+
+    def start(settings: Settings) -> AbstractAsyncContextManager[AsyncClient]:
+        http = httpx.AsyncClient(transport=httpx.MockTransport(boundary.handle))
+        return serving(create_app(database_url, settings, http=http, clock=clock))
+
+    return start
+
+
+@pytest.fixture
+async def client(serve: Serve) -> AsyncIterator[AsyncClient]:
+    async with serve(SETTINGS) as client:
+        yield client
+
+
+def operations_of(document: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
+    """Each operation of an OpenAPI document: its path, its method as OpenAPI writes it, and
+    itself."""
+    return [
+        (path, method, operation)
+        for path, item in document["paths"].items()
+        for method, operation in item.items()
+    ]

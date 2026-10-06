@@ -16,6 +16,12 @@ The service checks the token against the signing keys of LemonLDAP-NG:
 
 The user is the token's subject, their email, lowercased. Neither the token nor the user appears in the OpenAPI document: an agent never holds a user's token, nor chooses whom it acts for.
 
+## Applications
+
+A contract belongs to the application its id starts with, its domain, such as `calendar` for `calendar.freebusy.read.v1`. Each application is declared once, in [`applications.py`](src/twake_space_agent_contracts/applications.py): its domain and the routers of its contracts, one per contract.
+
+The service publishes only the applications `PUBLISHED_APPS` names, `events` and `calendar` when it is unset: it serves their contracts and describes them in its OpenAPI document, while the paths of any other application answer 404 `not_found`, like a path the service never had. The operator keeps it equal to the applications APISIX routes, so that an application leaves the agents' tools when it leaves the gateway. A name the service does not know stops it from starting.
+
 ## Contracts
 
 ### `events.read.v1`
@@ -100,6 +106,7 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `OIDC_AUDIENCE` | the audience the tokens must have, `twake-space-agents` by default |
 | `OIDC_JWKS_URL` | the issuer's signing keys, `<issuer>/oauth2/jwks` by default, where LemonLDAP-NG publishes them |
 | `CALENDAR_URL` | the Calendar side service |
+| `PUBLISHED_APPS` | the applications the service publishes, by domain, comma separated: `events,calendar` when unset (see [Applications](#applications)) |
 
 The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user 10001 and reads the same variables. It is published as `latest` from `main` and with the version from `v*` tags.
 
