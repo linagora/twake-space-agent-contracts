@@ -211,6 +211,21 @@ async def test_a_mailbox_that_is_not_the_users_own_is_not_found(
     }
 
 
+@pytest.mark.parametrize(
+    ("path", "params"), [(EMAILS, {}), (SEARCH, {"text": "budget"})], ids=["list", "search"]
+)
+async def test_an_email_outside_the_users_own_mailboxes_is_never_listed(
+    client: AsyncClient, boundary: FakeBoundary, path: str, params: dict[str, str]
+) -> None:
+    share_a_mailbox_with_mmaudet(boundary)
+    boundary.tmail.deliver("email-own", INBOX)
+    boundary.tmail.deliver("email-boss", "mbx-boss")
+    # Should TMail ever search the mailboxes shared with the user without being asked to
+    boundary.tmail.searches_shared = True
+
+    assert ids(await emails(client, path, **params)) == ["email-own"]
+
+
 async def test_the_user_searches_their_mail_by_words(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:

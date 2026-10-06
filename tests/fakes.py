@@ -476,6 +476,9 @@ class FakeTMail:
         self.down = False
         self.refused_tokens = False
         self.failing_method: str | None = None
+        self.searches_shared = False
+        """Whether Email/query also searches the mailboxes shared with the user without the shares
+        capability, which James does not do: what the contracts' own check is for."""
         self.sessions = 0
         """How many times the session was read."""
         self.calls: list[MethodCall] = []
@@ -616,7 +619,7 @@ class FakeTMail:
             (
                 email
                 for email in self.emails.values()
-                if self._readable(email, owner, shares)
+                if self._readable(email, owner, shares or self.searches_shared)
                 and all(CONDITIONS[key](email, value) for key, value in condition.items())
             ),
             key=lambda email: str(email["receivedAt"]),

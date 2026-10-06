@@ -333,7 +333,7 @@ def _in_own(mailbox_ids: dict[str, bool], own: set[str]) -> bool:
     return bool(own & mailbox_ids.keys())
 
 
-def _texts(
+def _own_emails_as_text(
     user: User, results: dict[str, Any], ids: list[str], own: set[str], longest: int
 ) -> list[Email]:
     """The emails of those ids Email/get gave, in that order, as text, but for those outside
@@ -485,7 +485,11 @@ class TMail:
             for email in _parsed(_Emails, results["Email/get"], "the emails found").found
         }
         own = {mailbox.id for mailbox in mailboxes}
-        summaries = [emails[email_id].summary(own) for email_id in found if email_id in emails]
+        summaries = [
+            emails[email_id].summary(own)
+            for email_id in found
+            if email_id in emails and _in_own(emails[email_id].mailbox_ids, own)
+        ]
         return summaries, len(found) == limit
 
     async def email(self, user: User, email_id: str) -> Email:
@@ -493,7 +497,7 @@ class TMail:
         results = await self._call(
             user, _MAILBOXES, ("Email/get", {"ids": [email_id]} | _as_text(BODY_BYTES))
         )
-        emails = _texts(user, results, [email_id], _own(results), BODY_BYTES)
+        emails = _own_emails_as_text(user, results, [email_id], _own(results), BODY_BYTES)
         if not emails:
             raise _not_found(
                 "email_not_found",
@@ -535,7 +539,7 @@ class TMail:
             results = await self._call(
                 user, ("Email/get", {"ids": last} | _as_text(THREAD_BODY_BYTES))
             )
-            emails = _texts(user, results, last, own, THREAD_BODY_BYTES)
+            emails = _own_emails_as_text(user, results, last, own, THREAD_BODY_BYTES)
         if not emails:
             raise _not_found(
                 "thread_not_found",
