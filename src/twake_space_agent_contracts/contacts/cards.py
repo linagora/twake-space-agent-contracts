@@ -3,7 +3,7 @@
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_serializer
 
 from twake_space_agent_contracts.contacts import line, paragraphs
 from twake_space_agent_contracts.contacts.carddav import Card, Kind
@@ -81,6 +81,44 @@ class Contact(BaseModel):
         f"{LONGEST_NOTE} characters, or more than {MOST_ENTRIES} emails, phones or addresses."
     )
     untrusted: ContactText
+
+
+class PreviousText(BaseModel):
+    """The fields of a contact a change changed, as they were: those it left alone are not
+    given."""
+
+    name: str | None = None
+    given_name: str | None = None
+    family_name: str | None = None
+    nickname: str | None = None
+    emails: list[Email] | None = None
+    phones: list[Phone] | None = None
+    organization: str | None = None
+    title: str | None = None
+    addresses: list[Address] | None = None
+    note: str | None = None
+    birthday: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _changed_only(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        written: dict[str, Any] = handler(self)
+        return {name: value for name, value in written.items() if name in self.model_fields_set}
+
+
+class ChangedText(ContactText):
+    """What people wrote in a contact once changed, and the fields the change changed, as they
+    were."""
+
+    previous: PreviousText = Field(
+        description="The fields the change changed, the name Contacts shows too, as they were, "
+        "so that they can be put back: a field it left alone is not given."
+    )
+
+
+class ChangedContact(Contact):
+    """A contact once changed."""
+
+    untrusted: ChangedText
 
 
 class ContactSummaryText(BaseModel):
@@ -227,6 +265,22 @@ def contact_of(card: Card) -> Contact:
         writable=card.book.writable,
         truncated=truncated,
         untrusted=text,
+    )
+
+
+def changed_contact(card: Card, before: ContactText) -> ChangedContact:
+    """The contact as update_contact gives it once changed, with the fields it changed, as they
+    were."""
+    contact = contact_of(card)
+    now = contact.untrusted
+    previous = {
+        name: getattr(before, name)
+        for name in ContactText.model_fields
+        if getattr(before, name) != getattr(now, name)
+    }
+    return ChangedContact(
+        **contact.model_dump(exclude={"untrusted"}),
+        untrusted=ChangedText(**now.model_dump(), previous=PreviousText(**previous)),
     )
 
 

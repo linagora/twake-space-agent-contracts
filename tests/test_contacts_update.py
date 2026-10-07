@@ -127,6 +127,43 @@ async def test_null_clears_a_field_and_a_list_replaces_the_whole_list(
     assert properties(card, "photo", "categories", "x-twake-source") == [PHOTO, CATEGORIES, SOURCE]
 
 
+async def test_the_answer_gives_back_what_the_change_replaced_as_it_was(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    jeans(boundary)
+
+    response = await update(
+        client,
+        f"{OWN}~contacts",
+        JEAN_ID,
+        phones=NEW_PHONE,
+        organization="Acme",
+        note=None,
+        family_name="Durand",
+    )
+
+    assert response.status_code == 200, response.text
+    # Only the fields the change changed, the name Contacts shows too, under untrusted
+    assert response.json()["untrusted"]["previous"] == {
+        "name": "Jean Dupont",
+        "family_name": "Dupont",
+        "phones": [{"number": "+33 6 12 34 56 78", "type": "cell"}],
+        "organization": "Example",
+        "note": "Met at the trade fair.",
+    }
+
+
+async def test_a_change_that_changes_nothing_gives_back_nothing(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    jeans(boundary)
+
+    response = await update(client, f"{OWN}~contacts", JEAN_ID, organization="Example")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["untrusted"]["previous"] == {}
+
+
 async def test_the_name_contacts_shows_follows_the_names_it_is_made_of(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:

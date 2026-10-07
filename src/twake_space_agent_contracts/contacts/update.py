@@ -16,7 +16,7 @@ from twake_space_agent_contracts.contacts.carddav import (
     sent,
     unavailable,
 )
-from twake_space_agent_contracts.contacts.cards import Contact, contact_of, fields_of
+from twake_space_agent_contracts.contacts.cards import ChangedContact, changed_contact, fields_of
 from twake_space_agent_contracts.contacts.changes import ContactFields, changed, written
 from twake_space_agent_contracts.contacts.summaries import changing
 from twake_space_agent_contracts.previews import Previewing, digest_of
@@ -38,15 +38,17 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
             "Changes, as the user you act for, a contact in one of their own address books, "
             "those list_address_books gives as writable: only the fields given, null clearing "
             "one. A list given, emails, phones or addresses, replaces the whole list: give the "
-            "entries to keep with the new ones. The name Contacts shows follows the given and "
-            "family names, unless it was set apart from them; name sets it apart. What else the "
-            "contact holds, such as a photo, stays as it is. A contact of an address book shared "
-            "with the user, or of their domain's, is refused with address_book_read_only. In a "
-            "book the user shared, those they shared it with see the change; Contacts tells "
+            "entries to keep with the new ones. What a change clears, or leaves out of a list, is "
+            "erased: the answer gives back under untrusted.previous the fields it changed, as "
+            "they were, to put them back if need be. The name Contacts shows follows the given "
+            "and family names, unless it was set apart from them; name sets it apart. What else "
+            "the contact holds, such as a photo, stays as it is. A contact of an address book "
+            "shared with the user, or of their domain's, is refused with address_book_read_only. "
+            "In a book the user shared, those they shared it with see the change; Contacts tells "
             f"nobody. {UNTRUSTED} Example, to give a contact a new mobile number: {EXAMPLE_IDS}, "
             'body={"phones": [{"number": "+33 6 98 76 54 32", "type": "cell"}]}.'
         ),
-        response_model=Contact,
+        response_model=ChangedContact,
         # The user's own contact, which nobody is told of: the owner's consent to write in
         # Contacts covers it, and they are not asked to confirm each one. It tells what it would
         # do, for when they are.
@@ -58,7 +60,7 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
         changes: ContactChanges,
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
-    ) -> Contact | JSONResponse:
+    ) -> ChangedContact | JSONResponse:
         if not changes.model_fields_set:
             raise invalid_request("Give at least one field to change.")
         fields = written(changes, sorted(changes.model_fields_set))
@@ -74,16 +76,17 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
         # What the owner allows: the contact as it is. The proxy of the side service forwards
         # no If-Match: the card just read is the one checked, and written over at once
         digest = digest_of(book.book_id, contact_id, card.jcard)
+        before = fields_of(card.jcard)[0]
         if preview.asked:
-            before, now = fields_of(card.jcard)[0], fields_of(after.jcard)[0]
+            now = fields_of(after.jcard)[0]
             return preview.answer(changing(book, before, now, preview.language), digest)
         preview.check(digest)
         if after.jcard == card.jcard:
-            return contact_of(card)
+            return changed_contact(card, before)
         await contacts.put(user, after)
         written_now = await contacts.card(user, book, card.name)
         if written_now is None:
             raise unavailable("Contacts did not keep the contact it was given.")
-        return contact_of(written_now)
+        return changed_contact(written_now, before)
 
     return routes
