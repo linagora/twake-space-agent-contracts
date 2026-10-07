@@ -13,6 +13,13 @@ OPERATIONS = [
     pytest.param("POST", "/contracts/v1/tasks/boards/open", {}, None, id="open_boards"),
     pytest.param("GET", "/contracts/v1/tasks/projects", {}, None, id="list_projects"),
     pytest.param(
+        "POST",
+        "/contracts/v1/tasks/projects",
+        {},
+        {"name": "Q4 launch", "key_prefix": "LAUNCH"},
+        id="create_project",
+    ),
+    pytest.param(
         "GET", "/contracts/v1/tasks/mine", {"zone": "Europe/Paris"}, None, id="list_my_tasks"
     ),
     pytest.param(
@@ -34,7 +41,11 @@ OPERATIONS = [
     pytest.param("PATCH", TASK, {}, {"priority": 1}, id="update_task"),
     pytest.param("POST", f"{TASK}/complete", {}, None, id="complete_task"),
 ]
-WRITES = [each for each in OPERATIONS if each.id in ("create_task", "update_task", "complete_task")]
+WRITES = [
+    each
+    for each in OPERATIONS
+    if each.id in ("create_project", "create_task", "update_task", "complete_task")
+]
 PARAMETERS = ("method", "path", "params", "body")
 
 
@@ -130,7 +141,8 @@ async def test_only_open_boards_opens_tasks(
     response = await client.request(method, path, params=params, json=body, headers=AS_MMAUDET)
 
     assert response.status_code < 500, response.text
-    assert "/api/boards" not in [asked for asked, _ in boundary.tasks.requests]
+    asked = [(request.method, request.url.path) for request in boundary.requests]
+    assert ("GET", "/api/boards") not in asked
 
 
 @pytest.mark.parametrize(PARAMETERS, WRITES)

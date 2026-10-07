@@ -244,6 +244,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "read_task": ["tasks.task.read.v1"],
         "open_boards": ["tasks.board.open.v1"],
         "list_projects": ["tasks.project.read.v1"],
+        "create_project": ["tasks.project.create.v1"],
         "create_task": ["tasks.task.create.v1"],
         "update_task": ["tasks.task.update.v1"],
         "complete_task": ["tasks.task.complete.v1"],
@@ -360,6 +361,13 @@ WRITES_NAMED = {
     "calendar": {
         "accept_invitation": ("accept", "accepter"),
         "create_event": ("add events", "ajouter des événements"),
+    },
+    "tasks": {
+        "open_boards": ("open your boards", "ouvrir tes tableaux"),
+        "create_project": ("create projects", "créer des projets"),
+        "create_task": ("create projects and tasks", "créer des projets et des tâches"),
+        "update_task": ("edit", "modifier"),
+        "complete_task": ("complete", "terminer"),
     },
     "contacts": {
         "create_contact": ("create", "créer"),
@@ -489,6 +497,7 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "create_task": ("post", True),
         "update_task": ("patch", True),
         "complete_task": ("post", True),
+        "create_project": ("post", True),
         "create_file": ("post", True),
         "create_contact": ("post", True),
         "update_contact": ("patch", True),
@@ -679,6 +688,16 @@ async def test_creating_changing_and_completing_a_task_are_low_risk_writes(
     assert risks == {"create_task": "low", "update_task": "low", "complete_task": "low"}
 
 
+async def test_creating_a_project_is_a_low_risk_write(client: AsyncClient) -> None:
+    # A project the user alone is a member of, which notifies nobody: once the owner allowed
+    # writing in Tasks, it runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    create = document["paths"]["/contracts/v1/tasks/projects"]["post"]
+
+    assert create["x-twake-risk"] == "low"
+
+
 async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: AsyncClient) -> None:
     # The model gets each body as the document writes it: whole, taking these fields and no other
     document = (await client.get("/openapi.json")).json()
@@ -688,13 +707,14 @@ async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: Async
 
     schemas = {
         name: operations[name]["requestBody"]["content"]["application/json"]["schema"]
-        for name in ("create_task", "update_task")
+        for name in ("create_project", "create_task", "update_task")
     }
 
     assert "requestBody" not in operations["open_boards"]
     assert "requestBody" not in operations["complete_task"]
     assert "$ref" not in json.dumps(schemas)
     assert {name: sorted(schema["properties"]) for name, schema in schemas.items()} == {
+        "create_project": ["key_prefix", "name"],
         "create_task": sorted(
             ["title", "section_id", "parent_id", "priority", "due_date", "due_time", "due_zone"]
         ),
@@ -702,7 +722,7 @@ async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: Async
             ["title", "priority", "due_date", "due_time", "due_zone", "deadline"]
         ),
     }
-    assert [schema["additionalProperties"] for schema in schemas.values()] == [False, False]
+    assert [schema["additionalProperties"] for schema in schemas.values()] == [False] * 3
 
 
 async def test_the_bodies_of_the_batched_mail_moves_are_whole_and_closed(

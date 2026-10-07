@@ -2024,6 +2024,8 @@ class FakeTasks:
             return httpx.Response(503, json={"error": "unavailable"})
         person = TasksPerson(tasks_id(subject), self.organizations.get(subject, "linagora"))
         params = request.url.params
+        if request.method == "POST" and request.url.path == "/api/boards":
+            return self._new_board(self.writes[-1][2], person, subject)
         if request.method != "GET":
             return self._write(request.method, request.url.path, self.writes[-1][2], person)
         if request.url.path == "/api/boards":
@@ -2049,6 +2051,38 @@ class FakeTasks:
         if request.url.path == "/api/search":
             return self._search(person, params.get("q", "").strip())
         return self._board_read(request.url.path, person)
+
+    def _new_board(self, body: Any, person: TasksPerson, email: str) -> httpx.Response:
+        """A board outside any project, which starts a project of its own, named after it, with
+        the person as its admin and the sections Tasks gives a new board."""
+        if not isinstance(body, dict) or set(body) != {"name", "keyPrefix"}:
+            return _refused("invalid_request")
+        name = body["name"].strip() if isinstance(body["name"], str) else ""
+        prefix = body["keyPrefix"]
+        if not 1 <= len(name) <= 100 or not re.fullmatch(r"[A-Z][A-Z0-9]{0,9}", str(prefix)):
+            return _refused("invalid_request")
+        if prefix == "INBOX":
+            return httpx.Response(409, json={"error": "key_prefix_taken"})
+        number = len(self.boards)
+        board = TasksBoard(
+            tasks_id(f"board {number} {name}"),
+            name,
+            prefix,
+            [TasksMember(person.user_id, email, "admin")],
+            project=name,
+            organization=person.organization,
+            sections=[
+                {"id": tasks_id(f"section {number} {section}"), "name": section, "category": kind}
+                for section, kind in (
+                    ("To do", "unstarted"),
+                    ("In progress", "started"),
+                    ("Done", "completed"),
+                )
+            ],
+            project_id=tasks_id(f"project {number} {name}"),
+        )
+        self.boards[board.id] = board
+        return httpx.Response(201, json=self._board(board, person))
 
     def _welcome(self, person: TasksPerson, email: str) -> None:
         """What opening Tasks does first: it sets up the person's Inbox if they have none, and

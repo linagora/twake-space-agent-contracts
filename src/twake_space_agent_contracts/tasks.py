@@ -389,6 +389,43 @@ class Tasks:
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Tasks gave the projects in an unexpected form.") from error
 
+    async def create_project(self, user: User, name: str, key_prefix: str) -> tuple[Project, Board]:
+        """Creates a project of that name, with the user as its admin, which Tasks does only as
+        it creates a board outside any project: the project, and that board, of the same name,
+        whose task keys start with key_prefix."""
+        path = "/api/boards"
+        response = await self._call(
+            user, "POST", path, body={"name": name, "keyPrefix": key_prefix}
+        )
+        # Tasks checks what the contract cannot, such as a prefix another board took
+        if response.status_code in (400, 409):
+            raise invalid_request(f"Tasks refused POST {path}: {_error_of(response)}.")
+        found = self._json(response, "POST", path)
+        try:
+            project = found["project"]
+            board = Board(
+                board_id=found["id"],
+                key_prefix=found["keyPrefix"],
+                project_id=project["id"],
+                role=found["role"],
+                inbox=found["inbox"],
+                space=project["managed"],
+                archived=found["archived"],
+                # A new board holds no task
+                open_tasks=0,
+                untrusted=BoardText(name=found["name"], project_name=project["name"]),
+            )
+            created = Project(
+                project_id=project["id"],
+                role=found["role"],
+                personal=project["personal"],
+                space=project["managed"],
+                untrusted=ProjectText(name=project["name"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Tasks gave the new board in an unexpected form.") from error
+        return created, board
+
     def _tasks(self, found: Any, whose: Whose) -> list[TaskSummary]:
         try:
             return [
