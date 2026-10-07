@@ -1,6 +1,7 @@
 """What the service reaches over HTTP, faked at that boundary: the signing keys of LemonLDAP-NG,
-the Calendar side service, TMail, Synapse behind the gateway's outbound route, the owner's
-cozy-stack instance and Twake Tasks. Also the clock the token checks read."""
+the Calendar side service, with the address books of Twake Contacts behind it, TMail, Synapse behind
+the gateway's outbound route, the owner's cozy-stack instance and Twake Tasks. Also the clock the
+token checks read."""
 
 import base64
 import hashlib
@@ -13,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Literal
+from urllib.parse import parse_qs, unquote
 
 import httpx
 import jwt
@@ -47,6 +49,10 @@ SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 KEY_ID = "sig-1"
 
 MMAUDET_CALENDAR_ID = "6650a1b2c3d4e5f6a7b8c9d0"
+# The domain of the owner in Calendar and Contacts, whose address books its members read
+MMAUDET_DOMAIN_ID = "6650a1b2c3d4e5f6a7b8c9e0"
+# Another user of the platform, who may share their address books
+ALICE_CALENDAR_ID = "6650a1b2c3d4e5f6a7b8c9d1"
 
 
 def email_of(uid: str) -> str:
@@ -168,6 +174,10 @@ class FakeCalendar:
 
     def __init__(self) -> None:
         self.users: dict[str, str] = {email_of("mmaudet"): MMAUDET_CALENDAR_ID}
+        self.domains: dict[str, str] = {email_of("mmaudet"): MMAUDET_DOMAIN_ID}
+        """The domain of each user, by email."""
+        self.contacts = FakeContacts(self)
+        """Twake Contacts, which the side service proxies under /dav and searches."""
         self.time_zones: dict[str, str] = {email_of("mmaudet"): "Europe/Paris"}
         """The time zone each user set in Calendar, by email: the deployment's, here UTC, for a
         user who set none."""
@@ -201,9 +211,13 @@ class FakeCalendar:
             if email != caller:
                 return httpx.Response(403)
             user = self.users.get(caller)
-            return httpx.Response(
-                200, json=[{"_id": user, "preferredEmail": email}] if user else []
-            )
+            domains = [
+                {"domain_id": domain, "joined_at": "1970-01-01T00:00:00.000Z"}
+                for domain in [self.domains.get(caller)]
+                if domain is not None
+            ]
+            found = {"_id": user, "preferredEmail": email, "domains": domains}
+            return httpx.Response(200, json=[found] if user else [])
         if request.method == "POST" and request.url.path == "/api/configurations":
             return self._configurations(request, caller)
         if request.method == "POST" and request.url.path == "/dav/calendars/freebusy":
@@ -212,6 +226,10 @@ class FakeCalendar:
             return self._find_by_uid(request, self.users.get(caller))
         if request.method == "PUT" and request.url.path.startswith("/dav/calendars/"):
             return self._write(request, self.users.get(caller))
+        if request.url.path.startswith("/dav/addressbooks/") or request.url.path.startswith(
+            "/contacts/api/"
+        ):
+            return self.contacts.handle(request, caller)
         return httpx.Response(404)
 
     def _configurations(self, request: httpx.Request, caller: str) -> httpx.Response:
@@ -297,6 +315,394 @@ class FakeCalendar:
         return httpx.Response(
             200, json={"start": body["start"], "end": body["end"], "users": [free_busy]}
         )
+
+
+# What esn-sabre takes in a request at most: nginx's default client_max_body_size, which the image
+# of esn-sabre keeps
+SABRE_BODY_LIMIT = 1024 * 1024
+# The ids of an address book that the side service's search takes: plain segments of a path
+SEARCH_SEGMENT = re.compile(r"[a-zA-Z0-9._~-]+")
+# The share access of a delegation, as sabre/dav and esn-sabre write it: reading, reading and
+# writing, and administration with them
+READ_ACCESS, READ_WRITE_ACCESS, ADMINISTRATION_ACCESS = 2, 3, 5
+# The status of the invitation a delegation starts with: waiting for an answer, accepted, declined
+INVITE_NORESPONSE, INVITE_ACCEPTED, INVITE_DECLINED = 1, 2, 3
+
+
+def jcard(uid: str, name: str | None, *properties: list[Any], version: str = "4.0") -> list[Any]:
+    """A contact in jCard, as esn-sabre gives it: its version, its UID and its formatted name, if
+    any, then the given properties."""
+    named = [["fn", {}, "text", name]] if name is not None else []
+    return [
+        "vcard",
+        [["version", {}, "text", version], ["uid", {}, "text", uid], *named, *properties],
+    ]
+
+
+def vcard_text(card: list[Any]) -> str:
+    """A card in vCard text, as esn-sabre keeps it and its search reads it: a property on each
+    line, its values escaped as vCard escapes them."""
+    lines = ["BEGIN:VCARD"]
+    for name, parameters, _type, *values in card[1]:
+        written = "".join(
+            f";{key.upper()}={','.join(value) if isinstance(value, list) else value}"
+            for key, value in parameters.items()
+        )
+        lines.append(f"{name.upper()}{written}:{','.join(map(_vcard_value, values))}")
+    lines.append("END:VCARD")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _vcard_value(value: Any) -> str:
+    """A value as vCard writes it: a structured one, such as a name or an address, as its
+    components separated by semicolons, the values of each separated by commas."""
+    if isinstance(value, list):
+        return ";".join(
+            ",".join(map(_vcard_escaped, part)) if isinstance(part, list) else _vcard_escaped(part)
+            for part in value
+        )
+    return _vcard_escaped(value)
+
+
+def _vcard_escaped(value: Any) -> str:
+    text = str(value)
+    for character, escaped in (("\\", "\\\\"), (",", "\\,"), (";", "\\;"), ("\n", "\\n")):
+        text = text.replace(character, escaped)
+    return text
+
+
+def is_contact(card: Any) -> bool:
+    """Whether esn-sabre would keep this jCard as a contact: a vCard 4.0 with a UID and a formatted
+    name, its properties each a name, parameters, a type and a value."""
+    if not (isinstance(card, list) and len(card) == 2 and card[0] == "vcard"):
+        return False
+    properties = card[1]
+    if not isinstance(properties, list) or not all(
+        isinstance(prop, list)
+        and len(prop) >= 4
+        and isinstance(prop[0], str)
+        and isinstance(prop[1], dict)
+        and isinstance(prop[2], str)
+        for prop in properties
+    ):
+        return False
+    names = [prop[0] for prop in properties]
+    return (
+        ["version", {}, "text", "4.0"] in properties
+        and names.count("version") == 1
+        and "uid" in names
+        and "fn" in names
+    )
+
+
+def _etag(card: list[Any]) -> str:
+    return '"' + hashlib.md5(vcard_text(card).encode()).hexdigest() + '"'
+
+
+def _accepted(request: httpx.Request) -> list[str]:
+    return [kind.strip() for kind in request.headers.get("accept", "").split(",")]
+
+
+@dataclass
+class FakeAddressBook:
+    """An address book of esn-sabre, in the home of a user or of a domain. A delegation or a
+    subscription in a user's home shows the cards of someone else's book, its source."""
+
+    home: str
+    name: str
+    display_name: str = ""
+    description: str = ""
+    cards: dict[str, list[Any]] = field(default_factory=dict)
+    """Its cards by name, such as 1a2b.vcf, in jCard of the vCard version their writer gave, which
+    esn-sabre keeps."""
+    privileges: list[str] = field(default_factory=lambda: ["dav:read", "dav:write"])
+    """What its owner may do in it, as esn-sabre lists it in dav:acl: read, and write by default."""
+    group: bool = False
+    """Whether it is a book of a domain, which the domain's members read."""
+    members_write: bool = False
+    """Whether the domain lets its members write in it: never in domain-members, which only
+    technical tokens write."""
+    disabled: bool = False
+    source: "FakeAddressBook | None" = None
+    access: int | None = None
+    """The share access of a delegation."""
+    invite_status: int = INVITE_ACCEPTED
+    subscribed: bool = False
+    """Whether it is a subscription to a published book."""
+    publicly_writable: bool = False
+    """Whether the book a subscription shows is published in write."""
+
+    @property
+    def shown(self) -> dict[str, list[Any]]:
+        """The cards it shows: those of its source, for a delegation or a subscription."""
+        return self.source.cards if self.source is not None else self.cards
+
+
+class FakeContacts:
+    """Twake Contacts, as the Calendar side service gives it to the contracts: esn-sabre's address
+    books behind the side service's /dav proxy, which acts as the bearer and forwards neither
+    If-Match nor If-None-Match, and the side service's search across several address books.
+
+    The fake answers JSON when Accept lists application/json, or for a card
+    application/vcard+json, in jCard of vCard 4.0. It takes a card in jCard, a body that starts
+    with "[", up to what nginx takes in front of esn-sabre, and reads URLs without .json, as
+    esn-sabre does. Its search matches .*<query>.* against the vCard text of each card of each
+    book, whatever the case, leaves out the books the bearer cannot read, and keeps the first
+    cards by name.
+
+    A user reads the address books of their home: those they own, the delegations accepted in it
+    and their subscriptions, which show someone else's book; and the books of their domain. They
+    write in the books they own, through a delegation of share access 3 or 5, or a subscription to
+    a book published in write, and in their domain's books only where it lets its members write,
+    never in domain-members. Their home gets its contacts and collected books when first listed.
+    """
+
+    def __init__(self, calendar: "FakeCalendar") -> None:
+        self._calendar = calendar
+        self.books: dict[tuple[str, str], FakeAddressBook] = {}
+        self.body_limit = SABRE_BODY_LIMIT
+        self.failing_writes: Literal["landed", "lost", "refused"] | None = None
+        """How a write or a delete of a card fails, if it does: "landed", kept, but answered after
+        the service gave up waiting; "lost", refused with a 503 and not kept; "refused", with the
+        403 esn-sabre answers a user without the right to write."""
+        self.answers: dict[str, httpx.Response] = {}
+        """What to answer every request whose path starts with a key, whatever it asks, such as
+        an answer in an unexpected form."""
+        self.writes: list[tuple[str, str]] = []
+        """The method and the path, under /addressbooks, of each card written or deleted."""
+        self.searches: list[dict[str, Any]] = []
+        """The body of each search."""
+
+    def book(self, home: str, name: str, **more: Any) -> FakeAddressBook:
+        book = FakeAddressBook(home, name, **more)
+        self.books[(home, name)] = book
+        return book
+
+    def owners(self, name: str = "contacts", **more: Any) -> FakeAddressBook:
+        """A book the owner owns, such as their contacts book, which esn-sabre creates."""
+        return self.books.get((MMAUDET_CALENDAR_ID, name)) or self.book(
+            MMAUDET_CALENDAR_ID, name, **more
+        )
+
+    def handle(self, request: httpx.Request, caller: str) -> httpx.Response:
+        user = self._calendar.users.get(caller)
+        domain = self._calendar.domains.get(caller)
+        # esn-sabre knows no such user
+        if user is None:
+            return httpx.Response(401)
+        for start, answer in self.answers.items():
+            if request.url.path.startswith(start):
+                return answer
+        if request.url.path == "/contacts/api/contacts/search":
+            if request.method != "POST":
+                return httpx.Response(405)
+            return self._search(request, user, domain)
+        # The fake reads the URL without .json, its query string too
+        target = request.url.raw_path.decode().replace(".json", "")
+        path, _, query = target.partition("?")
+        parts = [unquote(part) for part in path.removeprefix("/dav/addressbooks/").split("/")]
+        if len(parts) == 1 and request.method == "GET":
+            return self._list(request, parts[0], parse_qs(query), user, domain)
+        if len(parts) == 3:
+            return self._card(request, parts[0], parts[1], parts[2], user, domain)
+        return httpx.Response(404)
+
+    def _reads(self, book: FakeAddressBook, user: str, domain: str | None) -> bool:
+        return book.home == user or (book.group and book.home == domain)
+
+    def _writes(self, book: FakeAddressBook, user: str, domain: str | None) -> bool:
+        if book.group:
+            return book.home == domain and book.members_write and book.name != "domain-members"
+        if book.home != user:
+            return False
+        if book.access is not None:
+            return book.access in (READ_WRITE_ACCESS, ADMINISTRATION_ACCESS)
+        return book.publicly_writable if book.subscribed else "dav:write" in book.privileges
+
+    def _list(
+        self,
+        request: httpx.Request,
+        home: str,
+        query: dict[str, list[str]],
+        user: str,
+        domain: str | None,
+    ) -> httpx.Response:
+        if "application/json" not in _accepted(request):
+            return httpx.Response(406)
+        if home == user:
+            for name in ("contacts", "collected"):
+                self.books.setdefault((home, name), FakeAddressBook(home, name))
+        # The home of a domain lets its members alone read it
+        elif home in self._calendar.domains.values() and home != domain:
+            return httpx.Response(403)
+
+        def asked(option: str) -> bool:
+            return query.get(option) == ["true"]
+
+        listed = []
+        for book in self.books.values():
+            if book.home != home:
+                continue
+            if book.group:
+                shown = asked("personal") and not book.disabled
+            elif book.subscribed:
+                shown = asked("subscribed")
+            elif book.access is not None:
+                status = query.get("inviteStatus")
+                shown = asked("shared") and (status is None or status == [str(book.invite_status)])
+            else:
+                shown = asked("personal")
+            if shown:
+                listed.append(self._described(book, asked("contactsCount")))
+        if not listed and home != user and home != domain:
+            return httpx.Response(404)
+        return httpx.Response(
+            200,
+            json={
+                "_links": {"self": {"href": f"/addressbooks/{home}.json"}},
+                "_embedded": {"dav:addressbook": listed},
+            },
+        )
+
+    def _described(self, book: FakeAddressBook, counted: bool) -> dict[str, Any]:
+        """An address book as esn-sabre lists it: its own books and those of a domain share it as
+        their owner, a delegation with its share access, a subscription with none."""
+        source = book.source
+        described: dict[str, Any] = {
+            "_links": {"self": {"href": f"/addressbooks/{book.home}/{book.name}.json"}},
+            "dav:name": book.display_name,
+            "carddav:description": book.description,
+            "dav:acl": (["dav:read", "dav:write"] if book.members_write else ["dav:read"])
+            if book.group
+            else book.privileges,
+            "dav:share-access": None if book.subscribed else book.access or 1,
+            "openpaas:subscription-type": "public"
+            if book.subscribed
+            else "delegation"
+            if book.access is not None
+            else None,
+            "type": "",
+            "state": "",
+            "numberOfContacts": len(book.shown) if counted else None,
+            "acl": [],
+            "dav:group": f"principals/domains/{book.home}" if book.group else None,
+        }
+        if source is not None:
+            described["openpaas:source"] = f"/addressbooks/{source.home}/{source.name}.json"
+        return described
+
+    def _card(
+        self,
+        request: httpx.Request,
+        home: str,
+        name: str,
+        card_name: str,
+        user: str,
+        domain: str | None,
+    ) -> httpx.Response:
+        book = self.books.get((home, name))
+        if book is None:
+            return httpx.Response(404)
+        if not self._reads(book, user, domain):
+            return httpx.Response(403)
+        cards = book.shown
+        if request.method == "GET":
+            if "application/vcard+json" not in _accepted(request):
+                return httpx.Response(406)
+            found = cards.get(card_name)
+            if found is None:
+                return httpx.Response(404)
+            # Converted to vCard 4.0, as sabre/dav gives jCard
+            converted = [
+                ["version", {}, "text", "4.0"] if prop[0] == "version" else prop
+                for prop in found[1]
+            ]
+            return httpx.Response(
+                200,
+                json=["vcard", converted],
+                headers={"ETag": _etag(found), "Content-Type": "application/vcard+json"},
+            )
+        if request.method not in ("PUT", "DELETE"):
+            return httpx.Response(405)
+        if not self._writes(book, user, domain) or self.failing_writes == "refused":
+            return httpx.Response(403)
+        written = f"/addressbooks/{home}/{name}/{card_name}"
+        if request.method == "DELETE":
+            if card_name not in cards:
+                return httpx.Response(404)
+            del cards[card_name]
+            self.writes.append(("DELETE", written))
+            return httpx.Response(204)
+        if len(request.content) > self.body_limit:
+            return httpx.Response(413)
+        # sabre/dav reads jCard from a body that starts with "["
+        if not request.content.startswith(b"["):
+            return httpx.Response(415)
+        card = json.loads(request.content)
+        if not is_contact(card):
+            return httpx.Response(415)
+        if self.failing_writes == "lost":
+            return httpx.Response(503)
+        created = card_name not in cards
+        cards[card_name] = card
+        self.writes.append(("PUT", written))
+        if self.failing_writes == "landed":
+            raise httpx.ReadTimeout("Contacts answered too late", request=request)
+        return httpx.Response(201 if created else 204)
+
+    def _search(self, request: httpx.Request, user: str, domain: str | None) -> httpx.Response:
+        try:
+            limit = int(request.url.params.get("limit", "30"))
+            offset = int(request.url.params.get("offset", "0"))
+            body = json.loads(request.content)
+        except ValueError:
+            return httpx.Response(400)
+        if limit < 1 or offset < 0 or not isinstance(body, dict):
+            return httpx.Response(400)
+        # The side service reads exactly these two members
+        if not set(body) <= {"query", "addressBooks"}:
+            return httpx.Response(400)
+        self.searches.append(body)
+        books: list[tuple[str, str]] = []
+        for ref in body.get("addressBooks") or []:
+            if not isinstance(ref, dict) or set(ref) != {"userId", "addressBookId"}:
+                return httpx.Response(400)
+            segments = (ref["userId"], ref["addressBookId"])
+            if not all(
+                isinstance(segment, str)
+                and SEARCH_SEGMENT.fullmatch(segment)
+                and segment not in (".", "..")
+                for segment in segments
+            ):
+                return httpx.Response(400)
+            if segments not in books:
+                books.append(segments)
+        # The fake reads the query without .json, as it reads URLs
+        query = str(body.get("query") or "").replace(".json", "")
+        try:
+            pattern = re.compile(".*" + query + ".*", re.IGNORECASE)
+        except re.error:
+            # A query the fake cannot compile answers 502
+            return httpx.Response(502)
+        found: list[dict[str, Any]] = []
+        for home, name in books:
+            book = self.books.get((home, name))
+            if book is None or not self._reads(book, user, domain):
+                continue
+            hits = [
+                (card_name, card)
+                for card_name, card in sorted(book.shown.items())
+                if pattern.search(vcard_text(card))
+            ]
+            found += [
+                {
+                    "_links": {"self": {"href": f"/addressbooks/{home}/{name}/{card_name}"}},
+                    "etag": _etag(card),
+                    "data": card,
+                }
+                for card_name, card in hits[: offset + limit]
+            ]
+        return httpx.Response(200, json={"_embedded": {"dav:item": found[offset : offset + limit]}})
 
 
 def matrix_error(status: int, errcode: str, error: str) -> httpx.Response:
@@ -1914,6 +2320,7 @@ class FakeBoundary:
         self.requests: list[httpx.Request] = []
         """Every request the service sent, wherever to."""
         self.tasks = FakeTasks()
+        self.contacts = self.calendar.contacts
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)

@@ -24,6 +24,8 @@ from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.chat import members, messages, rooms
 from twake_space_agent_contracts.chat.synapse import Synapse
+from twake_space_agent_contracts.contacts import address_books
+from twake_space_agent_contracts.contacts.carddav import Contacts
 from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
 from twake_space_agent_contracts.mail.tmail import TMail
@@ -140,6 +142,12 @@ def _drive(context: Context) -> list[APIRouter]:
     ]
 
 
+def _contacts(context: Context) -> list[APIRouter]:
+    # Through the Calendar side service, which proxies esn-sabre's address books as the user
+    contacts = Contacts(context.settings.calendar_url, context.http)
+    return [address_books.router(contacts, context.caller)]
+
+
 def _tasks(context: Context) -> list[APIRouter]:
     # A deployment that does not publish Tasks has no need to know where it is
     if context.settings.tasks_url is None:
@@ -230,6 +238,16 @@ APPLICATIONS = (
             " prévient par mail ceux qui les suivent",
         ),
         routers=_tasks,
+    ),
+    Application(
+        domain="contacts",
+        name=Words(en="Twake Contacts", fr="Twake Contacts"),
+        read=Words(
+            en="list, search and read your contacts",
+            fr="lister, chercher et lire tes contacts",
+        ),
+        write=None,
+        routers=_contacts,
     ),
 )
 
