@@ -2,7 +2,7 @@
 which of those applications it publishes."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # What the service published before PUBLISHED_APPS existed, and still publishes without it
 PUBLISHED_BY_DEFAULT = frozenset({"events", "calendar"})
@@ -28,6 +28,10 @@ class Settings:
     """The gateway's outbound route to Synapse, Twake Chat's homeserver, which adds the token of
     the contracts' application service: Chat goes through it as the user. Needed once Chat is
     published, and only then."""
+    chat_gateway_key: str | None = field(default=None, repr=False)
+    """The key that route admits, so that only this service uses the application service's token:
+    sent on each call to Chat, and to no other application. Needed once Chat is published, and
+    only then. Out of the settings' representation, so that no trace or log shows it."""
     matrix_server_name: str | None = None
     """The homeserver's name, which ends the Matrix id of each of its users. Needed once Chat is
     published, and only then."""
@@ -65,6 +69,8 @@ class Settings:
             )
             or PUBLISHED_BY_DEFAULT,
             chat_url=os.environ.get("CHAT_URL", "").rstrip("/") or None,
+            # No header carries the line break a secret's file may end with
+            chat_gateway_key=os.environ.get("CHAT_GATEWAY_KEY", "").strip() or None,
             matrix_server_name=os.environ.get("MATRIX_SERVER_NAME") or None,
             matrix_mail_domain=os.environ.get("MATRIX_MAIL_DOMAIN") or None,
             mail_url=os.environ.get("MAIL_URL", "").rstrip("/") or None,

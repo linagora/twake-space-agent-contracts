@@ -7,12 +7,16 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET, Serve, operations_of, serving
-from tests.fakes import ISSUER, SETTINGS, FakeBoundary, as_drive_owner, email_of
+from tests.fakes import CHAT_GATEWAY_KEY, ISSUER, SETTINGS, FakeBoundary, as_drive_owner, email_of
 from twake_space_agent_contracts.app import create_app_from_env
 from twake_space_agent_contracts.settings import Settings
 
 PERIOD = {"start": "2026-10-13T17:00:00+02:00", "end": "2026-10-13T18:00:00+02:00"}
-CHAT_SETTINGS = {"CHAT_URL": "https://gateway.test/synapse/", "MATRIX_SERVER_NAME": "twake.test"}
+CHAT_SETTINGS = {
+    "CHAT_URL": "https://gateway.test/synapse/",
+    "CHAT_GATEWAY_KEY": CHAT_GATEWAY_KEY,
+    "MATRIX_SERVER_NAME": "twake.test",
+}
 DRIVE_SETTINGS = ("DRIVE_INSTANCE_DOMAIN", "DRIVE_SCHEME", "DRIVE_PORT")
 TASKS_OPERATIONS = {
     "open_boards",
@@ -161,12 +165,32 @@ def test_chat_published_without_its_settings_stops_the_service_from_starting(
         create_app_from_env()
 
 
+@pytest.mark.parametrize("key", ["", " \n"], ids=["empty", "blank"])
+def test_chat_published_with_an_empty_gateway_key_stops_the_service_from_starting(
+    environment: pytest.MonkeyPatch, key: str
+) -> None:
+    # A chart renders a secret it lacks as an empty value
+    environment.setenv("PUBLISHED_APPS", "events,calendar,chat")
+    for name, value in CHAT_SETTINGS.items():
+        environment.setenv(name, value)
+    environment.setenv("CHAT_GATEWAY_KEY", key)
+
+    with pytest.raises(ValueError, match=r"chat, which needs CHAT_GATEWAY_KEY$"):
+        create_app_from_env()
+
+
+@pytest.mark.parametrize(
+    "key",
+    [CHAT_GATEWAY_KEY, f"{CHAT_GATEWAY_KEY}\n"],
+    ids=["key", "key ending with a line break, as a file may give it"],
+)
 async def test_chat_published_with_its_settings_is_served(
-    environment: pytest.MonkeyPatch, serve: Serve, boundary: FakeBoundary
+    environment: pytest.MonkeyPatch, serve: Serve, boundary: FakeBoundary, key: str
 ) -> None:
     environment.setenv("PUBLISHED_APPS", "chat")
     for name, value in CHAT_SETTINGS.items():
         environment.setenv(name, value)
+    environment.setenv("CHAT_GATEWAY_KEY", key)
     # Without MATRIX_MAIL_DOMAIN, the users' mail domain is the server name
     boundary.synapse.accounts["@mmaudet:twake.test"] = [email_of("mmaudet")]
 
