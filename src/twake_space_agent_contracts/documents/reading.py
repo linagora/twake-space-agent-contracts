@@ -65,6 +65,12 @@ class Output:
         if self._lines and self._lines[-1]:
             self.add("")
 
+    def note(self, words: str) -> None:
+        """Says, on a line of its own between brackets, what the text leaves out of the
+        document."""
+        self.cut = True
+        self.add(f"[{words}]")
+
     def tick(self) -> None:
         """Stops the reading once its deadline passed."""
         if time.monotonic() >= self._deadline:

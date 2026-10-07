@@ -12,14 +12,20 @@ from asyncio.subprocess import DEVNULL, PIPE
 from dataclasses import dataclass
 from typing import Literal, get_args
 
-Kind = Literal["docx", "pptx"]
+Kind = Literal["docx", "pptx", "xlsx"]
 """What the service reads a document as."""
 
 KINDS: dict[str, Kind] = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 }
 """The kind of each type of document the service reads, by the type its uploader declared."""
+
+MOST_ROWS = 1_000
+"""The rows that hold values read from each sheet of a spreadsheet, at most."""
+MOST_COLUMNS = 50
+"""The columns read from each sheet of a spreadsheet, at most, from the first."""
 
 Reason = Literal["encrypted", "too_large", "unreadable", "too_long"]
 """Why a document's text cannot be read: it is protected by a password; it holds more than the

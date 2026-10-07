@@ -11,6 +11,7 @@ from docx import Document as new_word_document
 from docx.document import Document as WordDocument
 from docx.oxml import parse_xml
 from httpx import AsyncClient, Response
+from openpyxl import Workbook
 from pptx import Presentation as new_presentation
 from pptx.presentation import Presentation
 
@@ -18,6 +19,7 @@ from tests.fakes import as_drive_owner
 
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # The prefixes the WordprocessingML a test adds may use
 WORD_NAMESPACES = {
@@ -58,6 +60,65 @@ def presentation(build: Callable[[Presentation], object]) -> bytes:
     build(deck)
     written = io.BytesIO()
     deck.save(written)
+    return written.getvalue()
+
+
+def workbook(build: Callable[[Workbook], object]) -> bytes:
+    """A workbook as openpyxl writes it: its text in each cell, inline, and no value for its
+    formulas, which only a spreadsheet application computes."""
+    book = Workbook()
+    build(book)
+    written = io.BytesIO()
+    book.save(written)
+    return written.getvalue()
+
+
+_SPREADSHEET = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_PACKAGE = "http://schemas.openxmlformats.org/package/2006"
+_OFFICE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def excel_workbook(rows: str, strings: list[str], *, date1904: bool = False) -> bytes:
+    """A workbook of one sheet, Sheet1, written as Excel writes one: the text of its cells in a
+    table of shared strings, of which each string is the content of an si element, the value of
+    each formula as last computed beside it, and its rows those of sheetData. A cell of style 1
+    shows a day, in Excel's built-in format 14, one of style 2 a day and a time."""
+    shared = "".join(f"<si>{string}</si>" for string in strings)
+    links = [
+        ("rId1", "worksheet", "worksheets/sheet1.xml"),
+        ("rId2", "sharedStrings", "sharedStrings.xml"),
+        ("rId3", "styles", "styles.xml"),
+    ]
+    parts = {
+        "[Content_Types].xml": f'<Types xmlns="{_PACKAGE}/content-types">'
+        '<Default Extension="rels" '
+        'ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/></Types>',
+        "_rels/.rels": f'<Relationships xmlns="{_PACKAGE}/relationships">'
+        f'<Relationship Id="rId1" Type="{_OFFICE}/officeDocument" Target="xl/workbook.xml"/>'
+        "</Relationships>",
+        "xl/workbook.xml": f'<workbook xmlns="{_SPREADSHEET}" xmlns:r="{_OFFICE}">'
+        f'<workbookPr date1904="{int(date1904)}"/>'
+        '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        "xl/_rels/workbook.xml.rels": f'<Relationships xmlns="{_PACKAGE}/relationships">'
+        + "".join(
+            f'<Relationship Id="{id}" Type="{_OFFICE}/{kind}" Target="{target}"/>'
+            for id, kind, target in links
+        )
+        + "</Relationships>",
+        "xl/worksheets/sheet1.xml": f'<worksheet xmlns="{_SPREADSHEET}">'
+        f"<sheetData>{rows}</sheetData></worksheet>",
+        "xl/sharedStrings.xml": f'<sst xmlns="{_SPREADSHEET}">{shared}</sst>',
+        "xl/styles.xml": f'<styleSheet xmlns="{_SPREADSHEET}">'
+        r'<numFmts count="1"><numFmt numFmtId="164" formatCode="dd/mm/yyyy\ hh:mm"/></numFmts>'
+        '<cellStyleXfs count="1"><xf numFmtId="0"/></cellStyleXfs>'
+        '<cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="164"/></cellXfs>'
+        "</styleSheet>",
+    }
+    written = io.BytesIO()
+    with zipfile.ZipFile(written, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, part in parts.items():
+            archive.writestr(name, '<?xml version="1.0" encoding="UTF-8"?>' + part)
     return written.getvalue()
 
 

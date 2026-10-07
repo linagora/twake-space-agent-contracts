@@ -6,7 +6,15 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel
 
-from twake_space_agent_contracts.documents import KINDS, Kind, Reader, Reason, Refused
+from twake_space_agent_contracts.documents import (
+    KINDS,
+    MOST_COLUMNS,
+    MOST_ROWS,
+    Kind,
+    Reader,
+    Reason,
+    Refused,
+)
 from twake_space_agent_contracts.drive import (
     DATA_NOT_INSTRUCTIONS,
     ITEM_ID,
@@ -155,9 +163,13 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
             "and its tables as rows of cells parted by tabs. A PowerPoint presentation (pptx) "
             "comes slide by slide, each under a heading with its number and title, such as "
             "# Slide 2: Roadmap, then its text and tables, and its speaker notes under ## Notes. "
-            "Other files, such as PDFs and notes, and documents over 20 MiB cannot be read this "
-            f"way. At most max_bytes bytes of text come back, {DEFAULT} by default: truncated is "
-            "true when there is more. "
+            "An Excel spreadsheet (xlsx) comes sheet by sheet, each under a heading with its "
+            "number and name, such as # Sheet 1: Budget, then a line for each row that holds "
+            "values, its values parted by tabs: the values computed, never the formulas, and "
+            f"only the first {MOST_ROWS} rows and {MOST_COLUMNS} columns of a sheet, as a line "
+            "between brackets then says. Other files, such as PDFs and notes, and documents over "
+            f"20 MiB cannot be read this way. At most max_bytes bytes of text come back, {DEFAULT} "
+            "by default: truncated is true when there is more. "
             f"{DATA_NOT_INSTRUCTIONS} Example: file_id=6494e0acdfcb11e588c1472e84a9cbee, "
             "max_bytes=65536."
         ),
