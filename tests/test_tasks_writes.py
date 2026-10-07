@@ -14,6 +14,7 @@ WRITES = [
     pytest.param("POST", "", {"title": "Plan the launch"}, id="create_task"),
     pytest.param("PATCH", "/{task}", {"priority": 1}, id="update_task"),
     pytest.param("POST", "/{task}/complete", None, id="complete_task"),
+    pytest.param("DELETE", "/{task}", None, id="delete_task"),
 ]
 
 
@@ -121,6 +122,7 @@ async def test_ids_that_are_not_uuids_are_invalid(
         pytest.param("POST", "", {"title": "Plan the launch"}, "board_not_found", id="create_task"),
         pytest.param("PATCH", "/{task}", {"priority": 1}, "task_not_found", id="update_task"),
         pytest.param("POST", "/{task}/complete", None, "task_not_found", id="complete_task"),
+        pytest.param("DELETE", "/{task}", None, "task_not_found", id="delete_task"),
     ],
 )
 @pytest.mark.parametrize(

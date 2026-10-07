@@ -531,6 +531,11 @@ class Tasks:
         instead."""
         await self._write(user, "POST", board_id, task_id, {"state": "completed"}, "/complete")
 
+    async def trash_task(self, user: User, board_id: str, task_id: str) -> None:
+        """Moves the task to the board's trash, with the subtasks the board shows, where a member
+        can restore it for 30 days, before Tasks deletes it for good."""
+        await self._write(user, "DELETE", board_id, task_id, None)
+
     async def move_task(self, user: User, board_id: str, task_id: str, section_id: str) -> None:
         """Moves a task to the end of a section: to a completed one, this completes it, or moves
         a recurring one to its next due date instead."""

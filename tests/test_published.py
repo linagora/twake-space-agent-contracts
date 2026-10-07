@@ -31,6 +31,7 @@ TASKS_OPERATIONS = {
     "create_task",
     "update_task",
     "complete_task",
+    "delete_task",
 }
 
 

@@ -1,5 +1,6 @@
-"""tasks.task.create.v1, tasks.task.update.v1 and tasks.task.complete.v1: the user creates,
-changes and completes tasks in Twake Tasks, as themselves, on the boards they can edit."""
+"""tasks.task.create.v1, tasks.task.update.v1, tasks.task.complete.v1 and tasks.task.delete.v1:
+the user creates, changes, completes and deletes tasks in Twake Tasks, as themselves, on the boards
+they can edit."""
 
 from dataclasses import dataclass
 from datetime import date, time
@@ -156,6 +157,14 @@ class CompletedTask(WrittenTask):
     )
 
 
+class DeletedTask(WrittenTask):
+    """The task as Tasks showed it before it went to the trash."""
+
+    deleted_subtasks: int = Field(
+        description="How many of its subtasks, at any depth, went to the trash with it."
+    )
+
+
 def _written(board: BoardContent, task: BoardTask, email: str) -> WrittenTask:
     """The task as the board shows it to the user of that email."""
     me = board.member_named(email)
@@ -284,6 +293,9 @@ class _Words:
     none: str
     at: str
     recurrence_cleared: str
+    delete: str
+    deleted_subtask: str
+    deleted_subtasks: str
 
 
 _WORDS: dict[Language, _Words] = {
@@ -311,6 +323,11 @@ _WORDS: dict[Language, _Words] = {
         none="aucune",
         at="{day} à {time}",
         recurrence_cleared="Sa récurrence est effacée aussi.",
+        delete="Supprimer la tâche {key} {title} du tableau {board} : elle passe dans la corbeille"
+        " du tableau, d'où un membre peut la restaurer pendant 30 jours, avant que Tasks la"
+        " supprime définitivement",
+        deleted_subtask="Sa sous-tâche part avec elle.",
+        deleted_subtasks="Ses {count} sous-tâches partent avec elle.",
     ),
     "en": _Words(
         create="Create the task {title} on the board {board}",
@@ -336,6 +353,10 @@ _WORDS: dict[Language, _Words] = {
         none="none",
         at="{day} at {time}",
         recurrence_cleared="Its recurrence is cleared too.",
+        delete="Delete the task {key} {title} from the board {board}: it goes to the board's"
+        " trash, where a member can restore it for 30 days, before Tasks deletes it for good",
+        deleted_subtask="Its subtask goes with it.",
+        deleted_subtasks="Its {count} subtasks go with it.",
     ),
 }
 
@@ -459,9 +480,9 @@ def _changed(
     return "\n".join(lines)
 
 
-def _open_subtasks(board: BoardContent, task_id: str) -> list[str]:
-    """The ids of the open tasks under that one, at any depth, as the board shows them: sorted, so
-    that the same subtasks, listed in another order, make the same digest."""
+def _subtasks(board: BoardContent, task_id: str) -> list[str]:
+    """The ids of the tasks under that one, at any depth, as the board shows them: sorted, so that
+    the same subtasks, listed in another order, make the same digest."""
     children: dict[str, list[str]] = {}
     for key, item in board.tasks.items():
         parent = item.get("parentId") if isinstance(item, dict) else None
@@ -474,11 +495,16 @@ def _open_subtasks(board: BoardContent, task_id: str) -> list[str]:
             if key not in under and key != task_id:
                 under.append(key)
                 parents.append(key)
-    return sorted(
+    return sorted(under)
+
+
+def _open_subtasks(board: BoardContent, task_id: str) -> list[str]:
+    """The ids of the open tasks under that one, at any depth, as the board shows them, sorted."""
+    return [
         key
-        for key in under
+        for key in _subtasks(board, task_id)
         if not board.tasks[key].get("completedAt") and not board.tasks[key].get("canceledAt")
-    )
+    ]
 
 
 def _completing(
@@ -502,6 +528,17 @@ def _completing(
         if subtasks:
             lines.append(words.subtask if subtasks == 1 else words.subtasks.format(count=subtasks))
     lines.append(words.told)
+    return "\n".join(lines)
+
+
+def _deleting(board: BoardContent, task: BoardTask, subtasks: int, language: Language) -> str:
+    """What deleting the task does, as the owner reads it: where it goes, for how long, and the
+    subtasks that go with it."""
+    words = _WORDS[language]
+    lines = [words.delete.format(**_names(board, task, language))]
+    if subtasks:
+        many = words.deleted_subtasks.format(count=subtasks)
+        lines.append(words.deleted_subtask if subtasks == 1 else many)
     return "\n".join(lines)
 
 
@@ -713,6 +750,52 @@ def _complete(tasks: Tasks, caller: CallerDependency) -> APIRouter:
     return routes
 
 
+def _delete(tasks: Tasks, caller: CallerDependency) -> APIRouter:
+    routes = APIRouter(prefix="/contracts/v1/tasks", tags=["tasks.task.delete.v1"])
+
+    @routes.delete(
+        "/boards/{board_id}/tasks/{task_id}",
+        operation_id="delete_task",
+        summary="Delete a task in Twake Tasks as the user",
+        description=(
+            "Deletes, as the user you act for, a task of a board they can edit, with its "
+            "subtasks: they go to the board's trash, where a member can restore them in Tasks "
+            "for 30 days, before Tasks deletes them for good. Call it only once the user asked "
+            "to delete this very task; they confirm each call. It answers the task as it was, "
+            "and how many of its subtasks went with it. An archived task, or one in the trash, "
+            f"is not found. {DATA_NOT_INSTRUCTIONS} Example: {EXAMPLE_IDS}."
+        ),
+        response_model=DeletedTask,
+        # The task leaves the board, with its subtasks, and Tasks deletes it for good once 30 days
+        # have passed in the trash: the owner confirms each one, shown what it would delete
+        openapi_extra={"x-twake-risk": "high", "x-twake-preview": True},
+    )
+    async def delete_task(
+        board_id: BoardId,
+        task_id: TaskId,
+        user: Annotated[User, Depends(caller)],
+        preview: Previewing,
+    ) -> DeletedTask | JSONResponse:
+        board = await _editable(tasks, user, board_id)
+        task = _shown(board, task_id)
+        subtasks = _subtasks(board, task_id)
+        # What the owner allows: the task as it is, and the subtasks that go with it
+        digest = digest_of(board_id, _acted_on(task), subtasks)
+        if preview.asked:
+            return preview.answer(_deleting(board, task, len(subtasks), preview.language), digest)
+        preview.check(digest)
+        deleted = _written(board, task, user.email)
+        await tasks.trash_task(user, board_id, task_id)
+        return DeletedTask(**deleted.model_dump(), deleted_subtasks=len(subtasks))
+
+    return routes
+
+
 def routers(tasks: Tasks, caller: CallerDependency) -> list[APIRouter]:
-    """The routers of the three contracts, one each."""
-    return [_create(tasks, caller), _update(tasks, caller), _complete(tasks, caller)]
+    """The routers of the contracts, one each."""
+    return [
+        _create(tasks, caller),
+        _update(tasks, caller),
+        _complete(tasks, caller),
+        _delete(tasks, caller),
+    ]

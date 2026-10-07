@@ -40,11 +40,12 @@ OPERATIONS = [
     ),
     pytest.param("PATCH", TASK, {}, {"priority": 1}, id="update_task"),
     pytest.param("POST", f"{TASK}/complete", {}, None, id="complete_task"),
+    pytest.param("DELETE", TASK, {}, None, id="delete_task"),
 ]
 WRITES = [
     each
     for each in OPERATIONS
-    if each.id in ("create_project", "create_task", "update_task", "complete_task")
+    if each.id in ("create_project", "create_task", "update_task", "complete_task", "delete_task")
 ]
 PARAMETERS = ("method", "path", "params", "body")
 

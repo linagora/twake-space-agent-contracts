@@ -2177,6 +2177,8 @@ class FakeTasks:
             return httpx.Response(403, json={"error": "forbidden"})
         if board.archived:
             return httpx.Response(409, json={"error": "archived"})
+        if method == "DELETE":
+            return self._trash(board, found[2], found[3], body)
         if not isinstance(body, dict):
             return _refused("invalid_request")
         if found[2] is None:
@@ -2193,6 +2195,25 @@ class FakeTasks:
             case "POST", "move":
                 return self._move(task, board, body)
         return httpx.Response(404)
+
+    def _trash(
+        self, board: TasksBoard, task_id: str | None, then: str | None, body: Any
+    ) -> httpx.Response:
+        """Moves a task to the board's trash, with the subtasks the board shows at any depth."""
+        task = self.tasks.get(task_id or "")
+        # Unlike the other writes, it finds no archived or trashed task
+        if then or body is not None or task is None or task.board != board.id or task.hidden:
+            return httpx.Response(404, json={"error": "not_found"})
+        hiding = [task]
+        while hiding:
+            hidden = hiding.pop()
+            hidden.hidden = True
+            hiding.extend(
+                child
+                for child in self.tasks.values()
+                if child.parent_id == hidden.id and not child.hidden
+            )
+        return httpx.Response(204)
 
     def _create(self, board: TasksBoard, body: dict[str, Any]) -> httpx.Response:
         # A task in a section, outside sections when sectionId is null, or a subtask
