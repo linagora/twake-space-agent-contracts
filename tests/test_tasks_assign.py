@@ -125,7 +125,6 @@ async def test_assignees_that_do_not_change_are_not_written(
         pytest.param({}, id="no assignees"),
         pytest.param({"assignees": None}, id="null"),
         pytest.param({"assignees": "alice@twake.test"}, id="not a list"),
-        pytest.param({"assignees": ["Alice"]}, id="not an email"),
         pytest.param(
             {"assignees": [f"member{number}@twake.test" for number in range(51)]},
             id="more than 50",
@@ -145,6 +144,19 @@ async def test_an_invalid_assignment_is_refused_before_anything_is_written(
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_request"
     assert boundary.tasks.writes == []
+
+
+@pytest.mark.parametrize("address", ["Alice", "alice@", "alice@twake", "@twake.test"])
+async def test_an_assignee_that_is_not_an_email_address_is_refused(
+    client: AsyncClient, boundary: FakeBoundary, address: str
+) -> None:
+    task = boundary.tasks.task(website(boundary), "Fix the login page")
+
+    response = await assign(client, task, assignees=["alice@twake.test", address])
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_email"
+    assert boundary.tasks.requests == []
 
 
 async def test_a_task_off_the_board_answers_like_an_unknown_one(

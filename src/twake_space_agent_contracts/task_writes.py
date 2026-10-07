@@ -24,7 +24,7 @@ from twake_space_agent_contracts.previews import (
     shown_size,
     time_of_day,
 )
-from twake_space_agent_contracts.problems import Problem, invalid_request
+from twake_space_agent_contracts.problems import Problem, invalid_email, invalid_request
 from twake_space_agent_contracts.tasks import (
     DATA_NOT_INSTRUCTIONS,
     TASKS_ID,
@@ -40,6 +40,7 @@ from twake_space_agent_contracts.tasks import (
     owner_not_member,
     task_not_found,
 )
+from twake_space_agent_contracts.text import EMAIL
 from twake_space_agent_contracts.zones import ZONE, known_zone
 
 LONGEST_TITLE = 500
@@ -60,6 +61,8 @@ EXAMPLE_IDS = (
 )
 MOST_ASSIGNEES = 50
 """The most people Tasks assigns a task to."""
+LONGEST_EMAIL = 254
+"""The longest email address, as SMTP takes one."""
 SHOWN_SUBTASKS = 10
 """How many of the subtasks that go with a deleted task its preview names, at most."""
 MOST_PEOPLE = 10
@@ -105,7 +108,9 @@ BoardId = Annotated[
 TaskId = Annotated[
     str, Path(pattern=TASKS_ID, description="The task_id of the task, as reads give it.")
 ]
-Email = Annotated[str, Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+$")]
+Email = Annotated[
+    str, Field(min_length=1, max_length=LONGEST_EMAIL, description="Such as alice@example.com.")
+]
 
 
 class NewTask(BaseModel):
@@ -236,7 +241,7 @@ def _members(board: BoardContent, emails: list[str]) -> list[str]:
     order and each once: a task is assigned to members of its board alone."""
     chosen: list[str] = []
     unknown: list[str] = []
-    for email in dict.fromkeys(email.lower() for email in emails):
+    for email in dict.fromkeys(email.strip().lower() for email in emails):
         member = board.member_named(email)
         if member is None:
             unknown.append(email)
@@ -976,6 +981,11 @@ def _assign(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
     ) -> WrittenTask | JSONResponse:
+        for address in assignment.assignees:
+            if not EMAIL.fullmatch(address.strip()):
+                raise invalid_email(
+                    f"assignees: {address!r} is not an email address, such as alice@example.com."
+                )
         board = await _editable(tasks, user, board_id)
         task = _shown(board, task_id)
         chosen = _members(board, assignment.assignees)

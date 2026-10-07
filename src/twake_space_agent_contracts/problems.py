@@ -46,6 +46,11 @@ def invalid_request(detail: str) -> Problem:
     return Problem(status=400, code="invalid_request", title="Invalid request", detail=detail)
 
 
+def invalid_email(detail: str) -> Problem:
+    """An email the call gives that is not an address."""
+    return Problem(status=400, code="invalid_email", title="Invalid email", detail=detail)
+
+
 def _invalid_request(error: RequestValidationError) -> Problem:
     # Each location starts with where the value came from (query, path...), then its name: a value
     # without one, such as a whole body, goes by where it came from
