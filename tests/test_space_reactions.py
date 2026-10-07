@@ -277,3 +277,18 @@ async def test_the_user_joins_a_reaction_the_item_has_already(
     assert boundary.space.writes == [
         ("PUT", f"/spaces/{post.space}/feed/items/{post.id}/reactions/{ROCKET}", None)
     ]
+
+
+async def test_the_user_takes_back_any_reaction_of_theirs(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    post = roadmap(boundary, design(boundary))
+    boundary.space.react(post, MMAUDET, ROCKET)
+
+    response = await react(client, post, ROCKET, remove=True)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["reactions"] == []
+    assert boundary.space.writes == [
+        ("DELETE", f"/spaces/{post.space}/feed/items/{post.id}/reactions/{ROCKET}", None)
+    ]

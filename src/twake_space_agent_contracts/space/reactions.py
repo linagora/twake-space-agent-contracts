@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.previews import Preview, Previewing, digest_of
@@ -46,14 +46,9 @@ class OwnReaction(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    key: Key = Field(description="The reaction, one of those Twake Space offers.")
-
-    @field_validator("key")
-    @classmethod
-    def _offered(cls, key: str) -> str:
-        if key not in OFFERED:
-            raise ValueError(f"give one of the reactions Twake Space offers, {' '.join(OFFERED)}")
-        return key
+    key: Key = Field(
+        description="The reaction to take back, as reactions gives it where mine is true."
+    )
 
 
 def _acted_on(item: FeedItem) -> dict[str, str | None]:
