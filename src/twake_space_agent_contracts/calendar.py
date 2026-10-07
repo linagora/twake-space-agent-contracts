@@ -3,8 +3,9 @@
 import copy
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from pydantic import BaseModel
@@ -49,6 +50,49 @@ def _is_component(value: Any) -> bool:
     )
 
 
+def _zone(name: Any) -> ZoneInfo | None:
+    """The time zone of that name in the IANA database, if it has one."""
+    if not isinstance(name, str):
+        return None
+    try:
+        return ZoneInfo(name)
+    except (KeyError, ValueError, OSError):
+        return None
+
+
+@dataclass(frozen=True)
+class EventTime:
+    """When an event starts or ends, as it writes it: a day, for an event of whole days; else a
+    time, aware in UTC or in its zone, or naive, floating or in a zone the IANA database lacks."""
+
+    value: date | datetime
+    zone: str | None
+    """The zone the event names for it, UTC for a time in UTC: what reads it beside the time when
+    it is not converted. None for a day or a floating time."""
+
+
+def _event_time(prop: list[Any] | None) -> EventTime | None:
+    """A DTSTART or a DTEND in jCal, None in any form but a date or a date-time."""
+    if prop is None or not isinstance(prop[3], str):
+        return None
+    kind, written = prop[2], prop[3]
+    try:
+        if kind == "date":
+            return EventTime(date.fromisoformat(written), None)
+        if kind != "date-time":
+            return None
+        time = datetime.fromisoformat(written)
+    except ValueError:
+        return None
+    if time.tzinfo is not None:
+        return EventTime(time.astimezone(UTC), "UTC")
+    tzid = prop[1].get("tzid")
+    zone = _zone(tzid)
+    if zone is not None:
+        return EventTime(time.replace(tzinfo=zone), str(tzid))
+    return EventTime(time, tzid if isinstance(tzid, str) and tzid else None)
+
+
 @dataclass(frozen=True)
 class CalendarEvent:
     """An event in one of the user's calendars: its href as esn-sabre writes it, without the
@@ -59,6 +103,40 @@ class CalendarEvent:
 
     def _vevents(self) -> list[list[Any]]:
         return [component for component in self.jcal[2] if component[0] == "vevent"]
+
+    def _prop(self, name: str) -> list[Any] | None:
+        """The first property of that name of the event, which is not a series."""
+        return next(
+            (prop for vevent in self._vevents() for prop in vevent[1] if prop[0] == name), None
+        )
+
+    @property
+    def title(self) -> str | None:
+        """Its title, as its organizer wrote it."""
+        prop = self._prop("summary")
+        return prop[3] if prop is not None and isinstance(prop[3], str) else None
+
+    @property
+    def organizer(self) -> tuple[str | None, str | None]:
+        """Its organizer's name and address, as their calendar wrote them."""
+        prop = self._prop("organizer")
+        if prop is None:
+            return None, None
+        name, address = prop[1].get("cn"), prop[3]
+        if isinstance(address, str) and address[:7].lower() == "mailto:":
+            address = address[7:]
+        return (
+            name if isinstance(name, str) else None,
+            address if isinstance(address, str) else None,
+        )
+
+    @property
+    def starts(self) -> EventTime | None:
+        return _event_time(self._prop("dtstart"))
+
+    @property
+    def ends(self) -> EventTime | None:
+        return _event_time(self._prop("dtend"))
 
     @property
     def recurring(self) -> bool:
@@ -146,6 +224,28 @@ class Calendar:
                 detail="Calendar has no user with the email of the user you act for.",
             )
         return str(found[0]["_id"])
+
+    async def time_zone(self, user: User) -> ZoneInfo | None:
+        """The user's time zone in Calendar: the one they set, else the deployment's, which
+        Calendar gives then. None when Calendar gives none the IANA database has, or fails to
+        give one: it only says in which zone to read times."""
+        try:
+            found = await self._call(
+                user, "POST", "/api/configurations", json=[{"name": "core", "keys": ["datetime"]}]
+            )
+        except Problem:
+            return None
+        try:
+            names = [
+                setting["value"]["timeZone"]
+                for module in found
+                if module["name"] == "core"
+                for setting in module["configurations"]
+                if setting["name"] == "datetime"
+            ]
+        except (KeyError, TypeError):
+            return None
+        return _zone(names[0]) if names else None
 
     async def busy(
         self, user: User, start: datetime, end: datetime, exclude: list[str]

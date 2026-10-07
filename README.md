@@ -70,6 +70,7 @@ Every contract keeps the rules of the capability catalog:
 - The schema of a parameter or of a body is written whole in its operation, without a reference to the document's components: the harness gives it to the model as it is.
 - A contract that makes the application notify other people says so in its description, as `accept_invitation` does of the organizer.
 - Text other people wrote, which an agent reads as data and never as instructions, comes back in an `untrusted` object, separately from what the contract computed.
+- A write that can tell what a call would do without doing it declares `x-twake-preview: true`, and its owner reads that rather than the call when the harness asks them: see [Previews](#previews).
 
 ### `events.read.v1`
 
@@ -112,6 +113,7 @@ Accepts, as the user, an invitation the user received: only their own participat
 - The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
 - Agents call it only once the user has said yes to this invitation; approval happens in the conversation for now.
 - It is a low-risk write (`x-twake-risk: low`): the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
+- It tells what it would do ([Previews](#previews)): the event's title, when it takes place and who organizes it, from the user's copy of the event, its times in the user's time zone. That zone is the one Calendar gives (`POST /api/configurations`, `core.datetime`), the deployment's when the user set none; without one the IANA database has, the times are the event's own, its zone named beside them. The digest covers the event as the user would accept it, where it is: a call made after the organizer changed it answers `changed_since_preview`.
 
 ### Chat, as the user
 
@@ -368,6 +370,20 @@ Create, change and complete tasks as the user, on the boards they may edit.
 - Tasks notifies nobody of a new task, which the user follows. It notifies the other people who follow a task of each change and of its completion, in Tasks and by email: by default its creator, its assignees and those who commented on it.
 - Each is a low-risk write (`x-twake-risk: low`): the user's own work, which the owner's consent to write in Tasks covers without a confirmation each time.
 
+## Previews
+
+When the harness asks an owner about a write, for a first use, a high-risk write or a write that a turn an event started prepared, it shows them what the call would do rather than the call as the model wrote it, if the write's operation declares `x-twake-preview: true`. It first calls the contract as the call would go, same method, path, query and body, in the owner's name, with `x-twake-preview: true` and the owner's language in `accept-language`:
+
+- The contract checks the call as it would, reads what the call acts on, and writes nothing. It answers `200`, whatever the call itself answers, such as the `201` of a creation, with `x-twake-preview: true` in its headers and `{"summary", "digest"}`, and a call it would refuse before writing with the same problem. What only the write finds, such as an application refusing it, the call itself answers.
+- `summary` tells the owner what the call would do, in plain text on a few lines, in French or in English: the first of the two that `accept-language` prefers, English by default. Text that others wrote, such as a title, a name or an address, comes on one line and cut short, a title or a text between quotation marks, without the characters a reader does not see: the harness refuses a summary with a control character but line feeds and tabs, or a format character. It shows the summary quoted under its own label, as data, never rendered.
+- `digest` is `sha256:` and the SHA-256, in hex, of what the call acts on. The harness keeps it with the call it froze, and the call its owner allows carries it in `x-twake-preview-digest`: a contract that finds what the call acts on changed since answers `409` `changed_since_preview` and does nothing, and the harness tells the owner that the action was not done.
+- `x-twake-preview` with any other value than `true` is refused (`invalid_request`), rather than taken for the call itself.
+- None of these headers is in the OpenAPI document: they are the harness's, never a model's.
+
+| Operation | The summary tells | The digest covers |
+|---|---|---|
+| `accept_invitation` | the event's title, when it takes place, in the user's time zone, and who organizes it | the event as the user would accept it |
+
 ## Errors
 
 Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`application/problem+json`) with a stable `code`:
@@ -394,6 +410,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `board_not_found` | the user is a member of no board with this id |
 | 404 | `task_not_found` | the board shows no task with this id: it may be archived or in the trash |
 | 409 | `not_an_attendee` | the invitation in the user's calendar does not list the user as an attendee |
+| 409 | `changed_since_preview` | what the call acts on changed since its owner was shown what it would do: nothing was done |
 | 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series |
 | 409 | `invitation_cancelled` | the organizer cancelled the event |
 | 409 | `identity_ambiguous` | the Chat account named after the user's email does not list that email |
@@ -464,7 +481,7 @@ The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user
 
 ## Test
 
-The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the words of every published application, a worked call in every description, and schemas written whole.
+The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
 
 ```sh
 uv run pytest
