@@ -20,7 +20,16 @@ from twake_space_agent_contracts.drive import (
     folder_not_found,
 )
 from twake_space_agent_contracts.drive_files import DriveItem
-from twake_space_agent_contracts.previews import Language, Previewing, digest_of, one_line, quoted
+from twake_space_agent_contracts.previews import (
+    BUDGET,
+    Language,
+    Previewing,
+    digest_of,
+    excerpt,
+    one_line,
+    quoted,
+    shown_size,
+)
 from twake_space_agent_contracts.problems import Problem, invalid_request
 
 LARGEST = 1_048_576
@@ -76,10 +85,6 @@ def _encoded(new: NewFile) -> bytes:
     return content
 
 
-SHOWN_CONTENT = 300
-"""How many characters of a new file its preview shows, at most."""
-
-
 @dataclass(frozen=True)
 class _Words:
     """What a preview of a new file tells the owner, in one language."""
@@ -106,7 +111,7 @@ _WORDS: dict[Language, _Words] = {
         bytes="{count} octets",
         kilobytes="{count} Ko",
         megabytes="{count} Mo",
-        content="Contenu : {content}",
+        content="Contenu :",
         empty="Contenu : vide",
     ),
     "en": _Words(
@@ -118,30 +123,30 @@ _WORDS: dict[Language, _Words] = {
         bytes="{count} bytes",
         kilobytes="{count} KB",
         megabytes="{count} MB",
-        content="Content: {content}",
+        content="Content:",
         empty="Content: empty",
     ),
 }
 
 
-def _size(size: int, language: Language) -> str:
+def _bytes(count: int, language: Language) -> str:
     """A size in bytes as the owner reads it."""
     words = _WORDS[language]
     # French writes 0 and 1 in the singular, English 1 alone
-    if size < 1024:
-        single = size < 2 if language == "fr" else size == 1
-        return (words.byte if single else words.bytes).format(count=size)
-    kilobytes = size / 1024
-    count, unit = (
+    if count < 1024:
+        single = count < 2 if language == "fr" else count == 1
+        return (words.byte if single else words.bytes).format(count=count)
+    kilobytes = count / 1024
+    amount, unit = (
         (kilobytes, words.kilobytes) if kilobytes < 1024 else (kilobytes / 1024, words.megabytes)
     )
-    shown = f"{count:.1f}"
+    shown = f"{amount:.1f}"
     return unit.format(count=shown.replace(".", ",") if language == "fr" else shown)
 
 
-def _summary(new: NewFile, size: int, folder: StackItem, language: Language) -> str:
+def _summary(new: NewFile, length: int, folder: StackItem, language: Language) -> str:
     """What creating the file does, as the owner reads it: which file goes to which folder, the
-    names its user or those who shared it wrote, and how its content starts."""
+    names its user or those who shared it wrote, and its content, whole when it fits."""
     words = _WORDS[language]
     if folder.id == ROOT_ID:
         where = words.at_the_top
@@ -152,12 +157,14 @@ def _summary(new: NewFile, size: int, folder: StackItem, language: Language) -> 
     line = words.create.format(
         name=quoted(one_line(new.name, 255), language),
         kind=words.kinds[new.mime],
-        size=_size(size, language),
+        size=_bytes(length, language),
         where=where,
     )
-    shown = one_line(new.content, SHOWN_CONTENT)
-    content = words.content.format(content=quoted(shown, language)) if shown else words.empty
-    return f"{line}\n{content}"
+    if not new.content.strip():
+        return f"{line}\n{words.empty}"
+    head = f"{line}\n{words.content}\n"
+    # The content takes what the rest leaves of the summary
+    return head + excerpt(new.content, BUDGET - shown_size(head), language)
 
 
 def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:

@@ -13,17 +13,18 @@ from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.mail import EXAMPLE_ID, UNTRUSTED, people
 from twake_space_agent_contracts.mail.tmail import JMAP_ID, PreparedReply, ReplyDraft, TMail
 from twake_space_agent_contracts.previews import (
+    BUDGET,
     Language,
     Previewing,
     digest_of,
+    excerpt,
     one_line,
     quoted,
+    shown_size,
 )
 
 TEXT_BYTES = 20 * 1024
 """How large the text of a reply may be, in bytes of UTF-8."""
-SHOWN_TEXT = 300
-"""How many characters of the text of a reply its preview shows, at most."""
 
 
 class Reply(BaseModel):
@@ -76,7 +77,7 @@ _WORDS: dict[Language, _Words] = {
         to="À : {people}",
         cc="Cc : {people}",
         subject="Objet : {subject}",
-        text="Texte : {text}",
+        text="Texte :",
         reply_to="Elle va à l'adresse de réponse que donne le mail, pas à son expéditeur.",
     ),
     "en": _Words(
@@ -84,7 +85,7 @@ _WORDS: dict[Language, _Words] = {
         to="To: {people}",
         cc="Cc: {people}",
         subject="Subject: {subject}",
-        text="Text: {text}",
+        text="Text:",
         reply_to="It goes to the reply address the email gives, not to its sender.",
     ),
 }
@@ -92,7 +93,7 @@ _WORDS: dict[Language, _Words] = {
 
 def _summary(reply: PreparedReply, text: str, language: Language) -> str:
     """What drafting the reply does, as the owner reads it: whom the draft answers, under which
-    subject, which the email's senders wrote, and how its text starts."""
+    subject, which the email's senders wrote, and its text, whole when it fits."""
     words = _WORDS[language]
     lines = [words.drafted]
     for header, shown, line in (("to", reply.to, words.to), ("cc", reply.cc, words.cc)):
@@ -100,10 +101,12 @@ def _summary(reply: PreparedReply, text: str, language: Language) -> str:
         if total:
             lines.append(line.format(people=people(shown, total, language)))
     lines.append(words.subject.format(subject=quoted(one_line(reply.subject), language)))
-    lines.append(words.text.format(text=quoted(one_line(text, SHOWN_TEXT), language)))
     if reply.reply_to_differs:
         lines.append(words.reply_to)
-    return "\n".join(lines)
+    lines.append(words.text)
+    head = "\n".join(lines) + "\n"
+    # The text takes what the rest leaves of the summary
+    return head + excerpt(text, BUDGET - shown_size(head), language)
 
 
 def router(tmail: TMail, caller: CallerDependency) -> APIRouter:

@@ -8,7 +8,13 @@ import httpx
 import pytest
 from httpx import AsyncClient, Response
 
-from tests.conftest import allowed_after, asking_preview, preview_of
+from tests.conftest import (
+    HARNESS_LIMIT,
+    allowed_after,
+    asking_preview,
+    harness_size,
+    preview_of,
+)
 from tests.fakes import (
     ROOT_ID,
     SHARED_DRIVES_ID,
@@ -377,13 +383,19 @@ async def test_a_file_the_contract_does_not_create_never_reaches_drive(
             "fr",
             "Créer le fichier « Meeting notes.md » (Markdown, 35 octets) dans le dossier"
             " « /Documents » de ton Drive\n"
-            "Contenu : « # Meeting notes - Budget approved »",
+            "Contenu :\n"
+            "\t# Meeting notes\n"
+            "\t\n"
+            "\t- Budget approved",
         ),
         (
             "en",
             "Create the file “Meeting notes.md” (Markdown, 35 bytes) in the folder “/Documents” of"
             " your Drive\n"
-            "Content: “# Meeting notes - Budget approved”",
+            "Content:\n"
+            "\t# Meeting notes\n"
+            "\t\n"
+            "\t- Budget approved",
         ),
     ],
 )
@@ -410,7 +422,25 @@ async def test_a_preview_names_the_top_of_the_drive_and_a_larger_file(
     assert told.splitlines()[0] == (
         "Créer le fichier « todo.txt » (texte brut, 2,9 Ko) à la racine de ton Drive"
     )
-    assert told.splitlines()[1] == f"Contenu : « {'é' * 299}… »"
+    assert told.splitlines()[1:] == ["Contenu :", "\t" + "é" * 1500]
+
+
+async def test_a_preview_of_a_file_too_long_to_show_whole_says_how_much_it_leaves_out(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    content = ("x" * 99 + "\n") * 10485
+    body = new_file("root", "log.txt", content, "text/plain")
+
+    told, _ = preview_of(await create(client, body, asking_preview("en")))
+
+    _, label, *lines, cut = told.splitlines()
+    shown = "\n".join(line.removeprefix("\t") for line in lines)
+    left = len(content.rstrip()) - len(shown)
+    assert label == "Content:"
+    assert all(line.startswith("\t") for line in lines)
+    assert content.startswith(shown) and len(shown) > 4000 and left > 0
+    assert cut == f"(cut here: {left:,} more characters are not shown)"
+    assert harness_size(told) <= HARNESS_LIMIT
 
 
 async def test_a_preview_refuses_what_creating_would_refuse(

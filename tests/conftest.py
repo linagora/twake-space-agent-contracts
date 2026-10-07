@@ -28,6 +28,18 @@ AS_MMAUDET = as_user(email_of("mmaudet"))
 DIGEST = re.compile(r"[A-Za-z0-9+/=._:-]{1,256}")
 
 
+# The most a summary may take for the harness to show it (CALL_BYTES in
+# src/consents/request.ts)
+HARNESS_LIMIT = 16_384
+
+
+def harness_size(text: str) -> int:
+    """What a summary takes as the harness counts it: its bytes in UTF-8, and those of its HTML,
+    which escapes &, < and >."""
+    html = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return len(text.encode()) + len(html.encode())
+
+
 def asking_preview(language: str) -> dict[str, str]:
     """What the harness adds to a call to ask what it would do, in the owner's language."""
     return {"x-twake-preview": "true", "accept-language": language}
@@ -56,6 +68,7 @@ def preview_of(response: Response) -> tuple[str, str]:
     ]
     assert unshown == []
     assert DIGEST.fullmatch(digest), digest
+    assert harness_size(summary.strip()) <= HARNESS_LIMIT
     return summary, digest
 
 

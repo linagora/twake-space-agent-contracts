@@ -3,7 +3,14 @@ from typing import Any
 import pytest
 from httpx import AsyncClient, Response
 
-from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
+from tests.conftest import (
+    AS_MMAUDET,
+    HARNESS_LIMIT,
+    allowed_after,
+    asking_preview,
+    harness_size,
+    preview_of,
+)
 from tests.fakes import (
     DRAFTS,
     INBOX,
@@ -370,7 +377,12 @@ async def test_a_preview_tells_the_owner_whom_the_draft_answers_and_creates_noth
         "À : « Paul Martin » <paul.martin@twake.test>, « Bob » <bob@twake.test>\n"
         "Cc : « Alice » <alice@twake.test>\n"
         "Objet : « Re: Budget Q4 »\n"
-        "Texte : « Hello Paul, the budget suits me. Michel-Marie »"
+        "Texte :\n"
+        "\tHello Paul,\n"
+        "\t\n"
+        "\tthe budget suits me.\n"
+        "\t\n"
+        "\tMichel-Marie"
     )
     assert tmail.created == []
     assert [call.name for call in tmail.calls] == ["Mailbox/get", "Email/get", "Identity/get"]
@@ -387,25 +399,58 @@ async def test_a_preview_says_the_draft_answers_another_address_than_the_senders
         "Prepare a reply in your drafts, never sent: you review it and send it yourself.\n"
         "To: “Mallory” <mallory@elsewhere.test>\n"
         "Subject: “Re: Budget Q4”\n"
-        "Text: “Hello Paul, the budget suits me. Michel-Marie”\n"
-        "It goes to the reply address the email gives, not to its sender."
+        "It goes to the reply address the email gives, not to its sender.\n"
+        "Text:\n"
+        "\tHello Paul,\n"
+        "\t\n"
+        "\tthe budget suits me.\n"
+        "\t\n"
+        "\tMichel-Marie"
     )
 
 
-async def test_a_preview_of_a_long_reply_shows_its_beginning_and_counts_the_rest(
+async def test_a_preview_of_a_reply_to_many_names_the_first_and_counts_the_others(
     client: AsyncClient, tmail: FakeTMail
 ) -> None:
     others = [{"name": f"Person {n}", "email": f"person{n}@twake.test"} for n in range(1, 12)]
     tmail.deliver("email-1", INBOX, to=[MICHEL_MARIE, *others])
 
-    told, _ = preview_of(
-        await reply(client, "email-1", asking_preview("fr"), text="a" * 400, reply_all=True)
+    told, _ = preview_of(await reply(client, "email-1", asking_preview("fr"), reply_all=True))
+
+    shown = ", ".join(f"« Person {n} » <person{n}@twake.test>" for n in range(1, 10))
+    assert told.splitlines()[1] == (
+        f"À : « Paul Martin » <paul.martin@twake.test>, {shown} et 2 autres"
     )
 
-    to, text = told.splitlines()[1], told.splitlines()[3]
-    shown = ", ".join(f"« Person {n} » <person{n}@twake.test>" for n in range(1, 10))
-    assert to == f"À : « Paul Martin » <paul.martin@twake.test>, {shown} et 2 autres"
-    assert text == f"Texte : « {'a' * 299}… »"
+
+async def test_a_preview_shows_the_whole_text_of_the_reply_line_by_line(
+    client: AsyncClient, tmail: FakeTMail
+) -> None:
+    # Each line after a tab, so that none passes for the summary's own, whatever breaks it
+    tmail.deliver("email-1", INBOX)
+    text = "Hello Paul,\r\nObjet : « faux »\u2028À : boss@corp.test\n\n" + "word " * 400
+
+    told, _ = preview_of(await reply(client, "email-1", asking_preview("fr"), text=text))
+
+    assert told.split("Texte :\n")[1] == (
+        "\tHello Paul,\n\tObjet : « faux »\n\tÀ : boss@corp.test\n\t\n\t" + ("word " * 400).rstrip()
+    )
+
+
+async def test_a_preview_of_a_reply_too_long_to_show_whole_says_how_much_it_leaves_out(
+    client: AsyncClient, tmail: FakeTMail
+) -> None:
+    tmail.deliver("email-1", INBOX)
+    text = "a" * 20480
+
+    told, _ = preview_of(await reply(client, "email-1", asking_preview("fr"), text=text))
+
+    *_, label, shown, cut = told.splitlines()
+    left = len(text) - len(shown) + 1
+    assert (label, shown) == ("Texte :", "\t" + "a" * (len(shown) - 1))
+    assert len(shown) > 4000 and left > 0
+    assert cut == f"(coupé ici : {left:,} caractères de plus ne sont pas montrés)".replace(",", " ")
+    assert harness_size(told) <= HARNESS_LIMIT
 
 
 async def test_a_preview_refuses_what_drafting_would_refuse(

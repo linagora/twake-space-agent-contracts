@@ -216,7 +216,7 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 - `Mailbox/get`, `Email/get` and `Identity/get` in one request, then `Email/set` creates the draft. An email outside the user's own mailboxes answers 404 `email_not_found`, like an unknown one, and a user without a Drafts mailbox gets `mailbox_not_found`.
 - `reply_to_differs` tells that the draft answers another address than the sender's. The recipients and the subject come back under `untrusted`, 100 addresses at most per header, `recipients_truncated` telling that the draft has more.
 - It is a low-risk write (`x-twake-risk: low`): nothing leaves the mailbox until the user sends the draft.
-- It tells what it would do ([Previews](#previews)): that the draft is never sent, whom it answers, ten people at most per header and how many others, its subject, the first 300 characters of its text, and that it goes to a Reply-To address rather than to the sender, when it does. The digest covers the draft as it would be created, but for its text, which is the call's own.
+- It tells what it would do ([Previews](#previews)): that the draft is never sent, whom it answers, ten people at most per header and how many others, its subject, that it goes to a Reply-To address rather than to the sender, when it does, and its text, whole when it fits. The digest covers the draft as it would be created, but for its text, which is the call's own.
 
 ### `mail.email.move.v1`
 
@@ -310,7 +310,7 @@ Creates a text file in the user's own Drive, in a folder that nobody else sees.
 - A name already in the folder, of a file or of a folder, answers `name_taken`: nothing is replaced, nor renamed. A Drive without room left for the file answers `quota_exceeded`.
 - The service reads the instance's capabilities, for `web_url`, before the write, so that a failure there leaves no file behind: the call made again creates it. It writes the file with `POST /files/{folder_id}?Type=file&Name=…`, with its `Content-MD5`, which the stack checks on arrival, and never executable.
 - It is a low-risk write (`x-twake-risk: low`): a new file in the user's own folders, never over another, which the owner's consent to write in Drive covers without a confirmation each time.
-- It tells what it would do ([Previews](#previews)), once it checked the folder as it would: the file's name, its type and size, the folder it goes to, by its path, and the first 300 characters of its content. The digest covers the folder, where it is: a call made once it moved answers `changed_since_preview`. Only the write finds a name taken in the folder, or a Drive without room: the call answers `name_taken` or `quota_exceeded` then.
+- It tells what it would do ([Previews](#previews)), once it checked the folder as it would: the file's name, its type and size, the folder it goes to, by its path, and its content, whole when it fits. The digest covers the folder, where it is: a call made once it moved answers `changed_since_preview`. Only the write finds a name taken in the folder, or a Drive without room: the call answers `name_taken` or `quota_exceeded` then.
 
 ### Tasks, as the user
 
@@ -382,6 +382,7 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 
 - The contract checks the call as it would, reads what the call acts on, and writes nothing. It answers `200`, whatever the call itself answers, such as the `201` of a creation, with `x-twake-preview: true` in its headers and `{"summary", "digest"}`, and a call it would refuse before writing with the same problem. What only the write finds, such as an application refusing it, the call itself answers.
 - `summary` tells the owner what the call would do, in plain text on a few lines, in French or in English: the first of the two that `accept-language` prefers, English by default. Text that others wrote, such as a title, a name or an address, comes on one line and cut short, without the characters a reader does not see, which the harness refuses in a summary: control characters but line feeds and tabs, and format characters. A title or a name comes between quotation marks, its own quotation marks made plain apostrophes, and an address between angle brackets, without any of its own: none of it can close its quotes and go on as the summary's own words. The harness shows the summary quoted under its own label, as data, never rendered.
+- A summary takes at most three quarters of what the harness shows, 16 KiB as it counts them: its bytes in UTF-8 and those of its HTML, which escapes `&`, `<` and `>`. The text a write would put, a reply's or a file's, comes line by line, each line after a tab, so that none passes for the summary's own, and whole unless it takes more than the rest of the summary leaves: the summary then shows its beginning, and a line of its own says how many characters it leaves out.
 - `digest` is `sha256:` and the SHA-256, in hex, of what the call acts on. The harness keeps it with the call it froze, and the call its owner allows carries it in `x-twake-preview-digest`: a contract that finds what the call acts on changed since answers `409` `changed_since_preview` and does nothing, and the harness tells the owner that the action was not done.
 - `x-twake-preview` with any other value than `true` is refused (`invalid_request`), rather than taken for the call itself.
 - None of these headers is in the OpenAPI document: they are the harness's, never a model's.
@@ -389,12 +390,12 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | Operation | The summary tells | The digest covers |
 |---|---|---|
 | `accept_invitation` | the event's title, when it takes place, in the user's time zone, and who organizes it | the event as the user would accept it |
-| `create_reply_draft` | whom the draft answers, its subject and the start of its text, never sent | the draft as it would be created, but for its text |
+| `create_reply_draft` | whom the draft answers, its subject and its text, never sent | the draft as it would be created, but for its text |
 | `move_email`, `archive_email`, `trash_email` | which email, by its subject and senders, goes to which mailbox | the email, where it is, and where it would go |
 | `create_task` | the task's title, where it goes and when it is due | its board, its section or the task it goes under |
 | `update_task` | each field it changes, as it would be and as it was | the task as it is |
 | `complete_task` | where the task goes, or the due date it moves on from, and the subtasks it completes | the task as it is, its completed section and its open subtasks |
-| `create_file` | the file's name, type and size, its folder and the start of its content | the folder, where it is |
+| `create_file` | the file's name, type and size, its folder and its content | the folder, where it is |
 
 ## Errors
 

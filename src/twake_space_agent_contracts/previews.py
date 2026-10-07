@@ -10,6 +10,7 @@ since answers 409 and does nothing."""
 
 import hashlib
 import json
+import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, time
@@ -28,6 +29,16 @@ Language = Literal["en", "fr"]
 
 LONGEST = 200
 """How many characters of a text someone else wrote a summary shows, at most."""
+
+LIMIT = 16_384
+"""The most a summary may take for the harness to show it, as it counts it (CALL_BYTES in its
+src/consents/request.ts): over it, the owner is not asked, and cannot confirm the call."""
+BUDGET = LIMIT * 3 // 4
+"""What a summary takes at most, well within what the harness shows. The text a write would put,
+shown whole when it fits, takes what the rest of its summary leaves of it."""
+
+# The line breaks the harness reads as such when it quotes a summary line by line
+_BREAKS = re.compile("\r\n|[\r\x85\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]")
 
 # What the harness refuses in a summary, as no text to show an owner: control characters but line
 # feeds and tabs, and format characters, which can turn text right to left or show nothing. What
@@ -219,6 +230,60 @@ def person(name: str | None, address: str | None, language: Language) -> str | N
     if address:
         shown.append(f"<{address}>")
     return " ".join(shown) or None
+
+
+def shown_size(text: str) -> int:
+    """What text takes of a summary, as the harness counts it: its bytes in UTF-8, and those of
+    its HTML, which escapes &, < and >."""
+    plain = len(text.encode("utf-8", "surrogatepass"))
+    return 2 * plain + 4 * text.count("&") + 3 * (text.count("<") + text.count(">"))
+
+
+# The line that says how much of a text a summary leaves out, for one character and for more
+_CUT: dict[Language, tuple[str, str]] = {
+    "fr": (
+        "(coupé ici : 1 caractère de plus n'est pas montré)",
+        "(coupé ici : {count} caractères de plus ne sont pas montrés)",
+    ),
+    "en": (
+        "(cut here: 1 more character is not shown)",
+        "(cut here: {count} more characters are not shown)",
+    ),
+}
+
+
+def _number(count: int, language: Language) -> str:
+    """A count as the owner reads it: 1 234 or 1,234."""
+    return f"{count:,}".replace(",", " ") if language == "fr" else f"{count:,}"
+
+
+def excerpt(text: str, budget: int, language: Language) -> str:
+    """The text a write would put, as its summary shows it: line by line, each line after a tab,
+    so that none passes for the summary's own, without what a reader does not see. Whole when it
+    takes no more than `budget` of the summary; else cut, with a line that says how much of it is
+    left out, never silently."""
+    kept = "".join(
+        character
+        for character in _BREAKS.sub("\n", text)
+        if character in "\n\t" or unicodedata.category(character) not in _UNSHOWN
+    ).rstrip()
+    shown = "\t" + kept.replace("\n", "\n\t")
+    if shown_size(shown) <= budget:
+        return shown
+    one, many = _CUT[language]
+    # Room for the line that says how much is left out, however much that is
+    room = budget - shown_size("\n" + many.format(count=_number(len(kept), language)))
+    spent, end = shown_size("\t"), 0
+    for character in kept:
+        # A line break takes the tab of the next line along
+        spent += shown_size(character) + (shown_size("\t") if character == "\n" else 0)
+        if spent > room:
+            break
+        end += 1
+    prefix = kept[:end].rstrip()
+    left = len(kept) - len(prefix)
+    cut = one if left == 1 else many.format(count=_number(left, language))
+    return "\t" + prefix.replace("\n", "\n\t") + "\n" + cut
 
 
 def day(value: date, language: Language) -> str:
