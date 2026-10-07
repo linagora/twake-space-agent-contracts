@@ -452,6 +452,12 @@ class MethodError(Exception):
     """A JMAP method that fails, which TMail answers with an error response of this type."""
 
 
+def _present(properties: dict[str, Any]) -> dict[str, Any]:
+    """What James gives of an object: the properties it has a value for, leaving the others out
+    rather than writing them null."""
+    return {key: value for key, value in properties.items() if value is not None}
+
+
 def _addresses(email: dict[str, Any], *headers: str) -> str:
     return " ".join(
         f"{address.get('name') or ''} {address['email']}"
@@ -677,7 +683,7 @@ class FakeTMail:
         wanted = list(visible) if arguments.get("ids") is None else arguments["ids"]
         return {
             "list": [
-                {key: visible[mailbox_id][key] for key in arguments["properties"]}
+                _present({key: visible[mailbox_id].get(key) for key in arguments["properties"]})
                 for mailbox_id in wanted
                 if mailbox_id in visible
             ],
@@ -743,7 +749,7 @@ class FakeTMail:
                 else {}
             ),
         }
-        return {key: (email | parts)[key] for key in arguments["properties"]}
+        return _present({key: (email | parts).get(key) for key in arguments["properties"]})
 
     def _threads(self, owner: str, arguments: dict[str, Any]) -> dict[str, Any]:
         threads = {
