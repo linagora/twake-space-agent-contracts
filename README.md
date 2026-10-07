@@ -310,6 +310,7 @@ Creates a text file in the user's own Drive, in a folder that nobody else sees.
 - A name already in the folder, of a file or of a folder, answers `name_taken`: nothing is replaced, nor renamed. A Drive without room left for the file answers `quota_exceeded`.
 - The service reads the instance's capabilities, for `web_url`, before the write, so that a failure there leaves no file behind: the call made again creates it. It writes the file with `POST /files/{folder_id}?Type=file&Name=…`, with its `Content-MD5`, which the stack checks on arrival, and never executable.
 - It is a low-risk write (`x-twake-risk: low`): a new file in the user's own folders, never over another, which the owner's consent to write in Drive covers without a confirmation each time.
+- It tells what it would do ([Previews](#previews)), once it checked the folder as it would: the file's name, its type and size, the folder it goes to, by its path, and the first 300 characters of its content. The digest covers the folder, where it is: a call made once it moved answers `changed_since_preview`. Only the write finds a name taken in the folder, or a Drive without room: the call answers `name_taken` or `quota_exceeded` then.
 
 ### Tasks, as the user
 
@@ -393,6 +394,7 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `create_task` | the task's title, where it goes and when it is due | its board, its section or the task it goes under |
 | `update_task` | each field it changes, as it would be and as it was | the task as it is |
 | `complete_task` | where the task goes, or the due date it moves on from, and the subtasks it completes | the task as it is, its completed section and its open subtasks |
+| `create_file` | the file's name, type and size, its folder and the start of its content | the folder, where it is |
 
 ## Errors
 

@@ -8,6 +8,7 @@ import httpx
 import pytest
 from httpx import AsyncClient, Response
 
+from tests.conftest import allowed_after, asking_preview, preview_of
 from tests.fakes import (
     ROOT_ID,
     SHARED_DRIVES_ID,
@@ -35,12 +36,14 @@ def new_file(
     return {"folder_id": folder_id, "name": name, "content": content, "mime": mime}
 
 
-async def create(client: AsyncClient, body: dict[str, Any]) -> Response:
+async def create(
+    client: AsyncClient, body: dict[str, Any], headers: dict[str, str] | None = None
+) -> Response:
     # As JSON escapes it, so that a lone surrogate can be sent
     return await client.post(
         "/contracts/v1/drive/files",
         content=json.dumps(body),
-        headers=as_drive_owner() | {"Content-Type": "application/json"},
+        headers=as_drive_owner() | {"Content-Type": "application/json"} | (headers or {}),
     )
 
 
@@ -365,3 +368,85 @@ async def test_a_file_the_contract_does_not_create_never_reaches_drive(
     assert response.json()["code"] == "invalid_request"
     assert response.json()["detail"].startswith(f"{field}: ")
     assert boundary.drive.requests == []
+
+
+@pytest.mark.parametrize(
+    ("language", "summary"),
+    [
+        (
+            "fr",
+            "Créer le fichier « Meeting notes.md » (Markdown, 35 octets) dans le dossier"
+            " « /Documents » de ton Drive\n"
+            "Contenu : « # Meeting notes - Budget approved »",
+        ),
+        (
+            "en",
+            "Create the file “Meeting notes.md” (Markdown, 35 bytes) in the folder “/Documents” of"
+            " your Drive\n"
+            "Content: “# Meeting notes - Budget approved”",
+        ),
+    ],
+)
+async def test_a_preview_tells_the_owner_what_file_would_go_where_and_creates_nothing(
+    client: AsyncClient, boundary: FakeBoundary, language: str, summary: str
+) -> None:
+    boundary.drive.add(folder("documents", "Documents"))
+    docs = set(boundary.drive.docs)
+
+    told, _ = preview_of(await create(client, new_file(), asking_preview(language)))
+
+    assert told == summary
+    assert creations(boundary) == []
+    assert set(boundary.drive.docs) == docs
+
+
+async def test_a_preview_names_the_top_of_the_drive_and_a_larger_file(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    body = new_file("root", "todo.txt", "é" * 1500, "text/plain")
+
+    told, _ = preview_of(await create(client, body, asking_preview("fr")))
+
+    assert told.splitlines()[0] == (
+        "Créer le fichier « todo.txt » (texte brut, 2,9 Ko) à la racine de ton Drive"
+    )
+    assert told.splitlines()[1] == f"Contenu : « {'é' * 299}… »"
+
+
+async def test_a_preview_refuses_what_creating_would_refuse(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.drive.add(folder("photos", "Photos", sharing="sharing-1"))
+
+    response = await create(client, new_file("photos"), asking_preview("fr"))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "folder_shared"
+    assert creations(boundary) == []
+
+
+async def test_the_owner_who_allowed_what_they_were_shown_gets_the_file(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.drive.add(folder("documents", "Documents"))
+    _, digest = preview_of(await create(client, new_file(), asking_preview("fr")))
+
+    response = await create(client, new_file(), allowed_after(digest))
+
+    assert response.status_code == 201, response.text
+    assert response.json()["untrusted"]["path"] == "/Documents/Meeting notes.md"
+
+
+async def test_a_folder_moved_since_the_preview_takes_no_file(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.drive.add(folder("documents", "Documents"), folder("archives", "Archives"))
+    _, digest = preview_of(await create(client, new_file(), asking_preview("fr")))
+    # The user files the folder elsewhere before they say yes
+    boundary.drive.docs["documents"].dir_id = "archives"
+
+    response = await create(client, new_file(), allowed_after(digest))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "changed_since_preview"
+    assert creations(boundary) == []

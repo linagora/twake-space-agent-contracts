@@ -397,6 +397,7 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "create_task": ("post", True),
         "update_task": ("patch", True),
         "complete_task": ("post", True),
+        "create_file": ("post", True),
     }
 
 
