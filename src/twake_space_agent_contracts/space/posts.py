@@ -2,6 +2,7 @@
 of one of their spaces in Twake Space, which every member sees, and edits and deletes their own
 posts."""
 
+import unicodedata
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -28,6 +29,7 @@ from twake_space_agent_contracts.space.backend import (
 )
 from twake_space_agent_contracts.space.feed import LONGEST_TEXT, SpaceFeedItem, feed_item
 from twake_space_agent_contracts.space.summaries import deleting, editing, posting
+from twake_space_agent_contracts.text import UNSEEN
 
 
 class PostText(BaseModel):
@@ -38,15 +40,32 @@ class PostText(BaseModel):
     text: str = Field(
         min_length=1,
         max_length=LONGEST_TEXT,
-        description=f"Plain text, on several lines if need be, {LONGEST_TEXT} characters at most.",
+        description=f"Plain text, on several lines if need be, {LONGEST_TEXT} characters at most,"
+        " without control or format characters, such as bidirectional marks, but line breaks and"
+        " tabs.",
     )
 
 
+def _named(character: str) -> str:
+    """A character by its code point, and its name when Unicode gives it one."""
+    name = unicodedata.name(character, "")
+    return f"U+{ord(character):04X}" + (f" {name}" if name else "")
+
+
 def _text_of(post: PostText) -> str:
-    """The text as Space keeps it, without the blanks around it."""
+    """The text as Space keeps it, without the blanks around it, and as its preview shows it: a
+    control or format character, which the preview leaves out, is refused rather than posted for
+    members to read."""
     text = post.text.strip()
     if not text:
         raise invalid_request("text: A post's text cannot be blank.")
+    unseen = next((c for c in text if c not in "\n\t" and unicodedata.category(c) in UNSEEN), None)
+    if unseen is not None:
+        raise invalid_request(
+            f"text: The post holds {_named(unseen)}, a control or format character, which its"
+            " preview leaves out while members would read it: write it without such characters,"
+            " but line breaks and tabs."
+        )
     return text
 
 

@@ -401,3 +401,22 @@ async def test_the_preview_of_the_longest_posts_stays_within_what_the_harness_sh
     for response in (posted, edited):
         summary, _ = preview_of(response)
         assert "more characters are not shown)" in summary
+
+
+async def test_a_text_holding_a_control_or_format_character_is_refused(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The preview leaves out what a reader does not see, which members would read as posted: a
+    # right-to-left override would turn the rest of the post around for them alone
+    room = design(boundary)
+    written = own_post(boundary, room)
+    text = {"text": "Approved for 1000\u202e EUR"}
+
+    posted = await post(client, room, text)
+    edited = await edit(client, written, text)
+
+    for response in (posted, edited):
+        assert response.status_code == 400
+        assert response.json()["code"] == "invalid_request"
+        assert "U+202E RIGHT-TO-LEFT OVERRIDE" in response.json()["detail"]
+    assert boundary.space.writes == []
