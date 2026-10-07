@@ -415,3 +415,42 @@ async def test_a_request_that_waits_too_long_for_its_turn_is_told_the_service_is
     assert sorted(response.status_code for response in responses) == [200, 503]
     busy = next(response for response in responses if response.status_code == 503)
     assert busy.json()["code"] == "reading_busy"
+
+
+# Deeper than any office application nests its XML, as a crafted part may be, and under the 1 MiB
+# from which how much a part is compressed counts
+DEPTH = 10_000
+
+
+async def test_a_part_that_nests_its_elements_too_deep_is_not_read(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Before its tree, and the readers that walk it, grow as deep
+    wrapped = "<w:customXml w:element='x'>" * DEPTH
+    nested = f"<w:p>{wrapped}<w:r><w:t>Deep</w:t></w:r>{'</w:customXml>' * DEPTH}</w:p>"
+    document = (
+        f'<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>{nested}</w:body></w:document>'
+    ).encode()
+    boundary.drive.add(
+        text_file(
+            "word",
+            "Deep.docx",
+            content=rezipped(plans(), {"word/document.xml": document}),
+            mime=DOCX,
+        ),
+        text_file(
+            "text",
+            "Deep.odt",
+            content=opendocument(
+                ODT,
+                "<text:p>" + "<text:span>" * DEPTH + "Deep" + "</text:span>" * DEPTH + "</text:p>",
+            ),
+            mime=ODT,
+        ),
+    )
+
+    for file_id in ("word", "text"):
+        response = await read_content(client, file_id)
+
+        assert response.status_code == 415, response.text
+        assert response.json()["code"] == "content_not_extractable"

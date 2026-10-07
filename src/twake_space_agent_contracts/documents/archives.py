@@ -30,6 +30,9 @@ HIGHEST_RATIO = 100
 than RATIO_FROM uncompressed: XML is some ten times smaller compressed, a zip bomb thousands of
 times."""
 RATIO_FROM = 1_048_576
+DEEPEST = 500
+"""How deep a part may nest its elements, far deeper than office applications nest them: a part
+nested deeper is refused before its tree, and the readers that walk it, grow with it."""
 METHODS = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
 """How the files of a zip may be compressed: stored as they are, or deflated, as Office and
 LibreOffice do; the zip module unpacks the others, such as bzip2 or LZMA, without bounding what
@@ -214,6 +217,8 @@ class Package:
             if within_copy or tag == _FALLBACK:
                 within_copy += 1
                 return
+            if len(opened) == DEEPEST:
+                raise Unreadable("a part nests its elements too deep")
             named = {_named(key): value for key, value in attributes.items()}
             element = builder.start(_named(tag), named)
             unit = _named(tag) in units or local(tag) in units
