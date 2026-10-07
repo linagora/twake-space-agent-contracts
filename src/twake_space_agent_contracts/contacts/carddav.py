@@ -154,6 +154,25 @@ class Book:
         return self.kind in ("personal", "collected") and self.write_allowed
 
 
+def read_only(book: Book) -> Problem:
+    if book.kind == "domain":
+        why = f"Address book {book.book_id} is the user's domain's: no contract changes it."
+    elif book.kind == "shared":
+        why = (
+            f"Address book {book.book_id} is someone else's, shared with the user: no contract"
+            " changes it."
+        )
+    else:
+        why = f"Contacts lets the user only read address book {book.book_id}."
+    return Problem(
+        status=403,
+        code="address_book_read_only",
+        title="Address book read-only",
+        detail=f"{why} Only the user's own address books that list_address_books gives as"
+        " writable take changes.",
+    )
+
+
 def contact_exists(book: Book, contact_id: str, why: str) -> Problem:
     return Problem(
         status=409,
@@ -434,8 +453,10 @@ class Contacts:
             _card_path(card.book, card.contact_id),
             content=sent(card.jcard),
             headers={"Content-Type": JCARD},
-            passing=frozenset({413}),
+            passing=frozenset({403, 413}),
         )
+        if response.status_code == 403:
+            raise read_only(card.book)
         if response.status_code == 413:
             raise too_large()
 

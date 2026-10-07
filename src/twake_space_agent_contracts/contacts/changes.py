@@ -1,5 +1,5 @@
 """Contacts as the contracts write them: the fields a call gives, checked, and the card in jCard
-they make."""
+they make, or change."""
 
 import re
 from collections.abc import Iterable
@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from twake_space_agent_contracts.contacts import line, paragraphs
+from twake_space_agent_contracts.contacts.cards import ContactText, fields_of
 from twake_space_agent_contracts.problems import Problem, invalid_request
 
 LONGEST_TEXT = 200
@@ -25,6 +26,17 @@ FEWEST_DIGITS, MOST_DIGITS = 3, 20
 extension."""
 PRODID = "-//Linagora//Twake Space agent contracts//EN"
 """Who wrote the cards the contracts make, as vCard asks every app to say."""
+# The properties a change replaces, by the field they hold
+HELD_IN = {
+    "nickname": {"nickname"},
+    "emails": {"email"},
+    "phones": {"tel"},
+    "addresses": {"adr"},
+    "note": {"note"},
+    "birthday": {"bday"},
+}
+# What a card starts with, which the name Contacts shows follows
+HEADING = {"version", "prodid", "uid"}
 
 # An email address: its local part, dot-separated atoms of letters, digits and the signs RFC 5322
 # allows, then a domain of two labels at least, the last one letters, or the punycode of a top
@@ -290,3 +302,110 @@ def new_card(uid: str, fields: dict[str, Any]) -> list[Any]:
             *(prop for name in (*order, *rest) for prop in held.get(name, [])),
         ],
     ]
+
+
+def _named(prop: list[Any], names: set[str]) -> bool:
+    return str(prop[0]).lower() in names
+
+
+def _replaced(props: list[list[Any]], names: set[str], new: list[list[Any]]) -> list[list[Any]]:
+    """The properties, those of these names replaced by the new ones, where the first was: at the
+    end when there was none."""
+    at = next((index for index, prop in enumerate(props) if _named(prop, names)), len(props))
+    return [*props[:at], *new, *(prop for prop in props[at:] if not _named(prop, names))]
+
+
+def _first(props: list[list[Any]], name: str) -> list[Any] | None:
+    return next((prop for prop in props if _named(prop, {name})), None)
+
+
+def _organization(props: list[list[Any]], organization: str | None) -> list[list[Any]]:
+    """The organization, keeping the units the card names in it."""
+    if organization is None:
+        return []
+    held = _first(props, "org")
+    units = held[3][1:] if held is not None and isinstance(held[3], list) else []
+    return [
+        ["org", held[1] if held else {}, "text", [organization, *units] if units else organization]
+    ]
+
+
+def _titles(props: list[list[Any]], title: str | None) -> list[list[Any]]:
+    """The job title, in ROLE, where the Contacts web app shows it, and in TITLE when the card
+    holds one, so that no other app shows the former one."""
+    if title is None:
+        return []
+    held = [["role", {}, "text", title]]
+    if _first(props, "title") is not None:
+        held.append(["title", {}, "text", title])
+    return held
+
+
+def _names(props: list[list[Any]], changes: dict[str, Any]) -> list[list[Any]]:
+    """The structured name, its given and family names changed, its other parts as they are."""
+    held = _first(props, "n")
+    written = held[3] if held is not None else []
+    parts = list(written) if isinstance(written, list) else [written]
+    parts += [""] * (5 - len(parts))
+    if "family_name" in changes:
+        parts[0] = changes["family_name"] or ""
+    if "given_name" in changes:
+        parts[1] = changes["given_name"] or ""
+    if not any(parts):
+        return []
+    return [["n", held[1] if held else {}, "text", parts]]
+
+
+def _made_of(text: ContactText) -> dict[str, Any]:
+    """What the name Contacts shows is made of, in a contact."""
+    return {
+        "given_name": text.given_name,
+        "family_name": text.family_name,
+        "organization": text.organization,
+        "title": text.title,
+        "nickname": text.nickname,
+        "emails": [{"address": email.address} for email in text.emails],
+        "phones": [{"number": phone.number} for phone in text.phones],
+    }
+
+
+def changed(card: list[Any], changes: dict[str, Any]) -> list[Any]:
+    """The card with these fields changed, and nothing else: the properties that hold a field given
+    are replaced by those that hold its new value, none for none, where the first one was. The
+    name Contacts shows is the one given, else follows what it is made of, unless it was set apart
+    from it."""
+    props = [list(prop) for prop in card[1]]
+    before, _ = fields_of(card)
+    for name, value in changes.items():
+        if name in HELD_IN:
+            props = _replaced(props, HELD_IN[name], properties({name: value}).get(name, []))
+        elif name == "organization":
+            props = _replaced(props, {"org"}, _organization(props, value))
+        elif name == "title":
+            props = _replaced(props, {"role", "title"}, _titles(props, value))
+    if changes.keys() & {"given_name", "family_name"}:
+        props = _replaced(props, {"n"}, _names(props, changes))
+    # The name follows what it is made of, unless it was set apart from it
+    follows = (
+        "name" in changes or before.name is None or before.name == shown_name(_made_of(before))
+    )
+    shown = changes.get("name") or (
+        shown_name(_made_of(fields_of(["vcard", props])[0])) if follows else None
+    )
+    if follows and shown is None:
+        raise invalid_request(
+            "A contact keeps a name, an organization, an email or a phone to show it by."
+        )
+    held = _first(props, "fn")
+    if shown is not None and (held is None or held[3] != shown):
+        fn: list[list[Any]] = [["fn", {}, "text", shown]]
+        if held is not None:
+            props = _replaced(props, {"fn"}, fn)
+        else:
+            # Where a card names its contact, after what it starts with
+            at = next(
+                (index for index, prop in enumerate(props) if not _named(prop, HEADING)),
+                len(props),
+            )
+            props = [*props[:at], *fn, *props[at:]]
+    return [card[0], props]

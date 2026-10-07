@@ -420,6 +420,30 @@ async def test_a_contact_contacts_kept_but_answered_late_is_added(
     assert len(boundary.contacts.owners().cards) == 1
 
 
+async def test_a_default_book_contacts_lets_the_owner_only_read_takes_no_contact(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.contacts.owners(privileges=["dav:read"])
+
+    response = await create(client, **JEANNE)
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "address_book_read_only"
+    assert boundary.contacts.writes == []
+
+
+async def test_a_write_contacts_refuses_for_the_owners_rights_is_a_problem(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.contacts.failing_writes = "refused"
+
+    response = await create(client, **JEANNE)
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "address_book_read_only"
+    assert boundary.contacts.owners().cards == {}
+
+
 async def test_a_card_larger_than_contacts_takes_is_refused(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:

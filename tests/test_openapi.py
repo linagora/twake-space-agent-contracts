@@ -260,6 +260,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "search_contacts": ["contacts.contacts.read.v1"],
         "read_contact": ["contacts.contacts.read.v1"],
         "create_contact": ["contacts.contact.create.v1"],
+        "update_contact": ["contacts.contact.update.v1"],
     }
 
 
@@ -360,7 +361,10 @@ WRITES_NAMED = {
         "accept_invitation": ("accept", "accepter"),
         "create_event": ("add events", "ajouter des événements"),
     },
-    "contacts": {"create_contact": ("create", "créer")},
+    "contacts": {
+        "create_contact": ("create", "créer"),
+        "update_contact": ("change", "modifier"),
+    },
 }
 
 
@@ -458,6 +462,7 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "complete_task": ("post", True),
         "create_file": ("post", True),
         "create_contact": ("post", True),
+        "update_contact": ("patch", True),
     }
 
 
@@ -509,22 +514,31 @@ async def test_the_body_of_a_new_event_is_whole_and_closed(client: AsyncClient) 
     assert schema["additionalProperties"] is False
 
 
-async def test_creating_a_contact_is_a_low_risk_write(client: AsyncClient) -> None:
-    # A new contact in the user's own address book, which nobody is told of: once the owner allowed
-    # writing in Contacts, it runs without asking
+async def test_creating_and_changing_a_contact_are_low_risk_writes(client: AsyncClient) -> None:
+    # The user's own contacts, which nobody is told of: once the owner allowed writing in Contacts,
+    # each runs without asking
     document = (await client.get("/openapi.json")).json()
 
-    create = document["paths"]["/contracts/v1/contacts/contacts"]["post"]
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, _, operation in operations_of(document)
+        if operation["operationId"] in ("create_contact", "update_contact")
+    }
 
-    assert create["x-twake-risk"] == "low"
+    assert risks == {"create_contact": "low", "update_contact": "low"}
 
 
-async def test_the_body_of_a_new_contact_is_whole_and_closed(client: AsyncClient) -> None:
+@pytest.mark.parametrize("operation_id", ["create_contact", "update_contact"])
+async def test_the_bodies_of_the_contacts_writes_are_whole_and_closed(
+    client: AsyncClient, operation_id: str
+) -> None:
     # The model gets the body as the document writes it: whole, taking these fields and no other
     document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
 
-    create = document["paths"]["/contracts/v1/contacts/contacts"]["post"]
-    schema = create["requestBody"]["content"]["application/json"]["schema"]
+    schema = operations[operation_id]["requestBody"]["content"]["application/json"]["schema"]
 
     assert "$ref" not in json.dumps(schema)
     assert sorted(schema["properties"]) == sorted(

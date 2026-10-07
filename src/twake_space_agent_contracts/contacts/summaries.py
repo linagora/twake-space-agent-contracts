@@ -20,6 +20,9 @@ from twake_space_agent_contracts.previews import (
 VALUE = 400
 ITEM = 300
 LIST = 1_000
+# What a value and a list take in a change, which shows each field as it would be and as it was
+CHANGED_VALUE = 300
+CHANGED_LIST = 600
 # The fields of a contact, in the order a summary tells them; the name and the note apart
 FIELDS = (
     "given_name",
@@ -41,6 +44,8 @@ class _Words:
 
     add: str
     added: str
+    change: str
+    unchanged: str
     contact: str
     unnamed: str
     default_book: str
@@ -48,7 +53,13 @@ class _Words:
     named_book: str
     untitled_book: str
     field: str
+    instead: str
+    instead_of_none: str
+    none: str
     note: str
+    note_instead: str
+    note_instead_of_none: str
+    note_cleared: str
     told: str
     others: tuple[str, str]
     labels: dict[str, str]
@@ -59,6 +70,8 @@ _WORDS: dict[Language, _Words] = {
     "fr": _Words(
         add="Ajouter {contact} à ton carnet d'adresses",
         added="{contact} est déjà dans ton carnet d'adresses : rien n'est ajouté.",
+        change="Modifier {contact} dans {book} :",
+        unchanged="Rien ne change dans {contact}, dans {book}.",
         contact="le contact {name}",
         unnamed="le contact sans nom",
         default_book="ton carnet d'adresses",
@@ -66,7 +79,13 @@ _WORDS: dict[Language, _Words] = {
         named_book="ton carnet d'adresses {name}",
         untitled_book="ton carnet d'adresses sans nom",
         field="{label} : {value}",
+        instead="{label} : {value}, au lieu de {before}",
+        instead_of_none="{label} : {value}, au lieu de rien",
+        none="rien",
         note="Note :",
+        note_instead="Au lieu de :",
+        note_instead_of_none="Note, au lieu de rien :",
+        note_cleared="Note : rien, au lieu de :",
         told="Twake Contacts ne prévient personne.",
         others=("et 1 autre", "et {count} autres"),
         labels={
@@ -93,6 +112,8 @@ _WORDS: dict[Language, _Words] = {
     "en": _Words(
         add="Add {contact} to your address book",
         added="{contact} is in your address book already: nothing is added.",
+        change="Change {contact} in {book}:",
+        unchanged="Nothing changes in {contact}, in {book}.",
         contact="the contact {name}",
         unnamed="the contact without a name",
         default_book="your address book",
@@ -100,7 +121,13 @@ _WORDS: dict[Language, _Words] = {
         named_book="your address book {name}",
         untitled_book="your untitled address book",
         field="{label}: {value}",
+        instead="{label}: {value}, instead of {before}",
+        instead_of_none="{label}: {value}, instead of none",
+        none="none",
         note="Note:",
+        note_instead="Instead of:",
+        note_instead_of_none="Note, instead of none:",
+        note_cleared="Note: none, instead of:",
         told="Twake Contacts tells nobody.",
         others=("and 1 other", "and {count} others"),
         labels={
@@ -260,3 +287,48 @@ def added(text: ContactText, language: Language) -> str:
     address book already."""
     contact = _capitalized(contact_named(text, language))
     return _WORDS[language].added.format(contact=contact)
+
+
+def _change(text: ContactText, before: ContactText, field: str, language: Language) -> str:
+    """A field a change changes, as it would be and as it was."""
+    words = _WORDS[language]
+    room = CHANGED_LIST if field in LISTS else CHANGED_VALUE
+    label = words.labels[field]
+    now, then = value(text, field, room, language), value(before, field, room, language)
+    if then is None:
+        return words.instead_of_none.format(label=label, value=now)
+    return words.instead.format(label=label, value=now or words.none, before=then)
+
+
+def changing(book: Book, before: ContactText, after: ContactText, language: Language) -> str:
+    """What changing a contact does, as the owner reads it: each field it changes, as it would be
+    and as it was, the name Contacts shows too, and the note, whole when it fits."""
+    words = _WORDS[language]
+    contact, where = contact_named(before, language), book_named(book, language)
+    lines = [
+        _change(after, before, field, language)
+        for field in ("name", *FIELDS)
+        if getattr(after, field) != getattr(before, field)
+    ]
+    if not lines and after.note == before.note:
+        return words.unchanged.format(contact=contact, book=where)
+    lines.insert(0, words.change.format(contact=contact, book=where))
+    if after.note == before.note:
+        return "\n".join([*lines, words.told])
+    tail = "\n" + words.told
+    if after.note is None:
+        head = "\n".join([*lines, words.note_cleared]) + "\n"
+        return head + excerpt(before.note or "", BUDGET - shown_size(head + tail), language) + tail
+    if before.note is None:
+        head = "\n".join([*lines, words.note_instead_of_none]) + "\n"
+        return head + excerpt(after.note, BUDGET - shown_size(head + tail), language) + tail
+    head = "\n".join([*lines, words.note]) + "\n"
+    middle = "\n" + words.note_instead + "\n"
+    room = (BUDGET - shown_size(head + middle + tail)) // 2
+    return (
+        head
+        + excerpt(after.note, room, language)
+        + middle
+        + excerpt(before.note, room, language)
+        + tail
+    )

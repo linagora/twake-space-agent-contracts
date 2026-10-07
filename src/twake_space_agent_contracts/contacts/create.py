@@ -16,6 +16,7 @@ from twake_space_agent_contracts.contacts.carddav import (
     Card,
     Contacts,
     contact_exists,
+    read_only,
     sent,
     unavailable,
 )
@@ -106,6 +107,8 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
         book = next((book for book in books if book.default), None)
         if book is None:
             raise unavailable("Contacts gave no default address book for the user.")
+        if not book.writable:
+            raise read_only(book)
         uid = _uid(user.email, fields)
         card = Card(book, uid, new_card(uid, fields))
         # Refused before the owner is asked: Contacts would not take it
