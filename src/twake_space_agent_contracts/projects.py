@@ -98,9 +98,10 @@ _WORDS: dict[Language, _Words] = {
 }
 
 
-def _named_so(project: Project, name: str) -> bool:
-    """Whether the project bears that name, whatever its case and its blanks."""
-    return " ".join(project.untrusted.name.split()).casefold() == " ".join(name.split()).casefold()
+def _compared(name: str) -> str:
+    """A project's name as the contract compares it with another's: whatever its case and its
+    blanks."""
+    return " ".join(name.split()).casefold()
 
 
 def _creating(name: str, prefix: str, namesake_count: int, language: Language) -> str:
@@ -178,11 +179,14 @@ def _create(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         if new.key_prefix == INBOX:
             raise key_prefix_taken(INBOX)
         # Tasks takes a project of a name the user has already as another one
+        compared = _compared(name)
         namesake_ids = sorted(
-            found.project_id for found in await tasks.projects(user) if _named_so(found, name)
+            found.project_id
+            for found in await tasks.projects(user)
+            if _compared(found.untrusted.name) == compared
         )
         # What the owner allows: a project of that name, beside those they have of it already
-        digest = digest_of(" ".join(name.split()).casefold(), new.key_prefix, namesake_ids)
+        digest = digest_of(compared, new.key_prefix, namesake_ids)
         if preview.asked:
             summary = _creating(name, new.key_prefix, len(namesake_ids), preview.language)
             return preview.answer(summary, digest)
