@@ -534,7 +534,7 @@ The Space contracts call the REST API of the Twake Space backend 0.1.9 with the 
 | `read_space` | `GET /contracts/v1/space/spaces/{space_id}` | `{"space_id", "role", "created_at", "apps", "tasks_project_id", "chat_room_id", "mailbox_id", "calendar_id", "drive_id", "members": [{"user_id", "username", "email", "role", "you", "untrusted": {"display_name"}}], "groups": [{"group_id", "role", "untrusted": {"name"}}], "untrusted": {"name", "description"}}` |
 
 - The list holds 100 spaces at most, `truncated` telling that the user has more.
-- `read_space` gives the members by username, the groups linked to the space, whose people are members with their role, and the tabs the space shows (`apps`). Each of its apps links one of its own to the space: its project in Tasks, which `open_boards` gives as `project_id`, its room in Chat, as the chat contracts take it, its shared mailbox, its calendar and its files; null while the app prepares it, or when the deployment has no such app.
+- `read_space` gives the members by username, the people of its linked groups among them, each with their strongest role, the groups linked to the space, and the tabs the space shows (`apps`). `you` marks the one member who has the user's email, or nobody when no member has it, or several do. Each of its apps links one of its own to the space: its project in Tasks, which `open_boards` gives as `project_id`, its room in Chat, as the chat contracts take it, its shared mailbox, its calendar and its files; null while the app prepares it, or when the deployment has no such app.
 - `GET /spaces`, then `GET /spaces/{id}`.
 
 ### `space.people.read.v1`
@@ -569,11 +569,11 @@ React to an item of the feed of one of the user's spaces, and take a reaction ba
 | `add_feed_reaction` | `POST /contracts/v1/space/spaces/{space_id}/feed/items/{item_id}/reactions` `{"key"}` | the item, as `read_feed_item` gives it, read again |
 | `remove_feed_reaction` | `POST /contracts/v1/space/spaces/{space_id}/feed/items/{item_id}/reactions/remove` `{"key"}` | the same |
 
-- `key` is one of the six reactions the Space web app offers, 👍, ❤️, 😂, 🎉, 👀 and 🙏: an enum of the body, which the gateway checks, so that the model never writes words that members would read. The body takes no other field.
-- Any member reacts, viewers too, and the members of the space see it. Only the user's own reaction is taken back. A reaction the user made already writes nothing, and so does taking back one they did not make.
+- `key` is a reaction of 1 to 16 characters, as Space counts them. To add, it is one of the six the Space web app offers, 👍, ❤️, 😂, 🎉, 👀 and 🙏, or one the item has already, which the user joins, as the web app lets them: any other answers `invalid_request`, before anything is written, so that the model never writes words that members would read. To take back, it is any of the user's, as `reactions` gives it where `mine` is true. The body takes no other field.
+- Any member reacts, viewers too, and the members of the space see it. A reaction the user made already writes nothing. Taking one back always asks Space, which knows the user by their uuid and takes back their own alone, a reaction they did not make staying: the contracts, which take the member who has the user's email for the user, may not tell it, as when the user's address changed.
 - `PUT` and `DELETE /spaces/{id}/feed/items/{item_id}/reactions/{key}`, the key encoded in the path. The contracts take it in the body, where the gateway checks it whole.
 - Both are low-risk writes (`x-twake-risk: low`): the user's own reactions, which they take back at will, and which the owner's consent to write in Space covers without a confirmation each time.
-- Each tells what it would do ([Previews](#previews)): which item gets or loses which reaction, in which space, with the text of a post, or that nothing changes. The digest covers the item as shown, a card by its title, a post by its author and its text, and whether the user reacted so: a call made once the post was rewritten answers `changed_since_preview`.
+- Each tells what it would do ([Previews](#previews)): which item gets or loses which reaction, in which space, with the text of a post, or that nothing changes; a reaction taken back by a user the contract cannot tell among the members, if they made it. The digest covers the item as shown, a card by its title, a post by its author and its text, and whether the user reacted so: a call made once the post was rewritten answers `changed_since_preview`.
 
 ### `space.post.create.v1`, `space.post.update.v1` and `space.post.delete.v1`
 
@@ -585,13 +585,13 @@ Post in the feed of one of the user's spaces, and edit and delete the user's own
 | `update_feed_post` | `PATCH /contracts/v1/space/spaces/{space_id}/feed/posts/{item_id}` `{"text"}` | the post |
 | `delete_feed_post` | `DELETE /contracts/v1/space/spaces/{space_id}/feed/posts/{item_id}` | the post as it was |
 
-- `text` is plain text of 1 to 4000 characters once the blanks around it are left out, as Space keeps it; the body takes no other field. The same text as the post's writes nothing.
+- `text` is plain text, without the blanks around it, as Space keeps it, and the body takes no other field. Its owner reads it whole before they confirm it: it is no longer than its preview shows whole in either language the harness speaks, 4,000 characters of plain text, as Space takes, some 3,000 accented letters, 2,000 characters of Asian scripts or 1,500 emoji for a new post, and somewhat fewer for a new text, which shows beside the former one. A longer text answers `invalid_request`, saying how many of its characters the preview shows. So does a text that holds a control or format character, such as U+202E RIGHT-TO-LEFT OVERRIDE, but line breaks and tabs, naming it: members would read what the preview leaves out. The same text as the post's writes nothing.
 - Every member of the space sees a post in its feed, and its changes, as they happen: Space sends no notification of them.
 - Editors and admins post: a viewer's post answers `forbidden_role`. Only its author edits or deletes a post, whatever their role now: someone else's answers `not_author`, and a card, which shows what an app did, `not_a_post`. All three are refused before anything is written, and Space refusing the same once the user's role changed answers them too.
 - Each call to `create_feed_post` posts anew: Space takes no idempotency key. `delete_feed_post` deletes the post for good, with its reactions: Space keeps no trash.
 - `POST /spaces/{id}/feed/posts`, `PATCH` and `DELETE /spaces/{id}/feed/posts/{item_id}`, each after `GET /spaces/{id}`, and a change or a deletion after `GET /spaces/{id}/feed/items/{item_id}`.
 - All three are high-risk writes (`x-twake-risk: high`), which the owner confirms call by call: every member reads a post.
-- Each tells what it would do ([Previews](#previews)): where a post goes and how many members see it, the new text and the former one, or the post that goes for good, each text whole when it fits. The digest covers the space and its members for a new post, the post as it is and who reads it for a change, and the post as it is for a deletion: a call made once a member joined, or the post was rewritten, answers `changed_since_preview`, and writes nothing.
+- Each tells what it would do ([Previews](#previews)): where a post goes, how many members see it and its text, whole; the new text, whole, and the former one, shortened to what the rest of the summary leaves, which keeps 1,000 of it at least; or the post that goes for good, its text whole when it fits. The digest covers the space and its members for a new post, the post as it is and who reads it for a change, and the post as it is for a deletion: a call made once a member joined, or the post was rewritten, answers `changed_since_preview`, and writes nothing.
 
 ### `space.member.add.v1`, `space.member.update.v1` and `space.member.remove.v1`
 
@@ -601,15 +601,18 @@ Add people of the user's organization to one of their spaces, change the role of
 |---|---|---|
 | `add_space_members` | `POST /contracts/v1/space/spaces/{space_id}/members` `{"usernames", "role"}` | the space, as `read_space` gives it, read again |
 | `update_space_member` | `PATCH /contracts/v1/space/spaces/{space_id}/members/{user_id}` `{"role"}` | the member, as `read_space` gives them |
-| `remove_space_member` | `DELETE /contracts/v1/space/spaces/{space_id}/members/{user_id}` | the member as they were |
+| `remove_space_member` | `DELETE /contracts/v1/space/spaces/{space_id}/members/{user_id}` | the member as they were, and `still_member`, whether the space lists them still |
 
 - Only the admins of a space change its members: anyone else is refused with `not_space_admin`, before anything is written, and when Space refuses it once the user's role changed.
-- `usernames` lists 1 to 20 usernames, as `search_organization_people` gives them, all added with one `role`. Each is looked for in the directory first (`GET /organization/members?search=`), among the first 100 people it finds, whatever its case: those the user's organization does not have answer `person_not_found`, which names them, and nobody is added. A member of another role answers `member_exists`, as ldap-rest would: `update_space_member` changes it. Members of that role already are left as they are, and nothing is written when all are.
+- `usernames` lists 1 to 20 usernames, as `search_organization_people` gives them, all added with one `role`. Each is looked for in the directory first (`GET /organization/members?search=`), among the first 100 people it finds, whatever its case: those the user's organization does not have answer `person_not_found`, which names them, and nobody is added.
+- A space lists its direct members and the people of its linked groups alike, with their strongest role, but ldap-rest's member routes see the direct members alone. In a space without linked groups, a member of another role answers `member_exists`, as ldap-rest would, before anything is written: `update_space_member` changes it; members of that role already are left as they are, and nothing is written when all are. In a space with linked groups, the contract cannot tell the direct members from the others: the people it lists are added too, which makes someone it lists through a group a direct member, with that role, and a direct member of another role answers `member_exists`, which names those the space lists with another role, and adds nobody.
 - The people added see the space, its feed and what its apps hold, such as its room, its tasks and its files: Space writes the change in its directory, ldap-rest, which tells the apps.
-- `user_id` is a member's, as `read_space` gives it: one the space does not have answers `member_not_found`. A member given the role they have is left as is. A change or a removal that would leave the space without an admin, as ldap-rest refuses it, answers `last_admin`. A member through a linked group only stays one while the group is linked.
+- `user_id` is a member's, as `read_space` gives it: one the space does not have answers `member_not_found`. A member given the role they have is left as is. A change or a removal that would leave the space without an admin, as ldap-rest refuses it, answers `last_admin`.
+- The role of someone the space lists through a linked group is the group's: ldap-rest finds no direct member to change, and the contract, which reads the space again, answers `group_member` when the space links groups and still lists them; a member gone meanwhile answers `member_not_found`. The user changes the group's role, or its people, in Twake Space.
+- Space takes the removal of someone ldap-rest has through a group alone for done, while the group keeps them in the space and its apps, as long as it is linked and they are in it. The contract reads the space again once Space took a removal, and answers `still_member`, whether it lists them still. Space 0.1.9 stops listing such a member at once, though, until it hears of them again: the preview of a removal from a space that links groups warns that a member through one stays.
 - `POST /spaces/{id}/members` `{"usernames", "role"}`, `PATCH` `{"role"}` and `DELETE /spaces/{id}/members/{user_id}`, each after `GET /spaces/{id}`.
 - All three are high-risk writes (`x-twake-risk: high`), which the owner confirms call by call: they change who sees what a space holds, and who manages it.
-- Each tells what it would do ([Previews](#previews)): whom the space takes in and as what, each by their name and their email, and who is a member already; a member's new role and their former one, and what an admin does; or who leaves the space, the user maybe. The digest covers the people and their membership: a call made once one of them joined, changed role or left answers `changed_since_preview`, and writes nothing.
+- Each tells what it would do ([Previews](#previews)): whom the space takes in and as what, each by their name and their email, and who it lists already, left as they are, or made direct members with the role each has now, in a space that links groups; a member's new role and their former one, and what an admin does; or who leaves the space, the user maybe, and that a member through a linked group stays. The digest covers the people and their membership: a call made once one of them joined, changed role or left answers `changed_since_preview`, and writes nothing.
 
 ## Previews
 
@@ -641,12 +644,12 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `update_contact` | each field it changes, as it would be and as it was, what it removes named as such | the contact as it is |
 | `delete_contact` | that the contact goes for good, and each field it holds | the contact as it is |
 | `add_feed_reaction`, `remove_feed_reaction` | which item gets or loses which reaction, in which space, with a post's text; or that nothing changes | the item as shown, and whether the user reacted so |
-| `create_feed_post` | the space the post goes to, how many members see it, and its text | the space and its members |
-| `update_feed_post` | the post's new text and its former one | the post as it is, and who reads it |
+| `create_feed_post` | the space the post goes to, how many members see it, and its text, whole | the space and its members |
+| `update_feed_post` | the post's new text, whole, and its former one, shortened | the post as it is, and who reads it |
 | `delete_feed_post` | that the post goes for good with its reactions, and its text | the post as it is |
-| `add_space_members` | whom the space takes in and as what, and who is a member already | the people, and who of them are members already |
+| `add_space_members` | whom the space takes in and as what, and who it lists already, made direct members when it links groups | the people, and who of them the space lists, as what |
 | `update_space_member` | the member's new role and their former one, and what an admin does | the member as they are |
-| `remove_space_member` | who leaves the space, the user maybe | the member as they are |
+| `remove_space_member` | who leaves the space, the user maybe, and that a member through a linked group stays | the member as they are |
 
 ## Errors
 
@@ -706,7 +709,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `email_in_spam` | the email is in spam, which only `trash_email` and `trash_emails` take it out of; the code of an email refused when several are moved at once |
 | 409 | `contact_exists` | the user's default address book has a contact with one of the emails already, or the one the same call added, changed since: `book_id` and `contact_id` name it, and nothing was added |
 | 409 | `not_a_post` | the item of the feed is a card, which shows what an app did: only posts are edited or deleted |
-| 409 | `member_exists` | some of the people to add are members of the space already, with another role, which `update_space_member` changes: `members` names them, when the contract tells, and nobody was added |
+| 409 | `member_exists` | some of the people to add are direct members of the space already, with another role, which `update_space_member` changes: `members` names those the space lists with another role, when the contract tells, and nobody was added |
+| 409 | `group_member` | the member is one through a linked group, whose role is the group's, which the user changes in Twake Space |
 | 409 | `last_admin` | the change or the removal would leave the space without an admin |
 | 413 | `file_too_large` | the document takes more than the 20 MiB the service reads, or more than it reads once uncompressed |
 | 413 | `contact_too_large` | the contact would take more than the 1 MiB Contacts takes in a card: nothing was written |
