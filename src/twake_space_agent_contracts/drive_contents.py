@@ -96,6 +96,11 @@ def refusal(reason: Reason) -> Problem:
             )
         case "too_long":
             return not_extractable("Reading the document took too long: no text came of it.")
+        case "memory":
+            return not_extractable(
+                "Reading the document took more memory than the service gives it: no text came "
+                "of it."
+            )
 
 
 def document_too_large() -> Problem:

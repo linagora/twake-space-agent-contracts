@@ -1,12 +1,13 @@
 """The text of the user's documents, such as Word documents or PDFs, which the service reads in a
 process of its own, one per document: whatever a document crafted against its parser makes it do,
 such as take all the memory, crash or never end, happens in that process rather than in the
-service, which stops it once it takes too long. The process reads the document from its standard
-input, and writes its text, or why it has none, as JSON
-(python -m twake_space_agent_contracts.documents <kind> <budget> <seconds>)."""
+service, within the memory and the time the process is given. The process reads the document from
+its standard input, and writes its text, or why it has none, as JSON
+(python -m twake_space_agent_contracts.documents <kind> <budget> <seconds> <memory> <processor>)."""
 
 import asyncio
 import json
+import signal
 import sys
 from asyncio.subprocess import DEVNULL, PIPE
 from dataclasses import dataclass
@@ -33,10 +34,11 @@ MOST_COLUMNS = 50
 MOST_PAGES = 200
 """The pages read from a PDF, at most, from the first."""
 
-Reason = Literal["encrypted", "too_large", "unreadable", "no_text", "too_long"]
+Reason = Literal["encrypted", "too_large", "unreadable", "no_text", "too_long", "memory"]
 """Why a document's text cannot be read: it is protected by a password; it holds more than the
 service reads, once uncompressed; it is not the document its type says, or damaged; it holds no
-text, as a PDF of images; or its reading gave no text in the time it has."""
+text, as a PDF of images; its reading gave no text in the time it has; or it took more memory than
+the reading is given."""
 
 _REASONS: dict[str, Reason] = {reason: reason for reason in get_args(Reason)}
 
@@ -48,6 +50,13 @@ READING_SECONDS = 10.0
 LONGEST_SECONDS = 15.0
 """The time a process has to answer, past which the service stops it: the time it reads for, and
 the time to start and to stop, if what it was reading lets it."""
+PROCESSOR_SECONDS = 20
+"""The time a process may run on a processor, past which the kernel stops it, should the service
+not have."""
+MOST_MEMORY = 167_772_160
+"""The address space a process may take, 160 MiB, which no allocation of its goes beyond: some 60
+MiB once started, and the rest for the document and its reading, which takes up to some 80 MiB in
+all for the longest texts. Two processes and the service stay well within the 512 MiB of a pod."""
 ESCAPED_SIZE = 12
 """The bytes JSON takes at most for a character of a text it escapes, as \\ud83d\\ude00 for one
 beyond the first 65,536."""
@@ -92,6 +101,8 @@ class Reader:
             kind,
             str(budget),
             str(READING_SECONDS),
+            str(MOST_MEMORY),
+            str(PROCESSOR_SECONDS),
             stdin=PIPE,
             stdout=PIPE,
             stderr=DEVNULL,
@@ -114,7 +125,10 @@ class Reader:
             if process.returncode is None:
                 process.kill()
                 await process.wait()
-        # A process that crashed, or that the kernel stopped for the memory it took
+        # A process the kernel stopped for the time it ran on a processor
+        if process.returncode == -signal.SIGXCPU:
+            raise Refused("too_long")
+        # A process that crashed
         if process.returncode != 0:
             raise Refused("unreadable")
         return _text(output)
