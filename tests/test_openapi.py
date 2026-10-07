@@ -544,6 +544,40 @@ async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: Async
     assert [schema["additionalProperties"] for schema in schemas.values()] == [False, False]
 
 
+async def test_the_bodies_of_the_batched_mail_moves_are_whole_and_closed(
+    client: AsyncClient,
+) -> None:
+    # The model gets each body as the document writes it, whole, and the gateway checks each call
+    # against it: 1 to 50 email ids and nothing else, but the one mailbox of move_emails
+    document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
+
+    schemas = {
+        name: operations[name]["requestBody"]["content"]["application/json"]["schema"]
+        for name in ("move_emails", "archive_emails", "trash_emails")
+    }
+
+    assert "$ref" not in json.dumps(schemas)
+    assert {name: sorted(schema["properties"]) for name, schema in schemas.items()} == {
+        "move_emails": ["email_ids", "mailbox_id", "mailbox_name"],
+        "archive_emails": ["email_ids"],
+        "trash_emails": ["email_ids"],
+    }
+    assert [schema["additionalProperties"] for schema in schemas.values()] == [False] * 3
+    assert [schema["required"] for schema in schemas.values()] == [["email_ids"]] * 3
+    for schema in schemas.values():
+        ids = schema["properties"]["email_ids"]
+        assert (ids["type"], ids["minItems"], ids["maxItems"]) == ("array", 1, 50)
+        assert ids["items"] == {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,255}$"}
+    # As move_email's: exactly one mailbox, by its id or by its name
+    assert schemas["move_emails"]["oneOf"] == [
+        {"required": ["mailbox_id"]},
+        {"required": ["mailbox_name"]},
+    ]
+
+
 async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(
     client: AsyncClient,
 ) -> None:
