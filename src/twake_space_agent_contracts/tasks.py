@@ -70,6 +70,16 @@ def forbidden_role(board_id: str) -> Problem:
     )
 
 
+def key_prefix_taken(prefix: str) -> Problem:
+    return Problem(
+        status=409,
+        code="key_prefix_taken",
+        title="Key prefix taken",
+        detail=f"Tasks keeps the key prefix {prefix} for another board, such as INBOX for every"
+        " Inbox: nothing was created. Give the board another one.",
+    )
+
+
 def board_archived(board_id: str) -> Problem:
     return Problem(
         status=409,
@@ -400,8 +410,10 @@ class Tasks:
         response = await self._call(
             user, "POST", path, body={"name": name, "keyPrefix": key_prefix}
         )
-        # Tasks checks what the contract cannot, such as a prefix another board took
-        if response.status_code in (400, 409):
+        if response.status_code == 409 and _error_of(response) == "key_prefix_taken":
+            raise key_prefix_taken(key_prefix)
+        # Tasks checks what the contract cannot
+        if response.status_code == 400:
             raise invalid_request(f"Tasks refused POST {path}: {_error_of(response)}.")
         found = self._json(response, "POST", path)
         try:

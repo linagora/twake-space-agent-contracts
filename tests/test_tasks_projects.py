@@ -138,7 +138,6 @@ async def test_a_new_project_comes_with_its_first_board(
         ),
         pytest.param({"name": "Q4 launch", "key_prefix": "LAUNCHQ4ABC"}, id="a prefix over 10"),
         pytest.param({"name": "Q4 launch", "key_prefix": "Q4-"}, id="a prefix with a dash"),
-        pytest.param({"name": "Q4 launch", "key_prefix": "INBOX"}, id="the prefix of the Inbox"),
         pytest.param(
             {"name": "Q4 launch", "key_prefix": "LAUNCH", "members": ["alice@twake.test"]},
             id="a field it does not take",
@@ -153,6 +152,30 @@ async def test_an_invalid_project_is_refused_before_anything_is_created(
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_request"
     assert boundary.tasks.writes == []
+
+
+async def test_the_prefix_of_the_inbox_is_taken_before_anything_is_created(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Tasks keeps INBOX for every Inbox: the owner is not asked about a call it would refuse
+    response = await create(client, name="Q4 launch", key_prefix="INBOX")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "key_prefix_taken"
+    assert boundary.tasks.writes == []
+
+
+async def test_a_prefix_tasks_keeps_for_another_board_is_named_so(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.tasks.kept_prefixes.add("LAUNCH")
+
+    response = await create(client, name="Q4 launch", key_prefix="LAUNCH")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "key_prefix_taken"
+    assert "LAUNCH" in response.json()["detail"]
+    assert boundary.tasks.boards == {}
 
 
 @pytest.mark.parametrize(

@@ -1986,6 +1986,9 @@ class FakeTasks:
         self.unreadable_after_write = False
         """Whether Tasks answers 503 to a read once it took a write, as when it fails right after
         one."""
+        self.kept_prefixes = {"INBOX"}
+        """The key prefixes Tasks keeps for its own boards, such as INBOX for every Inbox, which
+        it refuses for a new board."""
 
     def board(self, name: str, key_prefix: str, *members: TasksMember, **more: Any) -> TasksBoard:
         """Arranges a board of that name, with the members of its project."""
@@ -2065,7 +2068,7 @@ class FakeTasks:
         prefix = body["keyPrefix"]
         if not 1 <= len(name) <= 100 or not re.fullmatch(r"[A-Z][A-Z0-9]{0,9}", str(prefix)):
             return _refused("invalid_request")
-        if prefix == "INBOX":
+        if prefix in self.kept_prefixes:
             return httpx.Response(409, json={"error": "key_prefix_taken"})
         number = len(self.boards)
         board = TasksBoard(
