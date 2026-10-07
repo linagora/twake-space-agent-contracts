@@ -109,12 +109,13 @@ async def test_books_others_share_with_the_owner_are_listed_never_writable(
 
     books = listed(await list_books(client))
 
+    # esn-sabre counts the contacts of the user's own books and of their domain's alone
     assert books[f"{OWN}~{DELEGATED}"] == {
         "book_id": f"{OWN}~{DELEGATED}",
         "kind": "shared",
         "default": False,
         "writable": False,
-        "contact_count": 1,
+        "contact_count": None,
         "untrusted": {"name": "Alice's team", "description": None},
     }
     assert (books[f"{OWN}~{SUBSCRIBED}"]["kind"], books[f"{OWN}~{SUBSCRIBED}"]["writable"]) == (

@@ -566,7 +566,8 @@ class FakeContacts:
 
     def _described(self, book: FakeAddressBook, counted: bool) -> dict[str, Any]:
         """An address book as esn-sabre lists it: its own books and those of a domain share it as
-        their owner, a delegation with its share access, a subscription with none."""
+        their owner and count their contacts, a delegation comes with its share access, a
+        subscription with none."""
         source = book.source
         described: dict[str, Any] = {
             "_links": {"self": {"href": f"/addressbooks/{book.home}/{book.name}.json"}},
@@ -583,7 +584,8 @@ class FakeContacts:
             else None,
             "type": "",
             "state": "",
-            "numberOfContacts": len(book.shown) if counted else None,
+            # Counted by its own books and its domain's alone
+            "numberOfContacts": len(book.cards) if counted and source is None else None,
             "acl": [],
             "dav:group": f"principals/domains/{book.home}" if book.group else None,
         }
