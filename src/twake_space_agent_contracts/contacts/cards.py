@@ -335,13 +335,19 @@ def holds(text: ContactText, words: str) -> bool:
     return any(found in " ".join(value.split()).casefold() for value in written if value)
 
 
+def vcard_escaped(words: str) -> str:
+    """Words as vCard writes them in the text of a card: their commas, semicolons and backslashes
+    escaped."""
+    return re.sub(r"([\\,;])", r"\\\1", words)
+
+
 def search_pattern(words: str) -> str:
     """The regular expression that finds these words, as written, in the vCard text of a card, as
     the search of Contacts reads it: with the escapes vCard writes a comma, a semicolon and a
     backslash with, then each other sign than a letter or a digit escaped by its code, which no
     expression reads otherwise, and which leaves no .json in the URL that esn-sabre would remove.
     """
-    escaped = re.sub(r"([\\,;])", r"\\\1", words)
+    escaped = vcard_escaped(words)
     return "".join(
         f"\\x{ord(character):02x}" if character.isascii() and not character.isalnum() else character
         for character in escaped

@@ -12,6 +12,7 @@ from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.contacts import UNTRUSTED
 from twake_space_agent_contracts.contacts.carddav import (
     CARD,
+    FOLD,
     SEARCHED,
     Book,
     Card,
@@ -26,6 +27,7 @@ from twake_space_agent_contracts.contacts.cards import (
     contact_of,
     fields_of,
     search_pattern,
+    vcard_escaped,
 )
 from twake_space_agent_contracts.contacts.changes import (
     ContactFields,
@@ -52,15 +54,40 @@ def _uid(email: str, fields: dict[str, object]) -> str:
     return str(uuid.uuid5(UID_NAMESPACE, email + "\n" + json.dumps(fields, sort_keys=True)))
 
 
-async def _with_email(contacts: Contacts, user: User, book: Book, emails: list[str]) -> Card | None:
-    """A contact of the book with one of these email addresses, whatever their case."""
-    pattern = "|".join(search_pattern(email) for email in emails)
-    cards, _ = await contacts.search(user, [book], pattern, SEARCHED)
+def _pieces(text: str) -> list[str]:
+    """Pieces of the text, one of which at least a card that holds it holds whole, however
+    esn-sabre folds the line it is on: one more piece than the folds its bytes, as vCard writes
+    them, can cross, each fold breaking one piece at most."""
+    count = min(len(text), len(vcard_escaped(text).encode()) // FOLD + 2)
+    return [
+        text[index * len(text) // count : (index + 1) * len(text) // count]
+        for index in range(count)
+    ]
+
+
+def _holding(cards: list[Card], emails: list[str]) -> Card | None:
+    """The first of these contacts with one of the email addresses, whatever their case."""
     wanted = {email.casefold() for email in emails}
     for card in cards:
         text, _ = fields_of(card.jcard)
         if any(email.address.casefold() in wanted for email in text.emails):
             return card
+    return None
+
+
+async def _with_email(contacts: Contacts, user: User, book: Book, emails: list[str]) -> Card | None:
+    """A contact of the book with one of these email addresses, whatever their case. The search of
+    Contacts reads the vCard text of each card, folded: it is asked for the pieces of each address
+    a fold leaves one of whole, then each contact found is checked on its emails. When it finds
+    more contacts than one search gives, every contact of the book is."""
+    for email in emails:
+        pattern = "|".join(search_pattern(piece) for piece in _pieces(email))
+        cards, complete = await contacts.search(user, [book], pattern, SEARCHED)
+        if not complete:
+            return _holding(await contacts.cards(user, book), emails)
+        found = _holding(cards, emails)
+        if found is not None:
+            return found
     return None
 
 

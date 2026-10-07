@@ -185,6 +185,42 @@ async def test_a_contact_with_an_email_the_address_book_has_already_is_refused(
     assert boundary.contacts.writes == []
 
 
+async def test_an_email_contacts_keeps_across_two_lines_of_a_card_is_found(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Contacts keeps the card in lines of 75 bytes at most, so that the email runs on two
+    long = "jeanne.martin.of.the.regional.sales.department@example.com"
+    boundary.contacts.owners().cards["jm.vcf"] = jcard(
+        "jm", "J. Martin", ["email", {"type": ["INTERNET", "WORK", "pref"]}, "text", long]
+    )
+
+    response = await create(client, given_name="Jeanne", emails=[{"address": long.upper()}])
+
+    assert response.status_code == 409
+    assert response.json()["contact_id"] == contact_id("jm.vcf")
+    assert boundary.contacts.writes == []
+
+
+async def test_an_email_is_found_among_more_contacts_than_one_search_gives(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # People whose addresses hold much of hers, many more than one search of Contacts gives,
+    # before her
+    cards = boundary.contacts.owners().cards
+    for index in range(250):
+        address = f"jeanne.martineau{index}@example.org"
+        cards[f"a{index:03d}.vcf"] = jcard(
+            f"a{index:03d}", f"Jeanne Martineau {index}", ["email", {}, "text", address]
+        )
+    cards["zz.vcf"] = jcard("zz", "Jeanne", ["email", {}, "text", "jeanne.martin@example.com"])
+
+    response = await create(client, **JEANNE)
+
+    assert response.status_code == 409
+    assert response.json()["contact_id"] == contact_id("zz.vcf")
+    assert boundary.contacts.writes == []
+
+
 async def test_an_email_known_outside_the_default_book_is_no_reason_to_refuse(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:

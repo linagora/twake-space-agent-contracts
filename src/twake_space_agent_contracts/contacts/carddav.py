@@ -46,7 +46,10 @@ JCARD = "application/vcard+json"
 SEARCHED = 200
 """The most contacts a search asks Contacts for, all address books together: of those, the
 contracts keep the ones whose text holds the words, as people wrote them, rather than the names
-vCard writes them under."""
+vCard writes them under. The most a page of the cards of a book holds, too."""
+FOLD = 74
+"""How far apart, at least, esn-sabre folds the lines of the vCard text it keeps, which its search
+reads: after the first 75 bytes of a line, then after each 74 bytes of the next ones."""
 LARGEST_CARD = 1024 * 1024
 """The most a card may take as the contracts send it, in bytes: what nginx takes in a request in
 front of esn-sabre."""
@@ -448,6 +451,29 @@ class Contacts:
             if book is not None and contact_id_of(card_name) is not None and is_jcard(data):
                 cards.append(Card(book, card_name, data))
         return cards, len(hits) < limit
+
+    async def cards(self, user: User, book: Book) -> list[Card]:
+        """All the cards of the book, page by page, in jCard as the book keeps them; one the
+        contracts cannot name is left out."""
+        cards: list[Card] = []
+        while True:
+            found = await self._json(
+                user,
+                "GET",
+                f"/dav/addressbooks/{book.home}/{book.name}.json",
+                params={"offset": str(len(cards)), "limit": str(SEARCHED), "sort": "uri"},
+            )
+            try:
+                items = found["_embedded"]["dav:item"]
+                page = [(_href(item), item["data"]) for item in items]
+            except (KeyError, TypeError, AttributeError) as error:
+                raise unavailable("Contacts gave the contacts in an unexpected form.") from error
+            for href, data in page:
+                path = re.fullmatch(r"(?:.*/)?addressbooks/[^/]+/[^/]+/([^/]+)", href)
+                if path is not None and contact_id_of(path[1]) is not None and is_jcard(data):
+                    cards.append(Card(book, path[1], data))
+            if len(page) < SEARCHED:
+                return cards
 
     async def contact(self, user: User, book: Book, contact_id: str) -> Card | None:
         """The contact of that id in the book, in jCard of vCard 4.0; None for an id the

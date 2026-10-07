@@ -352,7 +352,7 @@ def jcard(uid: str, name: str | None, *properties: list[Any], version: str = "4.
 
 def vcard_text(card: list[Any]) -> str:
     """A card in vCard text, as esn-sabre keeps it and its search reads it: a property on each
-    line, its values escaped as vCard escapes them."""
+    line, its values escaped as vCard escapes them, each line folded as sabre/vobject folds it."""
     lines = ["BEGIN:VCARD"]
     for name, parameters, _type, *values in card[1]:
         written = "".join(
@@ -361,7 +361,22 @@ def vcard_text(card: list[Any]) -> str:
         )
         lines.append(f"{name.upper()}{written}:{','.join(map(_vcard_value, values))}")
     lines.append("END:VCARD")
-    return "\r\n".join(lines) + "\r\n"
+    return "\r\n".join(map(_folded, lines)) + "\r\n"
+
+
+def _folded(line: str) -> str:
+    """A line of vCard text folded as sabre/vobject folds it: after its first 75 bytes, then after
+    each 74 bytes that follow the space a folded line starts with, never inside a character."""
+    data, parts, start, size = line.encode(), [], 0, 75
+    while len(data) - start > size:
+        end = start + size
+        # A byte that continues a character goes with it to the next line
+        while data[end] & 0xC0 == 0x80:
+            end -= 1
+        parts.append(data[start:end])
+        start, size = end, 74
+    parts.append(data[start:])
+    return "\r\n ".join(part.decode() for part in parts)
 
 
 def _vcard_value(value: Any) -> str:
@@ -514,6 +529,8 @@ class FakeContacts:
         parts = [unquote(part) for part in path.removeprefix("/dav/addressbooks/").split("/")]
         if len(parts) == 1 and request.method == "GET":
             return self._list(request, parts[0], parse_qs(query), user, domain)
+        if len(parts) == 2 and request.method == "GET":
+            return self._contacts(request, parts[0], parts[1], parse_qs(query), user, domain)
         if len(parts) == 3:
             return self._card(request, parts[0], parts[1], parts[2], user, domain)
         return httpx.Response(404)
@@ -574,6 +591,46 @@ class FakeContacts:
                 "_embedded": {"dav:addressbook": listed},
             },
         )
+
+    def _contacts(
+        self,
+        request: httpx.Request,
+        home: str,
+        name: str,
+        query: dict[str, list[str]],
+        user: str,
+        domain: str | None,
+    ) -> httpx.Response:
+        """The cards of a book, a page of them, by their names, as esn-sabre lists them with an
+        offset and a limit, each in jCard of the vCard version it was written in."""
+        if "application/json" not in _accepted(request):
+            return httpx.Response(406)
+        book = self.books.get((home, name))
+        if book is None:
+            return httpx.Response(404)
+        if not self._reads(book, user, domain):
+            return httpx.Response(403)
+        offset = int(query.get("offset", ["0"])[0])
+        limit = int(query.get("limit", ["0"])[0])
+        cards = sorted(book.shown.items())
+        page = cards[offset : offset + limit] if limit else cards[offset:]
+        listed: dict[str, Any] = {
+            "_links": {"self": {"href": f"/addressbooks/{home}/{name}.json"}},
+            "_embedded": {
+                "dav:item": [
+                    {
+                        "_links": {"self": {"href": f"/addressbooks/{home}/{name}/{card_name}"}},
+                        "etag": _etag(card),
+                        "data": card,
+                    }
+                    for card_name, card in page
+                ]
+            },
+        }
+        if limit and offset + limit < len(cards):
+            following = f"/addressbooks/{home}/{name}.json?offset={offset + limit}&limit={limit}"
+            listed["_links"]["next"] = {"href": following}
+        return httpx.Response(200, json=listed)
 
     def _described(self, book: FakeAddressBook, counted: bool) -> dict[str, Any]:
         """An address book as esn-sabre lists it: its own books and those of a domain share it as
