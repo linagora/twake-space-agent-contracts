@@ -479,7 +479,7 @@ Create, change and delete contacts in the user's own address books, as the user.
 - `delete_contact` deletes the card for good: esn-sabre keeps no trash. It answers the contact as it was, which `create_contact` can add again.
 - A card that the write would make larger than the 1 MiB Contacts takes in a request, such as one holding a large photo, answers `contact_too_large`, before the owner is asked.
 - `create_contact` and `update_contact` are low-risk writes (`x-twake-risk: low`): the user's own contacts, which nobody is told of, and which the owner's consent to write in Contacts covers without a confirmation each time. `delete_contact` is a high-risk write (`x-twake-risk: high`), which the owner confirms call by call: a contact deleted is lost.
-- Each tells what it would do ([Previews](#previews)). `create_contact` tells each field the contact holds, its note whole when it fits, or that the contact is in the address book already; `update_contact`, each field it changes, the name Contacts shows too, as it would be and as it was; `delete_contact`, that the contact goes for good, and each field it holds. The digest covers the contact as the address book holds it, for `create_contact` by its UID, if at all: a call made once it changed answers `changed_since_preview`, and writes nothing.
+- Each tells what it would do ([Previews](#previews)). `create_contact` tells each field the contact holds, its note whole when it fits, or that the contact is in the address book already; `update_contact`, each field it changes, the name Contacts shows too, as it would be and as it was, what it clears and the entries a list loses named as removed; `delete_contact`, that the contact goes for good, and each field it holds. The digest covers the contact as the address book holds it, for `create_contact` by its UID, if at all: a call made once it changed answers `changed_since_preview`, and writes nothing.
 
 ## Previews
 
@@ -504,7 +504,7 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `create_file` | the file's name, type and size, its folder and its content | the folder, where it is |
 | `create_event` | the event's title, when it takes place, in the user's time zone, whether it leaves them free, where it is and what it is for; or that it is in their calendar already | the event, by its UID, the zone it is written in, and the event as the calendar holds it, if at all |
 | `create_contact` | each field of the contact, its note whole when it fits; or that it is in the address book already | the contact, by its UID, as the address book holds it, if at all |
-| `update_contact` | each field it changes, as it would be and as it was | the contact as it is |
+| `update_contact` | each field it changes, as it would be and as it was, what it removes named as such | the contact as it is |
 | `delete_contact` | that the contact goes for good, and each field it holds | the contact as it is |
 
 ## Errors

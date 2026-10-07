@@ -344,6 +344,7 @@ async def test_the_preview_tells_each_change_as_it_would_be_and_as_it_was(
         f"{OWN}~contacts",
         JEAN_ID,
         asking_preview("en"),
+        emails=[{"address": "jean.dupont@example.com", "type": "work"}],
         phones=NEW_PHONE,
         title=None,
         note="Calls on Mondays.",
@@ -351,10 +352,12 @@ async def test_the_preview_tells_each_change_as_it_would_be_and_as_it_was(
     )
 
     summary, _ = preview_of(response)
+    # What the change erases is named as such: what it clears, and the entries a list loses
     assert summary == (
         "Change the contact “Jean Dupont” in your address book:\n"
-        "Phones: “+33 6 98 76 54 32” (mobile), instead of “+33 6 12 34 56 78” (mobile)\n"
-        "Job title: none, instead of “Sales director”\n"
+        "Emails: <jean.dupont@example.com> (work), removing <jean@dupont.example> (home)\n"
+        "Phones: “+33 6 98 76 54 32” (mobile), removing “+33 6 12 34 56 78” (mobile)\n"
+        "Job title: none, removing “Sales director”\n"
         "Birthday: Saturday 17 May 1980, instead of none\n"
         "Note:\n"
         "\tCalls on Mondays.\n"
@@ -365,6 +368,25 @@ async def test_the_preview_tells_each_change_as_it_would_be_and_as_it_was(
     assert boundary.contacts.writes == []
 
 
+async def test_the_preview_of_a_note_cleared_shows_the_note_it_removes(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    jeans(boundary)
+
+    response = await update(
+        client, f"{OWN}~contacts", JEAN_ID, asking_preview("en"), note=None, organization="Acme"
+    )
+
+    summary, _ = preview_of(response)
+    assert summary == (
+        "Change the contact “Jean Dupont” in your address book:\n"
+        "Organization: “Acme”, instead of “Example”\n"
+        "Note: none, removing:\n"
+        "\tMet at the trade fair.\n"
+        "Twake Contacts tells nobody."
+    )
+
+
 async def test_the_preview_speaks_the_owners_language(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
@@ -372,7 +394,13 @@ async def test_the_preview_speaks_the_owners_language(
     family.cards[f"{JEAN_ID}.vcf"] = copy.deepcopy(JEAN)
 
     response = await update(
-        client, f"{OWN}~{FAMILY}", JEAN_ID, asking_preview("fr"), family_name="Durand"
+        client,
+        f"{OWN}~{FAMILY}",
+        JEAN_ID,
+        asking_preview("fr"),
+        family_name="Durand",
+        title=None,
+        note=None,
     )
 
     summary, _ = preview_of(response)
@@ -380,6 +408,9 @@ async def test_the_preview_speaks_the_owners_language(
         "Modifier le contact « Jean Dupont » dans ton carnet d'adresses « Famille » :\n"
         "Nom : « Jean Durand », au lieu de « Jean Dupont »\n"
         "Nom de famille : « Durand », au lieu de « Dupont »\n"
+        "Poste : rien, ce qui retire « Sales director »\n"
+        "Note : rien, ce qui retire :\n"
+        "\tMet at the trade fair.\n"
         "Twake Contacts ne prévient personne."
     )
 

@@ -56,6 +56,7 @@ class _Words:
     field: str
     instead: str
     instead_of_none: str
+    removing: str
     none: str
     note: str
     note_instead: str
@@ -84,11 +85,12 @@ _WORDS: dict[Language, _Words] = {
         field="{label} : {value}",
         instead="{label} : {value}, au lieu de {before}",
         instead_of_none="{label} : {value}, au lieu de rien",
+        removing="{label} : {value}, ce qui retire {removed}",
         none="rien",
         note="Note :",
         note_instead="Au lieu de :",
         note_instead_of_none="Note, au lieu de rien :",
-        note_cleared="Note : rien, au lieu de :",
+        note_cleared="Note : rien, ce qui retire :",
         told="Twake Contacts ne prévient personne.",
         others=("et 1 autre", "et {count} autres"),
         labels={
@@ -127,11 +129,12 @@ _WORDS: dict[Language, _Words] = {
         field="{label}: {value}",
         instead="{label}: {value}, instead of {before}",
         instead_of_none="{label}: {value}, instead of none",
+        removing="{label}: {value}, removing {removed}",
         none="none",
         note="Note:",
         note_instead="Instead of:",
         note_instead_of_none="Note, instead of none:",
-        note_cleared="Note: none, instead of:",
+        note_cleared="Note: none, removing:",
         told="Twake Contacts tells nobody.",
         others=("and 1 other", "and {count} others"),
         labels={
@@ -311,14 +314,38 @@ def added(text: ContactText, language: Language) -> str:
     return _WORDS[language].added.format(contact=contact)
 
 
+def _key(entry: Email | Phone | Address) -> tuple[str | None, ...]:
+    """What tells an entry of a list apart from the others, whatever its type: an email by its
+    address, a phone by its digits, an address by its parts."""
+    if isinstance(entry, Email):
+        return (entry.address.casefold(),)
+    if isinstance(entry, Phone):
+        return ("".join(character for character in entry.number if character.isdigit()),)
+    parts = (entry.street, entry.locality, entry.region, entry.postal_code, entry.country)
+    return tuple(part.casefold() if part else None for part in parts)
+
+
+def _removed(text: ContactText, before: ContactText, field: str) -> ContactText:
+    """The contact as it was, its list of that field holding only the entries the change
+    removes."""
+    kept = {_key(entry) for entry in getattr(text, field)}
+    lost = [entry for entry in getattr(before, field) if _key(entry) not in kept]
+    return before.model_copy(update={field: lost})
+
+
 def _change(text: ContactText, before: ContactText, field: str, language: Language) -> str:
-    """A field a change changes, as it would be and as it was."""
+    """A field a change changes, as it would be and as it was: what it removes named as such."""
     words = _WORDS[language]
     room = CHANGED_LIST if field in LISTS else CHANGED_VALUE
     label = words.labels[field]
     now, then = value(text, field, room, language), value(before, field, room, language)
     if then is None:
         return words.instead_of_none.format(label=label, value=now)
+    removed = (
+        value(_removed(text, before, field), field, room, language) if field in LISTS else then
+    )
+    if removed is not None and (field in LISTS or now is None):
+        return words.removing.format(label=label, value=now or words.none, removed=removed)
     return words.instead.format(label=label, value=now or words.none, before=then)
 
 
