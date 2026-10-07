@@ -83,7 +83,7 @@ def _calendar(context: Context) -> list[APIRouter]:
     calendar = Calendar(context.settings.calendar_url, context.http)
     return [
         freebusy.router(calendar, context.caller),
-        invitations.router(context.pool, calendar, context.caller),
+        invitations.router(calendar, context.caller),
         event_create.router(calendar, context.caller),
     ]
 

@@ -20,6 +20,12 @@ SABRE_TIME = "%Y%m%dT%H%M%SZ"
 RECURRENCE = {"rrule", "rdate", "recurrence-id"}
 # Who wrote the events the contracts add, as iCalendar asks every calendar to say
 PRODID = "-//Linagora//Twake Space agent contracts//EN"
+INVITATION_UID = (
+    "An invitation's UID is that of its calendar event, as the harness gives it with the "
+    "invitation."
+)
+"""Where agents find the UID of an invitation, which accept_invitation takes and read_freebusy
+may leave out."""
 
 
 class BusySlot(BaseModel):

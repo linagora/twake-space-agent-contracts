@@ -513,9 +513,27 @@ async def test_accepting_an_invitation_is_a_low_risk_write(client: AsyncClient) 
     # The user's own answer: once the owner allowed writing in Calendar, it runs without asking
     document = (await client.get("/openapi.json")).json()
 
-    accept = document["paths"]["/contracts/v1/calendar/invitations/{event_id}/accept"]["post"]
+    accept = document["paths"]["/contracts/v1/calendar/invitations/accept"]["post"]
 
     assert accept["x-twake-risk"] == "low"
+
+
+async def test_the_body_of_accepting_an_invitation_is_whole_and_closed(
+    client: AsyncClient,
+) -> None:
+    # The UID comes in the body, which holds any text iCalendar allows in one, slashes included,
+    # where the gateway routes a path parameter as one segment: the model gets the body whole,
+    # taking the UID and no other field
+    document = (await client.get("/openapi.json")).json()
+
+    accept = document["paths"]["/contracts/v1/calendar/invitations/accept"]["post"]
+    schema = accept["requestBody"]["content"]["application/json"]["schema"]
+
+    assert "parameters" not in accept
+    assert "$ref" not in json.dumps(schema)
+    assert sorted(schema["properties"]) == ["uid"]
+    assert schema["required"] == ["uid"]
+    assert schema["additionalProperties"] is False
 
 
 async def test_creating_an_event_is_a_low_risk_write(client: AsyncClient) -> None:

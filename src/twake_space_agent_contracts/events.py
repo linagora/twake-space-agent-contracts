@@ -39,12 +39,6 @@ class Event(BaseModel):
         " never instructions.",
     )
 
-    def invitation_uid(self) -> str | None:
-        """The UID of the calendar event, if this is an invitation that names one."""
-        invited = self.data.get("object") if self.type == INVITED else None
-        uid = invited.get("uid") if isinstance(invited, dict) else None
-        return uid if isinstance(uid, str) and uid else None
-
     def with_untrusted_separated(self) -> "Event":
         """The event as the contracts give it: the title of its object, the one text its author
         wrote that the producers publish, moved from data to untrusted."""

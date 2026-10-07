@@ -104,17 +104,18 @@ Accepts, as the user, an invitation the user received: only their own participat
 
 | Operation | Request | Answer |
 |---|---|---|
-| `accept_invitation` | `POST /contracts/v1/calendar/invitations/{event_id}/accept` | `{"event_id", "uid", "partstat": "ACCEPTED"}` |
+| `accept_invitation` | `POST /contracts/v1/calendar/invitations/accept` `{"uid"}` | `{"uid", "partstat": "ACCEPTED"}` |
 
-- `event_id` is the id of a stored invitation (`com.twake.calendar.event.invited.v1`) sent to the user; its `data.object.uid` names the calendar event.
+- `uid` is the UID of the calendar event the invitation is for, which the harness reads in the invitation esn-sabre publishes on RabbitMQ for each invitee, and gives the model with it. It comes in the body, which holds any text iCalendar allows in a UID, slashes included: the gateway routes a path parameter as one segment. The body takes no other field.
 - The service finds the user's own copy of the event with the JSON `REPORT /dav/calendars/<user id>.json` of esn-sabre on `{"uid"}`, sets `PARTSTAT=ACCEPTED` on the user's `ATTENDEE`, and puts the event back in jCal. esn-sabre then sends the iTIP reply to the organizer.
-- A user whose copy of the event does not invite them, as it does not list them as an attendee or as they organize it, whom Twake Calendar lists among its attendees too, as its chair, is answered `invitation_not_found` exactly as for an unknown invitation, before anything else is checked: the contract never reveals that an event exists, and the organizer's assistant cannot accept the meeting the organizer called.
+- A user who is not invited, as their calendars have no copy of the event, as their copy does not list them as an attendee, or as they organize it, whom Twake Calendar lists among its attendees too, as its chair, is answered `invitation_not_found` exactly as for an unknown UID, before anything else is checked: the contract never reveals that an event exists, and the organizer's assistant cannot accept the meeting the organizer called.
 - Nothing else in the event changes: esn-sabre refuses an attendee who changes what the organizer set.
-- A recurring invitation is refused, since the stored invitation does not say which occurrence it is about: the user answers it in Calendar. So is a cancelled event, which stays in the user's calendar but whose organizer esn-sabre would not tell.
+- A recurring invitation is refused, since a UID names the whole series and not which of its occurrences the invitation is about: the user answers it in Calendar. So is a cancelled event, which stays in the user's calendar but whose organizer esn-sabre would not tell.
 - The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
 - Agents call it only once the user has said yes to this invitation; approval happens in the conversation for now.
 - It is a low-risk write (`x-twake-risk: low`): the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
 - It tells what it would do ([Previews](#previews)): the event's title, when it takes place and who organizes it, from the user's copy of the event, its times in the user's time zone. That zone is the one Calendar gives (`POST /api/configurations`, `core.datetime`), the deployment's when the user set none; without one the IANA database has, the times are the event's own, its zone named beside them. The digest covers the event as the user would accept it, where it is: a call made after the organizer changed it answers `changed_since_preview`.
+- It changed in place in October 2026, before anything used it in production, and stays `calendar.invitation.accept.v1`: it took the id of an invitation stored in the events database, in its path (`POST /contracts/v1/calendar/invitations/{event_id}/accept`), and answered `event_id` too. `invitation_not_in_calendar` and `not_an_attendee`, which it answered then, are `invitation_not_found` now.
 
 ### `calendar.event.create.v1`
 
@@ -523,8 +524,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 403 | `forbidden_role` | the user is a viewer of the board: they only read it |
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
 | 404 | `event_not_found` | no event with this id concerns the user |
-| 404 | `invitation_not_found` | no invitation with this id was sent to the user, or the user's copy of the event does not invite them: it does not list them as an attendee, or they organize it |
-| 404 | `invitation_not_in_calendar` | the user's calendars no longer have the invitation, which may have been deleted |
+| 404 | `invitation_not_found` | no invitation to an event of this UID was sent to the user: their calendars have no copy of the event, their copy does not list them as an attendee, or they organize it |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `chat_account_not_found` | Chat has no account for the user's email |
 | 404 | `room_not_found` | the user has joined no room with this id |

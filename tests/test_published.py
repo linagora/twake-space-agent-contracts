@@ -66,7 +66,9 @@ async def test_calendar_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> 
             "/contracts/v1/calendar/freebusy", params=PERIOD, headers=AS_MMAUDET
         )
         accept = await client.post(
-            "/contracts/v1/calendar/invitations/invitation-a/accept", headers=AS_MMAUDET
+            "/contracts/v1/calendar/invitations/accept",
+            json={"uid": "twake-space-e2e-a"},
+            headers=AS_MMAUDET,
         )
 
     assert not {"read_freebusy", "accept_invitation"} & operation_ids(document)
