@@ -13,7 +13,12 @@ from twake_space_agent_contracts.contacts import (
     BookId,
     ContactId,
 )
-from twake_space_agent_contracts.contacts.carddav import Card, Contacts, contact_not_found
+from twake_space_agent_contracts.contacts.carddav import (
+    SEARCHED,
+    Card,
+    Contacts,
+    contact_not_found,
+)
 from twake_space_agent_contracts.contacts.cards import (
     Contact,
     ContactSummary,
@@ -26,11 +31,6 @@ from twake_space_agent_contracts.contacts.cards import (
 )
 from twake_space_agent_contracts.problems import invalid_request
 from twake_space_agent_contracts.text import seen
-
-FETCHED = 200
-"""The most contacts a search asks Contacts for, all address books together: of those, the ones
-whose text holds the words are kept, as people wrote them, rather than the names vCard writes them
-under."""
 
 
 class ContactList(BaseModel):
@@ -79,7 +79,7 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
             raise invalid_request("q: Give 2 to 100 characters to find.")
         owner = await contacts.owner(user)
         books = await contacts.books(user, owner)
-        cards, complete = await contacts.search(user, books, search_pattern(words), FETCHED)
+        cards, complete = await contacts.search(user, books, search_pattern(words), SEARCHED)
         ranks = {book.book_id: rank for rank, book in enumerate(books)}
         found: dict[tuple[str, int, str], Card] = {}
         for card in cards:

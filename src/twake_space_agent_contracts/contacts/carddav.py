@@ -4,6 +4,7 @@ side service's search across several of them.
 
 The proxy forwards neither If-Match nor If-None-Match: no write of a card can be conditional."""
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -40,6 +41,13 @@ REWRITTEN = ".json"
 """What esn-sabre removes from wherever a URL holds it: a name that holds it cannot be reached."""
 JCARD = "application/vcard+json"
 """What esn-sabre gives a card in, converted to vCard 4.0, and takes one in."""
+SEARCHED = 200
+"""The most contacts a search asks Contacts for, all address books together: of those, the
+contracts keep the ones whose text holds the words, as people wrote them, rather than the names
+vCard writes them under."""
+LARGEST_CARD = 1024 * 1024
+"""The most a card may take as the contracts send it, in bytes: what nginx takes in a request in
+front of esn-sabre."""
 
 # What the user's own home lists: their books, the delegations they accepted (invite status 2),
 # and their subscriptions, with how many contacts each shows
@@ -84,6 +92,16 @@ def contact_not_found(book_id: str, contact_id: str) -> Problem:
         code="contact_not_found",
         title="Contact not found",
         detail=f"Address book {book_id} has no contact {contact_id}.",
+    )
+
+
+def too_large() -> Problem:
+    return Problem(
+        status=413,
+        code="contact_too_large",
+        title="Contact too large",
+        detail=f"The contact would take more than the {LARGEST_CARD // 1024} KiB Contacts takes"
+        " in a card, such as with a large photo: nothing was written.",
     )
 
 
@@ -134,6 +152,17 @@ class Book:
         them write in, never in someone else's shared with them, nor in their domain's, whatever
         rights Contacts gives them there."""
         return self.kind in ("personal", "collected") and self.write_allowed
+
+
+def contact_exists(book: Book, contact_id: str, why: str) -> Problem:
+    return Problem(
+        status=409,
+        code="contact_exists",
+        title="Contact exists",
+        detail=f"{why}: nothing was added. Read it with read_contact, and change it with"
+        " update_contact rather than adding another.",
+        extensions={"book_id": book.book_id, "contact_id": contact_id},
+    )
 
 
 def _text(value: Any) -> str | None:
@@ -228,6 +257,14 @@ def contact_id_of(card_name: str) -> str | None:
     if contact_id == card_name or REWRITTEN in contact_id:
         return None
     return contact_id if re.fullmatch(CONTACT_ID, contact_id) else None
+
+
+def sent(jcard: list[Any]) -> bytes:
+    """A card as the contracts send it, refused when it is larger than Contacts takes."""
+    body = json.dumps(jcard, ensure_ascii=False, separators=(",", ":")).encode()
+    if len(body) > LARGEST_CARD:
+        raise too_large()
+    return body
 
 
 def _card_path(book: Book, contact_id: str) -> str:
@@ -387,6 +424,37 @@ class Contacts:
         if not is_jcard(jcard):
             raise unavailable("Contacts gave the contact in an unexpected form.")
         return Card(book, contact_id, jcard)
+
+    async def put(self, user: User, card: Card) -> None:
+        """Writes the card at its place, a new one or in place of the one there. The proxy
+        forwards no If-Match: the write cannot be conditional, so it follows the read at once."""
+        response = await self._request(
+            user,
+            "PUT",
+            _card_path(card.book, card.contact_id),
+            content=sent(card.jcard),
+            headers={"Content-Type": JCARD},
+            passing=frozenset({413}),
+        )
+        if response.status_code == 413:
+            raise too_large()
+
+    async def add(self, user: User, card: Card) -> Card:
+        """Writes a new card, then reads it back as Contacts keeps it. The side service waits for
+        esn-sabre longer than the service waits for it: a write it did not confirm may have been
+        kept all the same, which the read tells."""
+        unconfirmed: Problem | None = None
+        try:
+            await self.put(user, card)
+        except Problem as problem:
+            # A token Contacts refuses, or a card it does not take, wrote nothing
+            if problem.code != "contacts_unavailable":
+                raise
+            unconfirmed = problem
+        added = await self.card(user, card.book, card.contact_id)
+        if added is None:
+            raise unconfirmed or unavailable("Contacts did not keep the contact it was given.")
+        return added
 
 
 def _items(found: Any) -> list[Any]:

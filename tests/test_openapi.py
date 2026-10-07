@@ -259,6 +259,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "list_address_books": ["contacts.addressbooks.read.v1"],
         "search_contacts": ["contacts.contacts.read.v1"],
         "read_contact": ["contacts.contacts.read.v1"],
+        "create_contact": ["contacts.contact.create.v1"],
     }
 
 
@@ -359,6 +360,7 @@ WRITES_NAMED = {
         "accept_invitation": ("accept", "accepter"),
         "create_event": ("add events", "ajouter des événements"),
     },
+    "contacts": {"create_contact": ("create", "créer")},
 }
 
 
@@ -455,6 +457,7 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "update_task": ("patch", True),
         "complete_task": ("post", True),
         "create_file": ("post", True),
+        "create_contact": ("post", True),
     }
 
 
@@ -504,6 +507,47 @@ async def test_the_body_of_a_new_event_is_whole_and_closed(client: AsyncClient) 
     )
     assert sorted(schema["required"]) == ["end", "start", "title"]
     assert schema["additionalProperties"] is False
+
+
+async def test_creating_a_contact_is_a_low_risk_write(client: AsyncClient) -> None:
+    # A new contact in the user's own address book, which nobody is told of: once the owner allowed
+    # writing in Contacts, it runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    create = document["paths"]["/contracts/v1/contacts/contacts"]["post"]
+
+    assert create["x-twake-risk"] == "low"
+
+
+async def test_the_body_of_a_new_contact_is_whole_and_closed(client: AsyncClient) -> None:
+    # The model gets the body as the document writes it: whole, taking these fields and no other
+    document = (await client.get("/openapi.json")).json()
+
+    create = document["paths"]["/contracts/v1/contacts/contacts"]["post"]
+    schema = create["requestBody"]["content"]["application/json"]["schema"]
+
+    assert "$ref" not in json.dumps(schema)
+    assert sorted(schema["properties"]) == sorted(
+        [
+            "name",
+            "given_name",
+            "family_name",
+            "nickname",
+            "emails",
+            "phones",
+            "organization",
+            "title",
+            "addresses",
+            "note",
+            "birthday",
+        ]
+    )
+    assert schema["additionalProperties"] is False
+    items = [
+        schema["properties"][name]["anyOf"][0]["items"]
+        for name in ("emails", "phones", "addresses")
+    ]
+    assert [item["additionalProperties"] for item in items] == [False, False, False]
 
 
 async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:
