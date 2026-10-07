@@ -71,27 +71,26 @@ def _add(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         preview: Previewing,
     ) -> SpaceFeedItem | JSONResponse:
         detail = await space.space(user, space_id)
-        me = detail.member_named(user.email)
-        mine = me.user_id if me else None
+        me = detail.user_id_of(user.email)
         item = await space.item(user, space_id, item_id)
         if item is None:
             raise feed_item_not_found(space_id, item_id)
-        already = item.reacted(mine, reaction.key)
+        already = item.reacted(me, reaction.key)
         # What the owner allows: the item as they were shown it, and whether the user reacted
         # so already
         digest = digest_of(space_id, _acted_on(item), reaction.key, already)
         if preview.asked:
-            summary = reacting(item, mine, detail.name, reaction.key, preview.language)
+            summary = reacting(item, me, detail.name, reaction.key, preview.language)
             return preview.answer(summary, digest)
         preview.check(digest)
         # Space keeps a reaction once: one the user made already changes nothing
         if already:
-            return feed_item(item, mine)
+            return feed_item(item, me)
         await space.react(user, space_id, item_id, reaction.key)
         now = await space.item(user, space_id, item_id)
         if now is None:
             raise feed_item_not_found(space_id, item_id)
-        return feed_item(now, mine)
+        return feed_item(now, me)
 
     return routes
 
@@ -106,7 +105,7 @@ def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         description=(
             "Takes back a reaction of the user you act for to a card or a post of the feed of a "
             "space they are a member of, by the item_id list_feed_items gives: only their own, "
-            "which mine tells. It answers the item, with its reactions. "
+            "which me tells. It answers the item, with its reactions. "
             f"{UNTRUSTED} Example, to take a thumbs up back: {EXAMPLE_ITEM}, "
             'body={"key": "\N{THUMBS UP SIGN}"}.'
         ),
@@ -124,26 +123,25 @@ def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         preview: Previewing,
     ) -> SpaceFeedItem | JSONResponse:
         detail = await space.space(user, space_id)
-        me = detail.member_named(user.email)
-        mine = me.user_id if me else None
+        me = detail.user_id_of(user.email)
         item = await space.item(user, space_id, item_id)
         if item is None:
             raise feed_item_not_found(space_id, item_id)
-        made = item.reacted(mine, reaction.key)
+        made = item.reacted(me, reaction.key)
         # What the owner allows: the item as they were shown it, and whether the user reacted so
         digest = digest_of(space_id, _acted_on(item), reaction.key, made)
         if preview.asked:
-            summary = unreacting(item, mine, detail.name, reaction.key, preview.language)
+            summary = unreacting(item, me, detail.name, reaction.key, preview.language)
             return preview.answer(summary, digest)
         preview.check(digest)
         # Only the user's own reaction is taken back: there is nothing else to take
         if not made:
-            return feed_item(item, mine)
+            return feed_item(item, me)
         await space.unreact(user, space_id, item_id, reaction.key)
         now = await space.item(user, space_id, item_id)
         if now is None:
             raise feed_item_not_found(space_id, item_id)
-        return feed_item(now, mine)
+        return feed_item(now, me)
 
     return routes
 

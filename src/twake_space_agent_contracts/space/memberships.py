@@ -160,10 +160,10 @@ class NewRole(BaseModel):
 
 def _member(detail: SpaceDetail, user_id: str) -> Member:
     """The member of that user id, if the space has them."""
-    found = next((member for member in detail.members if member.user_id == user_id), None)
-    if found is None:
+    member = detail.member(user_id)
+    if member is None:
         raise member_not_found(detail.space_id, user_id)
-    return found
+    return member
 
 
 def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
@@ -194,8 +194,7 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     ) -> SpaceMember | JSONResponse:
         detail = await _administered(space, user, space_id)
         member = _member(detail, user_id)
-        found = detail.member_named(user.email)
-        me = found.user_id if found else None
+        me = detail.user_id_of(user.email)
         # What the owner allows: the member as they are
         digest = digest_of(space_id, user_id, member.email, member.role)
         if preview.asked:
@@ -237,8 +236,7 @@ def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     ) -> SpaceMember | JSONResponse:
         detail = await _administered(space, user, space_id)
         member = _member(detail, user_id)
-        found = detail.member_named(user.email)
-        removed = space_member(member, found.user_id if found else None)
+        removed = space_member(member, detail.user_id_of(user.email))
         # What the owner allows: the member as they are
         digest = digest_of(space_id, user_id, member.email, member.role)
         if preview.asked:

@@ -20,7 +20,6 @@ from twake_space_agent_contracts.space import (
 )
 from twake_space_agent_contracts.space.backend import (
     FeedItem,
-    SpaceDetail,
     TwakeSpace,
     feed_item_not_found,
     forbidden_role,
@@ -59,12 +58,6 @@ def _post_as_it_is(post: FeedItem) -> dict[str, str | None]:
         "text": post.body,
         "edited_at": edited.isoformat() if edited else None,
     }
-
-
-def audience(detail: SpaceDetail) -> list[str]:
-    """Who reads what is written in the space, by user id: its members, sorted, so that the
-    same members make the same digest."""
-    return sorted(member.user_id for member in detail.members)
 
 
 async def _own_post(
@@ -115,14 +108,13 @@ def _create(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         if detail.role == "viewer":
             raise forbidden_role(space_id)
         # What the owner allows: the space and who reads the post there, its members
-        digest = digest_of(space_id, detail.name, audience(detail))
+        digest = digest_of(space_id, detail.name, detail.audience)
         if preview.asked:
             summary = posting(detail.name, len(detail.members), text, preview.language)
             return preview.answer(summary, digest)
         preview.check(digest)
-        me = detail.member_named(user.email)
         created = await space.post(user, space_id, text)
-        return feed_item(created, me.user_id if me else None)
+        return feed_item(created, detail.user_id_of(user.email))
 
     return routes
 
@@ -156,21 +148,20 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     ) -> SpaceFeedItem | JSONResponse:
         text = _text_of(changed)
         detail = await space.space(user, space_id)
-        me = detail.member_named(user.email)
-        mine = me.user_id if me else None
-        post = await _own_post(space, user, space_id, item_id, mine)
+        me = detail.user_id_of(user.email)
+        post = await _own_post(space, user, space_id, item_id, me)
         # What the owner allows: the post as it is, and who reads it
-        digest = digest_of(space_id, _post_as_it_is(post), audience(detail))
+        digest = digest_of(space_id, _post_as_it_is(post), detail.audience)
         if preview.asked:
             members = len(detail.members)
-            summary = editing(post, mine, detail.name, members, text, preview.language)
+            summary = editing(post, me, detail.name, members, text, preview.language)
             return preview.answer(summary, digest)
         preview.check(digest)
         # Space would mark the post as edited, with nothing changed
         if post.body == text:
-            return feed_item(post, mine)
+            return feed_item(post, me)
         edited = await space.edit(user, space_id, item_id, text)
-        return feed_item(edited, mine)
+        return feed_item(edited, me)
 
     return routes
 
@@ -202,16 +193,15 @@ def _delete(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         preview: Previewing,
     ) -> SpaceFeedItem | JSONResponse:
         detail = await space.space(user, space_id)
-        me = detail.member_named(user.email)
-        mine = me.user_id if me else None
-        post = await _own_post(space, user, space_id, item_id, mine)
+        me = detail.user_id_of(user.email)
+        post = await _own_post(space, user, space_id, item_id, me)
         # What the owner allows: the post as it is
         digest = digest_of(space_id, _post_as_it_is(post))
         if preview.asked:
-            return preview.answer(deleting(post, mine, detail.name, preview.language), digest)
+            return preview.answer(deleting(post, me, detail.name, preview.language), digest)
         preview.check(digest)
         await space.delete(user, space_id, item_id)
-        return feed_item(post, mine)
+        return feed_item(post, me)
 
     return routes
 

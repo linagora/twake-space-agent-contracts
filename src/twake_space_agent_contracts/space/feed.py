@@ -236,13 +236,11 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
             ),
         ] = None,
     ) -> SpaceFeed:
-        detail = await space.space(user, space_id)
-        me = detail.member_named(user.email)
+        me = (await space.space(user, space_id)).user_id_of(user.email)
         items, following = await space.feed(
             user, space_id, category=category, limit=limit, before=before
         )
-        mine = me.user_id if me else None
-        return SpaceFeed(items=[feed_item(item, mine) for item in items], next=following)
+        return SpaceFeed(items=[feed_item(item, me) for item in items], next=following)
 
     @routes.get(
         "/spaces/{space_id}/feed/items/{item_id}",
@@ -257,11 +255,10 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     async def read_feed_item(
         space_id: SpaceId, item_id: ItemId, user: Annotated[User, Depends(caller)]
     ) -> SpaceFeedItem:
-        detail = await space.space(user, space_id)
-        me = detail.member_named(user.email)
+        me = (await space.space(user, space_id)).user_id_of(user.email)
         item = await space.item(user, space_id, item_id)
         if item is None:
             raise feed_item_not_found(space_id, item_id)
-        return feed_item(item, me.user_id if me else None)
+        return feed_item(item, me)
 
     return routes

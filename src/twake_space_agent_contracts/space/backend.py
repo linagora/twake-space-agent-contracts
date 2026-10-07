@@ -201,11 +201,22 @@ class SpaceDetail:
     """What each app linked to the space, by kind: project, matrix_space, mailbox, calendar and
     drive. None while the app still prepares it."""
 
-    def member_named(self, email: str) -> Member | None:
-        """The one member of that email, whatever its case; None if no member has it, or
+    def user_id_of(self, email: str) -> str | None:
+        """The user id of the one member who has that email, whatever its case, whom the contracts
+        take for the user, as Space says of no member that they are; None if no member has it, or
         several do."""
-        found = [member for member in self.members if member.email.lower() == email.lower()]
+        found = [member.user_id for member in self.members if member.email.lower() == email.lower()]
         return found[0] if len(found) == 1 else None
+
+    def member(self, user_id: str) -> Member | None:
+        """The member of that user id; None if the space has none."""
+        return next((member for member in self.members if member.user_id == user_id), None)
+
+    @property
+    def audience(self) -> list[str]:
+        """Who reads what is written in the space, by user id: its members, sorted, so that the
+        same members make the same digest."""
+        return sorted(member.user_id for member in self.members)
 
 
 @dataclass(frozen=True)

@@ -119,8 +119,7 @@ def space_member(member: Member, me: str | None) -> SpaceMember:
 
 def space_of(detail: SpaceDetail, user: User) -> Space:
     """A space as read_space gives it, to the user."""
-    found = detail.member_named(user.email)
-    me = found.user_id if found else None
+    me = detail.user_id_of(user.email)
     linked = detail.resources
     return Space(
         space_id=detail.space_id,
