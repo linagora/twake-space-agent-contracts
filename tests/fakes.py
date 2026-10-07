@@ -503,7 +503,8 @@ class FakeTMail:
     email the user may read, in a mailbox shared with them too. Email/query takes one condition,
     sorts by receivedAt, newest first, and refuses what it does not know. Identity/get, which
     needs the submission capability, gives the addresses the user sends from. Email/set creates
-    emails in the user's own mailboxes only, and refuses what it does not know.
+    emails in the user's own mailboxes only, updates the mailboxes of any email the user may read,
+    as a whole or by patch, destroys none, and refuses what it does not know.
     """
 
     def __init__(self) -> None:
@@ -538,6 +539,8 @@ class FakeTMail:
         self.searches_shared = False
         """Whether Email/query also searches the mailboxes shared with the user without the shares
         capability, which James does not do: what the contracts' own check is for."""
+        self.refused_update: str | None = None
+        """The type of the error Email/set answers each update with, when a test says so."""
         self.sessions = 0
         """How many times the session was read."""
         self.calls: list[MethodCall] = []
@@ -771,12 +774,28 @@ class FakeTMail:
         }
 
     def _set(self, owner: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Email/set, which creates emails only here."""
-        if set(arguments) != {"accountId", "create"}:
+        """Email/set, which creates emails and updates their mailboxes only here: it destroys
+        none."""
+        if not set(arguments) <= {"accountId", "create", "update"}:
             raise MethodError("invalidArguments")
+        created, not_created = self._create(owner, arguments.get("create") or {})
+        updated, not_updated = self._update(owner, arguments.get("update") or {})
+        return {
+            "oldState": "0",
+            "newState": "1",
+            "created": created or None,
+            "notCreated": not_created or None,
+            "updated": updated or None,
+            "notUpdated": not_updated or None,
+        }
+
+    def _create(
+        self, owner: str, creations: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The emails created, and those that were not, by creation id."""
         created: dict[str, Any] = {}
         not_created: dict[str, Any] = {}
-        for creation_id, email in arguments["create"].items():
+        for creation_id, email in creations.items():
             refusal = self.refused_creation or self._creation_refusal(owner, email)
             if refusal is not None:
                 not_created[creation_id] = {"type": refusal}
@@ -808,12 +827,49 @@ class FakeTMail:
                 "threadId": f"thread-{email_id}",
                 "size": len(body.encode()),
             }
-        return {
-            "oldState": "0",
-            "newState": "1",
-            "created": created or None,
-            "notCreated": not_created or None,
-        }
+        return created, not_created
+
+    def _update(
+        self, owner: str, updates: dict[str, Any]
+    ) -> tuple[dict[str, None], dict[str, dict[str, str]]]:
+        """The emails updated, and those that were not, by id: their mailboxes only."""
+        updated: dict[str, None] = {}
+        not_updated: dict[str, dict[str, str]] = {}
+        for email_id, patch in updates.items():
+            email = self.emails.get(email_id)
+            if email is None or not self._readable(email, owner):
+                not_updated[email_id] = {"type": "notFound"}
+            elif self.refused_update is not None:
+                not_updated[email_id] = {"type": self.refused_update}
+            elif (mailbox_ids := self._patched(email["mailboxIds"], patch, owner)) is None:
+                not_updated[email_id] = {"type": "invalidPatch"}
+            else:
+                email["mailboxIds"] = mailbox_ids
+                updated[email_id] = None
+        return updated, not_updated
+
+    def _patched(
+        self, mailbox_ids: dict[str, bool], patch: dict[str, Any], owner: str
+    ) -> dict[str, bool] | None:
+        """The mailboxes of an email once patched, or None for a patch James refuses: of another
+        property, or that leaves the email in no mailbox or in one the user may not read."""
+        patched = dict(mailbox_ids)
+        for path, value in patch.items():
+            mailbox = path.removeprefix("mailboxIds/")
+            if path == "mailboxIds" and isinstance(value, dict):
+                patched = dict(value)
+            elif mailbox != path and value is True:
+                patched[mailbox] = True
+            elif mailbox != path and value is None:
+                patched.pop(mailbox, None)
+            else:
+                return None
+        readable = all(
+            mailbox in self.mailboxes
+            and owner in {self.mailboxes[mailbox].owner, *self.mailboxes[mailbox].shared_with}
+            for mailbox in patched
+        )
+        return patched if patched and readable else None
 
     def _creation_refusal(self, owner: str, email: dict[str, Any]) -> str | None:
         """Why James would not create this email, or None: a property it does not take, a

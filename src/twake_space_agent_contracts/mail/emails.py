@@ -4,11 +4,11 @@ import base64
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import AwareDatetime, BaseModel
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.mail import UNTRUSTED
+from twake_space_agent_contracts.mail import EXAMPLE_ID, UNTRUSTED, EmailId
 from twake_space_agent_contracts.mail.tmail import (
     JMAP_ID,
     Email,
@@ -194,21 +194,11 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
             "address than the one it is from. to and cc give 100 addresses at most, "
             "recipients_truncated telling that there were more. Reading does not mark the email "
             "as read. "
-            f"{UNTRUSTED} Example, for an email that list_emails gave with the id "
-            "0f9c7a50-a2b1-11f0-8de9-0242ac120002: "
-            "email_id=0f9c7a50-a2b1-11f0-8de9-0242ac120002."
+            f"{UNTRUSTED} Example, for an email that list_emails gave with the id {EXAMPLE_ID}: "
+            f"email_id={EXAMPLE_ID}."
         ),
     )
-    async def read_email(
-        email_id: Annotated[
-            str,
-            Path(
-                pattern=JMAP_ID,
-                description="The id of the email, as list_emails or search_emails gives it.",
-            ),
-        ],
-        user: Annotated[User, Depends(caller)],
-    ) -> Email:
+    async def read_email(email_id: EmailId, user: Annotated[User, Depends(caller)]) -> Email:
         return await tmail.email(user, email_id)
 
     return routes

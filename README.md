@@ -214,6 +214,30 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 - `reply_to_differs` tells that the draft answers another address than the sender's. The recipients and the subject come back under `untrusted`, 100 addresses at most per header, `recipients_truncated` telling that the draft has more.
 - It is a low-risk write (`x-twake-risk: low`): nothing leaves the mailbox until the user sends the draft.
 
+### `mail.email.move.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `move_email` | `POST /contracts/v1/mail/emails/{email_id}/move` `{"mailbox_id"}` or `{"mailbox_name"}` | `{"email_id", "mailbox_id", "mailbox_name"}`, the mailbox the email is now in |
+| `archive_email` | `POST /contracts/v1/mail/emails/{email_id}/archive` | the same |
+
+- `move_email` takes the mailbox by `mailbox_id`, its id as `list_mailboxes` gives it, or by `mailbox_name`, its name whatever its case, from 1 to 200 characters: exactly one of them, as the schema of its body says, so that the gateway refuses a body that names none or both. A name that several of the user's mailboxes have is refused (`mailbox_ambiguous`) rather than guessed.
+- `archive_email` takes the mailbox whose role is `archive`: without one, nothing is moved (`mailbox_not_found`), nor with several (`mailbox_ambiguous`).
+- `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam (`mailbox_forbidden`): the first four hold what the user writes and sends, `trash_email` puts emails in the trash, and TMail reports an email moved into spam to the rspamd filter that all users share, which is for `report_spam`, a later high-risk contract.
+- Neither takes an email out of spam (`email_in_spam`): TMail reports an email moved out of spam as ham to that shared filter, which is for `report_not_spam`, a later high-risk contract, not for a move. `trash_email` still can, since a move to the trash reports nothing.
+- `Mailbox/get` and `Email/get` find the user's mailboxes and those the email is in, then `Email/set` patches its `mailboxIds`: the email leaves the user's other mailboxes, while a mailbox of someone else that is shared with the user keeps it.
+- Both are low-risk writes (`x-twake-risk: low`): the email can be moved back.
+
+### `mail.email.trash.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `trash_email` | `POST /contracts/v1/mail/emails/{email_id}/trash` | `{"email_id", "mailbox_id", "mailbox_name"}`, the trash |
+
+- Moves the email to the mailbox whose role is `trash`, from spam too, as `archive_email` does to the archive. It never destroys the email, which `move_email` can move back.
+- Without a trash, nothing is moved (`mailbox_not_found`), nor with several (`trash_ambiguous`): `move_email` moves no email to a trash, so the user keeps a single one in Twake Mail.
+- A low-risk write (`x-twake-risk: low`).
+
 ### Drive, as the user
 
 The Drive contracts act in the user's cozy-stack instance, which accepts only its own tokens. There is no `DRIVE_URL`: the gateway's route for a Drive contract asks the token broker for the user's Drive token, and passes three headers:
@@ -325,7 +349,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `chat_account_not_found` | Chat has no account for the user's email |
 | 404 | `room_not_found` | the user has joined no room with this id |
-| 404 | `mailbox_not_found` | the user has no mailbox of their own with this id, or no Drafts mailbox for a draft |
+| 404 | `mailbox_not_found` | the user has no mailbox of their own with this id or name, none with the role archive or trash, or no Drafts mailbox for a draft |
 | 404 | `email_not_found` | the user has no email with this id in their own mailboxes |
 | 404 | `thread_not_found` | the user has no conversation with this id in their own mailboxes |
 | 404 | `drive_instance_unknown` | no Drive instance of the platform is known for the user: LemonLDAP-NG gives no `workplaceFqdn` for them, or one outside `DRIVE_INSTANCE_DOMAIN` |
@@ -344,6 +368,10 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `name_taken` | a file or folder of that name is already in the folder |
 | 409 | `quota_exceeded` | the user's Drive has no room left for the file |
 | 409 | `owner_not_member` | the task has assignees, and no member of its board, or more than one, has the user's email |
+| 409 | `mailbox_ambiguous` | several of the user's mailboxes have the name given, or the role archive: the user says which one, and `move_email` takes its id |
+| 409 | `trash_ambiguous` | several of the user's mailboxes have the role trash, which no contract chooses among: the user keeps a single one in Twake Mail |
+| 409 | `mailbox_forbidden` | `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam |
+| 409 | `email_in_spam` | the email is in spam, which only `trash_email` takes it out of |
 | 415 | `content_not_extractable` | the file is not text |
 | 429 | `chat_rate_limited` | Chat limits the requests made as the user; `retry_after_ms` says when to try again, when Chat says it |
 | 502 | `calendar_refused` | Calendar refused the user's token |

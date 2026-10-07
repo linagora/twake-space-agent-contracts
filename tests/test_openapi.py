@@ -115,6 +115,9 @@ def refusal(value: Any, schema: dict[str, Any], document: dict[str, Any]) -> str
                 accepted = value < expected
             case "required":
                 accepted = set(expected) <= set(value)
+            case "oneOf":
+                refusals = [refusal(value, branch, document) for branch in expected]
+                accepted = refusals.count(None) == 1
             case "items" | "properties" | "additionalProperties":
                 if found := part_refusal(keyword, value, schema, document):
                     return found
@@ -241,6 +244,9 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "read_task": ["tasks.task.read.v1"],
         "create_reply_draft": ["mail.draft.create.v1"],
         "create_file": ["drive.file.create.v1"],
+        "move_email": ["mail.email.move.v1"],
+        "archive_email": ["mail.email.move.v1"],
+        "trash_email": ["mail.email.trash.v1"],
     }
 
 
@@ -326,6 +332,32 @@ async def test_each_published_application_is_named_in_plain_words(client: AsyncC
     assert problems == []
 
 
+async def test_mail_words_name_each_of_its_writes(client: AsyncClient) -> None:
+    # The harness asks the owner once for all the writes of an application, in its words: they must
+    # name every write of Mail, so that a merge that keeps the words of one contract fails
+    document = (await client.get("/openapi.json")).json()
+    words = document["x-twake-domains"]["mail"]["write"]
+    # What names each write of Mail, in English and in French
+    named = {
+        "create_reply_draft": ("drafts", "brouillons"),
+        "move_email": ("move", "déplacer"),
+        "archive_email": ("archive", "archiver"),
+        "trash_email": ("trash", "corbeille"),
+    }
+
+    writes = {
+        operation["operationId"]
+        for _, method, operation in operations_of(document)
+        if method != "get" and operation["tags"][0].startswith("mail.")
+    }
+
+    assert writes == set(named)
+    unnamed = [
+        name for name, (en, fr) in named.items() if en not in words["en"] or fr not in words["fr"]
+    ]
+    assert unnamed == []
+
+
 async def test_each_write_declares_its_risk(client: AsyncClient) -> None:
     # The harness confirms a write without a risk it knows each time, as a high one
     document = (await client.get("/openapi.json")).json()
@@ -356,6 +388,19 @@ async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:
     create = document["paths"]["/contracts/v1/drive/files"]["post"]
 
     assert create["x-twake-risk"] == "low"
+
+
+async def test_moving_an_email_is_a_low_risk_write(client: AsyncClient) -> None:
+    # The email can be moved back: once the owner allowed writing in Mail, it runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, _, operation in operations_of(document)
+    }
+
+    moves = ("move_email", "archive_email", "trash_email")
+    assert {name: risks.get(name) for name in moves} == dict.fromkeys(moves, "low")
 
 
 async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(
