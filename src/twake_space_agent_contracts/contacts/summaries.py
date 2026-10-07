@@ -212,17 +212,20 @@ def _listed(items: list[str], room: int, language: Language) -> str:
     return ", ".join(shown) + others(len(items) - len(shown))
 
 
+def _entries(text: ContactText, field: str, room: int, language: Language) -> list[str]:
+    """The entries of a list of a contact, its emails, phones or addresses, each within `room`."""
+    if field == "emails":
+        return [_email(email, room, language) for email in text.emails]
+    if field == "phones":
+        return [_phone(phone, room, language) for phone in text.phones]
+    return [_address(address, room, language) for address in text.addresses]
+
+
 def value(text: ContactText, field: str, room: int, language: Language) -> str | None:
     """A field of a contact as a summary shows it, within `room`; None when it holds nothing."""
-    item = min(ITEM, room)
-    if field == "emails":
-        items = [_email(email, item, language) for email in text.emails]
-    elif field == "phones":
-        items = [_phone(phone, item, language) for phone in text.phones]
-    elif field == "addresses":
-        items = [_address(address, item, language) for address in text.addresses]
     if field in LISTS:
-        return _listed(items, room, language) if items else None
+        entries = _entries(text, field, min(ITEM, room), language)
+        return _listed(entries, room, language) if entries else None
     written = getattr(text, field)
     if not written:
         return None
