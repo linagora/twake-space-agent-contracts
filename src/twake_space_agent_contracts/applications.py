@@ -249,8 +249,10 @@ APPLICATIONS = (
         domain="contacts",
         name=Words(en="Twake Contacts", fr="Twake Contacts"),
         read=Words(
-            en="list, search and read your contacts",
-            fr="lister, chercher et lire tes contacts",
+            en="list, search and read your contacts, your organization's directory and the"
+            " address books shared with you",
+            fr="lister, chercher et lire tes contacts, l'annuaire de ton organisation et les"
+            " carnets partagés avec toi",
         ),
         write=Words(
             en="create, change and delete contacts in your own address books",

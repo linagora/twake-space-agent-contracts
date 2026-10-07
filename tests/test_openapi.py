@@ -370,6 +370,33 @@ WRITES_NAMED = {
 }
 
 
+# What the words of an application for reading name beyond the user's own data, in English and in
+# French
+READS_NAMED = {
+    "contacts": [
+        ("your organization's directory", "l'annuaire de ton organisation"),
+        ("the address books shared with you", "les carnets partagés avec toi"),
+    ],
+}
+
+
+@pytest.mark.parametrize("domain", sorted(READS_NAMED))
+async def test_the_words_of_an_application_name_all_its_reads_cover(
+    client: AsyncClient, domain: str
+) -> None:
+    # The harness asks the owner once for all the reads of an application, in its words: those of
+    # Contacts name the directory of the user's organization and the books others share with them,
+    # which its reads cover too
+    document = (await client.get("/openapi.json")).json()
+    words = document["x-twake-domains"][domain]["read"]
+
+    unnamed = [
+        (en, fr) for en, fr in READS_NAMED[domain] if en not in words["en"] or fr not in words["fr"]
+    ]
+
+    assert unnamed == []
+
+
 @pytest.mark.parametrize("domain", sorted(WRITES_NAMED))
 async def test_the_words_of_an_application_name_each_of_its_writes(
     client: AsyncClient, domain: str
