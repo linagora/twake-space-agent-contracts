@@ -115,6 +115,9 @@ def refusal(value: Any, schema: dict[str, Any], document: dict[str, Any]) -> str
                 accepted = value < expected
             case "required":
                 accepted = set(expected) <= set(value)
+            case "oneOf":
+                refusals = [refusal(value, branch, document) for branch in expected]
+                accepted = refusals.count(None) == 1
             case "items" | "properties" | "additionalProperties":
                 if found := part_refusal(keyword, value, schema, document):
                     return found

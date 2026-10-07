@@ -221,7 +221,7 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 | `move_email` | `POST /contracts/v1/mail/emails/{email_id}/move` `{"mailbox_id"}` or `{"mailbox_name"}` | `{"email_id", "mailbox_id", "mailbox_name"}`, the mailbox the email is now in |
 | `archive_email` | `POST /contracts/v1/mail/emails/{email_id}/archive` | the same |
 
-- `move_email` takes the mailbox by `mailbox_id`, its id as `list_mailboxes` gives it, or by `mailbox_name`, its name whatever its case, from 1 to 200 characters, and by only one of them. A name that several of the user's mailboxes have is refused (`mailbox_ambiguous`) rather than guessed.
+- `move_email` takes the mailbox by `mailbox_id`, its id as `list_mailboxes` gives it, or by `mailbox_name`, its name whatever its case, from 1 to 200 characters: exactly one of them, as the schema of its body says, so that the gateway refuses a body that names none or both. A name that several of the user's mailboxes have is refused (`mailbox_ambiguous`) rather than guessed.
 - `archive_email` takes the mailbox whose role is `archive`: without one, nothing is moved (`mailbox_not_found`), nor with several (`mailbox_ambiguous`).
 - `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam (`mailbox_forbidden`): `trash_email` puts it in the trash, and the user moves emails to the others in Twake Mail.
 - Neither takes an email out of spam (`email_in_spam`): that tells TMail the email is not spam, which only the user does. `trash_email` still can.

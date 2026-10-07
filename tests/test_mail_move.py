@@ -14,6 +14,7 @@ from tests.fakes import (
     StoredMailbox,
     email_of,
 )
+from tests.test_openapi import refusal
 
 EMAILS = "/contracts/v1/mail/emails"
 ARCHIVE = "mbx-archive"
@@ -310,18 +311,28 @@ async def test_a_move_tmail_refuses_is_a_bad_gateway(
     assert response.json()["detail"] == "Mail answered forbidden to Email/set."
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        pytest.param({}, id="no mailbox"),
-        pytest.param({"mailbox_id": PROJECTS, "mailbox_name": "Projects"}, id="two mailboxes"),
-        pytest.param({"mailbox_id": "mbx/projects"}, id="a mailbox id that is not one"),
-        pytest.param({"mailbox_name": ""}, id="an empty name"),
-        pytest.param({"mailbox_name": "p" * 201}, id="a name of 201 characters"),
-    ],
-)
+NO_SINGLE_MAILBOX = [
+    pytest.param({}, id="no mailbox"),
+    pytest.param({"mailbox_id": PROJECTS, "mailbox_name": "Projects"}, id="two mailboxes"),
+    pytest.param({"mailbox_id": None}, id="a null id"),
+    pytest.param({"mailbox_name": "Projects", "parent": "INBOX"}, id="a field it does not take"),
+    pytest.param({"mailbox_id": "mbx/projects"}, id="a mailbox id that is not one"),
+    pytest.param({"mailbox_name": ""}, id="an empty name"),
+    pytest.param({"mailbox_name": "p" * 201}, id="a name of 201 characters"),
+]
+"""Bodies of move_email that do not name exactly one mailbox, by a valid id or name."""
+
+
+async def move_schema(client: AsyncClient) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The schema of move_email's body, and the document it is in."""
+    document: dict[str, Any] = (await client.get("/openapi.json")).json()
+    operation = document["paths"][f"{EMAILS}/{{email_id}}/move"]["post"]
+    return operation["requestBody"]["content"]["application/json"]["schema"], document
+
+
+@pytest.mark.parametrize("body", NO_SINGLE_MAILBOX)
 async def test_a_move_that_names_no_single_mailbox_is_an_invalid_request(
-    client: AsyncClient, boundary: FakeBoundary, body: dict[str, str]
+    client: AsyncClient, boundary: FakeBoundary, body: dict[str, Any]
 ) -> None:
     boundary.tmail.deliver("email-1", INBOX)
 
@@ -330,6 +341,23 @@ async def test_a_move_that_names_no_single_mailbox_is_an_invalid_request(
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_request"
     assert boundary.tmail.calls == []
+
+
+@pytest.mark.parametrize("body", NO_SINGLE_MAILBOX)
+async def test_the_gateway_refuses_a_move_that_names_no_single_mailbox(
+    client: AsyncClient, body: dict[str, Any]
+) -> None:
+    # The gateway checks each body against the document, before the service sees it
+    schema, document = await move_schema(client)
+
+    assert refusal(body, schema, document) is not None
+
+
+async def test_the_gateway_takes_a_move_to_one_mailbox(client: AsyncClient) -> None:
+    schema, document = await move_schema(client)
+
+    assert refusal({"mailbox_id": PROJECTS}, schema, document) is None
+    assert refusal({"mailbox_name": "Projects"}, schema, document) is None
 
 
 async def test_a_move_without_a_body_names_the_body(

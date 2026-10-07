@@ -1,15 +1,23 @@
 """mail.email.move.v1: an email of the user moved to another of their own mailboxes, or archived."""
 
-from functools import partial
-from typing import Annotated
+from typing import Annotated, Self
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
+from pydantic_core import PydanticCustomError
 
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.mail import EXAMPLE_ID, EmailId
-from twake_space_agent_contracts.mail.tmail import JMAP_ID, SPAM_ROLES, Moved, Placement, TMail
-from twake_space_agent_contracts.problems import Problem, invalid_request
+from twake_space_agent_contracts.mail.tmail import (
+    JMAP_ID,
+    SPAM_ROLES,
+    Mailbox,
+    Moved,
+    Placement,
+    TMail,
+)
+from twake_space_agent_contracts.problems import Problem
 
 # The special mailboxes an email is not moved to: trash_email puts an email in the trash, and the
 # user moves emails to the others in Twake Mail
@@ -17,20 +25,52 @@ SPECIAL = {"drafts", "sent", "outbox", "templates", "trash", *SPAM_ROLES}
 
 
 class Destination(BaseModel):
-    """One of the user's own mailboxes, by its id or by its name."""
+    """One of the user's own mailboxes: exactly one of mailbox_id and mailbox_name."""
 
-    mailbox_id: Annotated[
-        str | None,
-        Field(pattern=JMAP_ID, description="The id of the mailbox, as list_mailboxes gives it."),
-    ] = None
-    mailbox_name: Annotated[
-        str | None,
-        Field(
-            min_length=1,
-            max_length=200,
-            description="The name of the mailbox, whatever its case, such as Projects.",
-        ),
-    ] = None
+    model_config = ConfigDict(
+        extra="forbid",
+        # So that the gateway, which checks each body against the document, refuses the others too
+        json_schema_extra={"oneOf": [{"required": ["mailbox_id"]}, {"required": ["mailbox_name"]}]},
+    )
+
+    # Left out rather than null: the document does not offer null
+    mailbox_id: (
+        Annotated[
+            str,
+            Field(
+                pattern=JMAP_ID, description="The id of the mailbox, as list_mailboxes gives it."
+            ),
+        ]
+        | SkipJsonSchema[None]
+    ) = None
+    mailbox_name: (
+        Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=200,
+                description="The name of the mailbox, whatever its case, such as Projects.",
+            ),
+        ]
+        | SkipJsonSchema[None]
+    ) = None
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> Self:
+        if (self.mailbox_id is None) == (self.mailbox_name is None):
+            raise PydanticCustomError(
+                "exactly_one", "give exactly one of mailbox_id and mailbox_name"
+            )
+        return self
+
+    def mailbox(self, placement: Placement) -> Mailbox:
+        """The one of the user's own mailboxes it names."""
+        match self.mailbox_id, self.mailbox_name:
+            case str() as mailbox_id, None:
+                return placement.with_id(mailbox_id)
+            case None, str() as name:
+                return placement.named(name)
+        raise AssertionError("A destination names exactly one mailbox, as validated")
 
 
 def out_of_spam(placement: Placement) -> None:
@@ -71,18 +111,9 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         destination: Destination,
         user: Annotated[User, Depends(caller)],
     ) -> Moved:
-        match destination.mailbox_id, destination.mailbox_name:
-            case str() as mailbox_id, None:
-                find = partial(Placement.with_id, mailbox_id=mailbox_id)
-            case None, str() as name:
-                find = partial(Placement.named, name=name)
-            case _:
-                raise invalid_request(
-                    "body: give mailbox_id or mailbox_name, and only one of them."
-                )
         placement = await tmail.placement(user, email_id)
         out_of_spam(placement)
-        mailbox = find(placement)
+        mailbox = destination.mailbox(placement)
         if mailbox.role in SPECIAL:
             how = "trash_email puts emails there" if mailbox.role == "trash" else "the user does"
             raise Problem(
