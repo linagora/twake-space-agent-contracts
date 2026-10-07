@@ -1,8 +1,9 @@
 """Synapse, the homeserver of Twake Chat, called as the user through the gateway's outbound route.
 
-Synapse accepts no token of LemonLDAP-NG. The route adds the token of the contracts' application
-service, which the service never holds, and each call names the user in user_id: their Matrix id,
-from their email, which serves once their account lists that email.
+Synapse accepts no token of LemonLDAP-NG. The route, which admits this service alone by the key it
+presents on each call, adds the token of the contracts' application service, which the service
+never holds, and each call names the user in user_id: their Matrix id, from their email, which
+serves once their account lists that email.
 """
 
 import json
@@ -20,6 +21,8 @@ from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem, invalid_request
 
 CLIENT_API = "/_matrix/client/v3"
+# Where the route takes the key of the service, as APISIX's key-auth does by default
+KEY_HEADER = "apikey"
 # What Synapse accepts as a localpart, as the harness maps its users
 LOCALPART = re.compile(r"[a-z0-9._=\-/+]+")
 NAME, TOPIC, ENCRYPTION = "m.room.name", "m.room.topic", "m.room.encryption"
@@ -250,9 +253,12 @@ class Synapse:
     """Synapse's client API, called as the user through the gateway's outbound route."""
 
     def __init__(
-        self, url: str, server_name: str, mail_domain: str, http: httpx.AsyncClient
+        self, url: str, key: str, server_name: str, mail_domain: str, http: httpx.AsyncClient
     ) -> None:
         self._url = url + CLIENT_API
+        self._key = key
+        """The key the route admits: sent to it alone, in a header, never in an address, which
+        logs show."""
         self._server_name = server_name
         """The homeserver's name, which ends the Matrix id of each of its users."""
         self._mail_domain = mail_domain
@@ -275,7 +281,9 @@ class Synapse:
         refusals give for its status, if any."""
         try:
             response = await self._http.get(
-                self._url + path, params={**(params or {}), "user_id": owner}
+                self._url + path,
+                params={**(params or {}), "user_id": owner},
+                headers={KEY_HEADER: self._key},
             )
         except httpx.HTTPError as error:
             raise _unavailable(f"Chat did not answer GET {path}.") from error

@@ -21,6 +21,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from twake_space_agent_contracts.applications import APPLICATIONS
 from twake_space_agent_contracts.settings import Settings
 
+# The key of the contracts' consumer, which the gateway's outbound route to Synapse admits
+CHAT_GATEWAY_KEY = "key-of-the-contracts-consumer"
 # LemonLDAP-NG as the token broker's tokens come from it: issuer, audiences and signing key
 ISSUER = "https://sign-up.test/"
 AUDIENCE = "twake-space-agents"
@@ -33,6 +35,7 @@ SETTINGS = Settings(
     # Every application the service has, so that the tests reach all their contracts
     published_apps=frozenset(application.domain for application in APPLICATIONS),
     chat_url="https://gateway.test/synapse",
+    chat_gateway_key=CHAT_GATEWAY_KEY,
     # Apart from the mail domain, as a deployment may have them
     matrix_server_name="chat.twake.test",
     matrix_mail_domain="twake.test",
@@ -282,9 +285,9 @@ class FakeRoom:
 
 
 class FakeSynapse:
-    """Synapse's client API behind the gateway's outbound route, which adds the token of the
-    contracts' application service: each request acts as the user that user_id names, who must
-    have an account.
+    """Synapse's client API behind the gateway's outbound route, which admits the contracts'
+    consumer alone, by its key, then adds the token of the contracts' application service: each
+    request acts as the user that user_id names, who must have an account.
 
     Whether the user is in a room is the contracts' own check: the fake answers a room's
     endpoints whoever asks, so that nothing else keeps out a room the user has not joined.
@@ -305,6 +308,11 @@ class FakeSynapse:
         self.requests.append(request)
         if self.down:
             raise httpx.ConnectError("Synapse does not answer", request=request)
+        # As APISIX's key-auth does, in its default header, before anything reaches Synapse
+        key = request.headers.get("apikey")
+        if key != CHAT_GATEWAY_KEY:
+            message = "Missing API key in request" if key is None else "Invalid API key in request"
+            return httpx.Response(401, json={"message": message})
         if self.answer is not None:
             return self.answer
         user = request.url.params.get("user_id", "")
