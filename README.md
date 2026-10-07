@@ -162,7 +162,7 @@ Lists and reads the rooms the user has joined in Twake Chat, without their messa
 The mail contracts go through TMail's JMAP API as the user, with their token:
 
 - The service reads the JMAP session first (`GET /jmap/session`). Its `username` must be the token's subject, whatever its case, or the contract answers `mail_account_mismatch`. Only its primary mail account (`primaryAccounts["urn:ietf:params:jmap:mail"]`) is used, the user's own: never an account delegated to the user. The account is kept 5 minutes at most per token.
-- Everything else is one `POST /jmap` per step, with the method calls the contract needs and no other: `Mailbox/get`, `Email/query`, `Email/get` and `Thread/get`. None uses James's shares capability, so that TMail keeps to the user's own mailboxes, and the service goes to the base URL it is given, never to the URLs of the session.
+- Everything else is one `POST /jmap` per step, with the method calls the contract needs and no other: `Mailbox/get`, `Email/query`, `Email/get`, `Thread/get`, `Identity/get` and `Email/set`, never `EmailSubmission/set`: no contract sends mail. None uses James's shares capability, so that TMail keeps to the user's own mailboxes, and only the request of `Identity/get` uses the submission capability, which that method needs. The service goes to the base URL it is given, never to the URLs of the session.
 - A mailbox, an email or a conversation outside the user's own mailboxes, such as in a mailbox shared with them, answers exactly like an unknown one: 404.
 - Text other people wrote comes back under `untrusted`: names and addresses, subjects, previews and bodies, without what a reader does not see, Unicode's control and format characters, invisible or bidirectional. A subject or a preview stops at 1,000 characters, a name at 200, an address at 320, and a header gives 100 addresses at most. What TMail itself tells, ids, times and flags, stays outside.
 - Reading never marks an email as read.
@@ -199,6 +199,20 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 
 - The last emails of the conversation, `limit` going from 1 to 20 and being 10 by default, each as `read_email` gives it, its text cut after 8 KiB.
 - `Thread/get`, with `Email/get` of the mailboxes of all its emails by back-reference, so that the last emails are taken among those in the user's own mailboxes; then `Email/get` of their text only. A conversation that has none in them is not found.
+
+### `mail.draft.create.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `create_reply_draft` | `POST /contracts/v1/mail/emails/{email_id}/reply-draft` `{"text", "reply_all"}` | 201, `{"email_id", "draft_id", "reply_to_differs", "recipients_truncated", "untrusted": {"to", "cc", "subject"}}` |
+
+- Prepares a reply to one of the user's own emails as a draft in their Drafts mailbox, which the user reviews and sends from Twake Mail: the contract never sends anything.
+- The draft answers the email's Reply-To address, else its sender; with `reply_all`, also those the email went to, in To, and those it copied, in Cc. Never the user, by any address of their identities. As in Twake Mail, a reply to an email the user wrote goes to those they sent it to: the user wrote an email of their Sent mailbox, by role, from one of their addresses, and any other email is one they received, answered at its Reply-To address or else its sender, whatever its From says. The agent never chooses the recipients: the body takes `text` and `reply_all` only.
+- It stays in the conversation: its `In-Reply-To` is the email's `Message-ID`, its `References` those of the email then the email itself, and its subject the email's, with `Re: ` before it unless it says it is a reply already.
+- `text` is plain text of at most 20 KiB in UTF-8 (20480 bytes), and the draft holds nothing else: no quote of the email, no signature, no attachment. It is from the user's address, under the name of its identity, with the `$draft` and `$seen` keywords Twake Mail gives its drafts.
+- `Mailbox/get`, `Email/get` and `Identity/get` in one request, then `Email/set` creates the draft. An email outside the user's own mailboxes answers 404 `email_not_found`, like an unknown one, and a user without a Drafts mailbox gets `mailbox_not_found`.
+- `reply_to_differs` tells that the draft answers another address than the sender's. The recipients and the subject come back under `untrusted`, 100 addresses at most per header, `recipients_truncated` telling that the draft has more.
+- It is a low-risk write (`x-twake-risk: low`): nothing leaves the mailbox until the user sends the draft.
 
 ### Drive, as the user
 
@@ -293,7 +307,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `chat_account_not_found` | Chat has no account for the user's email |
 | 404 | `room_not_found` | the user has joined no room with this id |
-| 404 | `mailbox_not_found` | the user has no mailbox of their own with this id |
+| 404 | `mailbox_not_found` | the user has no mailbox of their own with this id, or no Drafts mailbox for a draft |
 | 404 | `email_not_found` | the user has no email with this id in their own mailboxes |
 | 404 | `thread_not_found` | the user has no conversation with this id in their own mailboxes |
 | 404 | `drive_instance_unknown` | no Drive instance of the platform is known for the user: LemonLDAP-NG gives no `workplaceFqdn` for them, or one outside `DRIVE_INSTANCE_DOMAIN` |
