@@ -10,7 +10,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.previews import Previewing, digest_of
+from twake_space_agent_contracts.previews import (
+    Previewing,
+    digest_of,
+    longest_shown_whole,
+    shown_whole,
+)
 from twake_space_agent_contracts.problems import invalid_request
 from twake_space_agent_contracts.space import (
     EXAMPLE_ITEM,
@@ -28,21 +33,47 @@ from twake_space_agent_contracts.space.backend import (
     not_author,
 )
 from twake_space_agent_contracts.space.feed import LONGEST_TEXT, SpaceFeedItem, feed_item
-from twake_space_agent_contracts.space.summaries import deleting, editing, posting
+from twake_space_agent_contracts.space.summaries import (
+    deleting,
+    editing,
+    editing_room,
+    posting,
+    posting_room,
+)
 from twake_space_agent_contracts.text import UNSEEN
 
+UNSEEN_REFUSED = (
+    "without control or format characters, such as bidirectional marks, but line breaks and tabs"
+)
 
-class PostText(BaseModel):
-    """The text of a post, which every member of the space reads."""
+
+class NewPost(BaseModel):
+    """The text of a new post, which every member of the space reads."""
 
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(
         min_length=1,
         max_length=LONGEST_TEXT,
-        description=f"Plain text, on several lines if need be, {LONGEST_TEXT} characters at most,"
-        " without control or format characters, such as bidirectional marks, but line breaks and"
-        " tabs.",
+        description="Plain text, on several lines if need be, no longer than its preview shows"
+        f" whole, which the owner reads before they confirm it: {LONGEST_TEXT:,} characters of"
+        " plain text, as Space takes, fewer of accented letters, of Asian scripts or of emoji,"
+        f" down to some 1,500 emoji; {UNSEEN_REFUSED}.",
+    )
+
+
+class PostChange(BaseModel):
+    """The new text of a post, which every member of the space reads."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(
+        min_length=1,
+        max_length=LONGEST_TEXT,
+        description="Plain text, on several lines if need be, no longer than its preview shows"
+        f" whole beside the former one: {LONGEST_TEXT:,} characters of plain text, as Space"
+        " takes, fewer of accented letters, of Asian scripts or of emoji, down to some 1,350"
+        f" emoji; {UNSEEN_REFUSED}.",
     )
 
 
@@ -52,7 +83,7 @@ def _named(character: str) -> str:
     return f"U+{ord(character):04X}" + (f" {name}" if name else "")
 
 
-def _text_of(post: PostText) -> str:
+def _text_of(post: NewPost | PostChange) -> str:
     """The text as Space keeps it, without the blanks around it, and as its preview shows it: a
     control or format character, which the preview leaves out, is refused rather than posted for
     members to read."""
@@ -67,6 +98,17 @@ def _text_of(post: PostText) -> str:
             " but line breaks and tabs."
         )
     return text
+
+
+def _fits(what: str, text: str, room: int) -> None:
+    """Refuses a text longer than its preview shows whole, in `room` of the summary: members would
+    read what its owner did not."""
+    if not shown_whole(text, room):
+        longest = longest_shown_whole(text, room)
+        raise invalid_request(
+            f"text: {what} is longer than its preview shows whole, which its owner reads before"
+            f" they confirm it: keep it to {longest:,} characters like these."
+        )
 
 
 def _post_as_it_is(post: FeedItem) -> dict[str, str | None]:
@@ -105,8 +147,11 @@ def _create(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         summary="Post in the feed of one of the user's spaces in Twake Space",
         description=(
             "Posts a text, as the user you act for, in the feed of a space where they are an "
-            "editor or an admin: every member of the space sees it in its feed. Call it only once "
-            "the user asked to post this very text; they confirm each call. Each call posts "
+            "editor or an admin: every member of the space sees it in its feed. The text is no "
+            "longer than its preview shows whole, which the owner reads before they confirm it: "
+            "4,000 characters of plain text, fewer of accented letters, of Asian scripts or of "
+            "emoji. Call it only once the user asked to post this very text; they confirm each "
+            "call. Each call posts "
             "anew: after an error, read the feed before calling again. It answers the post, as "
             f"read_feed_item gives it. {UNTRUSTED} Example, to tell the members a document is "
             f'ready: {EXAMPLE_SPACE}, body={{"text": "The roadmap is ready for review."}}.'
@@ -118,7 +163,7 @@ def _create(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     )
     async def create_feed_post(
         space_id: SpaceId,
-        new: PostText,
+        new: NewPost,
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
     ) -> SpaceFeedItem | JSONResponse:
@@ -126,6 +171,8 @@ def _create(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         detail = await space.space(user, space_id)
         if detail.role == "viewer":
             raise forbidden_role(space_id)
+        # The owner confirms a post once they read it whole, whatever their language
+        _fits("The post", text, posting_room(detail.name, len(detail.members)))
         # What the owner allows: the space and who reads the post there, its members
         digest = digest_of(space_id, detail.name, detail.audience)
         if preview.asked:
@@ -148,7 +195,9 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         description=(
             "Replaces the text of a post the user you act for wrote in the feed of one of their "
             "spaces, by the item_id list_feed_items gives, where by.you tells their own: every "
-            "member of the space sees the new text, marked as edited. Call it only once the user "
+            "member of the space sees the new text, marked as edited. The new text is no longer "
+            "than its preview shows whole, beside the former one: 4,000 characters of plain text, "
+            "fewer of accented letters, of Asian scripts or of emoji. Call it only once the user "
             "asked to change this very post; they confirm each call. It answers the post, as "
             f"read_feed_item gives it. {UNTRUSTED} Example, to fix a date: {EXAMPLE_ITEM}, "
             'body={"text": "The roadmap is ready for review by Monday."}.'
@@ -161,7 +210,7 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     async def update_feed_post(
         space_id: SpaceId,
         item_id: ItemId,
-        changed: PostText,
+        changed: PostChange,
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
     ) -> SpaceFeedItem | JSONResponse:
@@ -169,6 +218,9 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         detail = await space.space(user, space_id)
         me = detail.user_id_of(user.email)
         post = await _own_post(space, user, space_id, item_id, me)
+        # The owner confirms a new text once they read it whole, whatever their language
+        if post.body != text:
+            _fits("The new text", text, editing_room(post, me, detail.name, len(detail.members)))
         # What the owner allows: the post as it is, and who reads it
         digest = digest_of(space_id, _post_as_it_is(post), detail.audience)
         if preview.asked:

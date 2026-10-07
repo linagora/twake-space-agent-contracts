@@ -3,6 +3,7 @@ of one of their spaces, which every member sees, and edits and deletes their own
 
 from typing import Any
 
+import pytest
 from httpx import AsyncClient, Response
 
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
@@ -384,23 +385,59 @@ async def test_a_post_changed_since_the_preview_is_not_deleted(
     assert boundary.space.posts == {}
 
 
-async def test_the_preview_of_the_longest_posts_stays_within_what_the_harness_shows(
+@pytest.mark.parametrize(
+    ("character", "most"),
+    [
+        pytest.param("\N{LATIN SMALL LETTER E WITH ACUTE}", range(3_000, 3_100), id="accented"),
+        pytest.param("\N{GRINNING FACE}", range(1_500, 1_550), id="emoji"),
+        pytest.param("\N{CJK UNIFIED IDEOGRAPH-6F22}", range(2_000, 2_050), id="CJK"),
+    ],
+)
+async def test_a_post_is_no_longer_than_its_preview_shows_whole(
+    client: AsyncClient, boundary: FakeBoundary, character: str, most: range
+) -> None:
+    # The owner confirms a post they read whole: Space takes 4,000 characters, of which the
+    # preview shows fewer, the fewer the more bytes each takes
+    room = design(boundary)
+
+    async def shown_whole(count: int) -> bool:
+        """Whether the preview shows a post of that many characters whole, or refuses it."""
+        text = character * count
+        response = await post(client, room, {"text": text}, asking_preview("fr"))
+        if response.status_code == 400:
+            assert response.json()["code"] == "invalid_request"
+            return False
+        summary, _ = preview_of(response)
+        assert summary.endswith(f"\t{text}")
+        return True
+
+    # The longest post taken, between one character and the 4,000 Space takes
+    taken, refused = 1, 4_000
+    while refused - taken > 1:
+        middle = (taken + refused) // 2
+        if await shown_whole(middle):
+            taken = middle
+        else:
+            refused = middle
+    response = await post(client, room, {"text": character * refused})
+
+    assert taken in most
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
+    assert f"keep it to {taken:,} characters" in response.json()["detail"]
+    assert boundary.space.writes == []
+
+
+async def test_a_post_of_plain_text_takes_the_4000_characters_space_takes(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
-    # Characters of four bytes, as many as Space takes: the summary shows the beginning of each
-    # text and says how much it leaves out
     room = design(boundary)
-    longest = "\N{GRINNING FACE}" * 4000
-    written = boundary.space.post(room, MMAUDET, longest, time="2026-10-06T08:30:00.000Z")
 
-    posted = await post(client, room, {"text": longest}, asking_preview("en"))
-    edited = await edit(
-        client, written, {"text": "\N{THUMBS UP SIGN}" * 4000}, asking_preview("en")
-    )
+    longest = await post(client, room, {"text": "c" * 4_000}, asking_preview("fr"))
+    longer = await post(client, room, {"text": "c" * 4_001}, asking_preview("fr"))
 
-    for response in (posted, edited):
-        summary, _ = preview_of(response)
-        assert "more characters are not shown)" in summary
+    assert preview_of(longest)[0].endswith("\t" + "c" * 4_000)
+    assert (longer.status_code, longer.json()["code"]) == (400, "invalid_request")
 
 
 async def test_a_text_holding_a_control_or_format_character_is_refused(
@@ -420,3 +457,62 @@ async def test_a_text_holding_a_control_or_format_character_is_refused(
         assert response.json()["code"] == "invalid_request"
         assert "U+202E RIGHT-TO-LEFT OVERRIDE" in response.json()["detail"]
     assert boundary.space.writes == []
+
+
+@pytest.mark.parametrize(
+    ("character", "most"),
+    [
+        pytest.param("\N{LATIN SMALL LETTER E WITH ACUTE}", range(2_700, 2_800), id="accented"),
+        pytest.param("\N{GRINNING FACE}", range(1_350, 1_400), id="emoji"),
+        pytest.param("\N{CJK UNIFIED IDEOGRAPH-6F22}", range(1_800, 1_870), id="CJK"),
+    ],
+)
+async def test_the_new_text_of_a_post_is_no_longer_than_its_preview_shows_whole(
+    client: AsyncClient, boundary: FakeBoundary, character: str, most: range
+) -> None:
+    # The preview shows the new text whole, which members will read, and shortens the former one
+    written = boundary.space.post(
+        design(boundary), MMAUDET, "o" * 4_000, time="2026-10-06T08:30:00.000Z"
+    )
+
+    async def shown_whole(count: int) -> bool:
+        """Whether the preview shows a new text of that many characters whole, or refuses it."""
+        new = character * count
+        response = await edit(client, written, {"text": new}, asking_preview("fr"))
+        if response.status_code == 400:
+            assert response.json()["code"] == "invalid_request"
+            return False
+        summary, _ = preview_of(response)
+        assert f"\t{new}\nAu lieu de :\n\t" in summary
+        assert "(coupé ici" in summary
+        return True
+
+    taken, refused = 1, 4_000
+    while refused - taken > 1:
+        middle = (taken + refused) // 2
+        if await shown_whole(middle):
+            taken = middle
+        else:
+            refused = middle
+    response = await edit(client, written, {"text": character * refused})
+
+    assert taken in most
+    assert response.status_code == 400
+    assert f"keep it to {taken:,} characters" in response.json()["detail"]
+    assert boundary.space.writes == []
+
+
+async def test_the_preview_of_a_change_shortens_the_former_text_not_the_new(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    written = boundary.space.post(
+        design(boundary), MMAUDET, "o" * 4_000, time="2026-10-06T08:30:00.000Z"
+    )
+
+    response = await edit(client, written, {"text": "n" * 4_000}, asking_preview("en"))
+
+    summary, _ = preview_of(response)
+    new, former = summary.split("\nInstead of:\n")
+    assert new.endswith("\t" + "n" * 4_000)
+    assert former.startswith("\too")
+    assert former.endswith("more characters are not shown)")

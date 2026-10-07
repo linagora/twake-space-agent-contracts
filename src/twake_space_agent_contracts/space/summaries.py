@@ -1,7 +1,7 @@
 """What the writes of Twake Space tell the owner they would do, in their language."""
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 
 from twake_space_agent_contracts.previews import (
     BUDGET,
@@ -14,6 +14,10 @@ from twake_space_agent_contracts.previews import (
     shown_size,
 )
 from twake_space_agent_contracts.space.backend import FeedItem, Member, Person
+
+FORMER = 1_000
+"""What the preview of a change keeps at least of its summary for the former text of the post: its
+beginning, and the line that says how much of it is left out."""
 
 Form = Literal["to", "on", "the"]
 """How a summary names an item: as what a reaction goes to, what it is taken back on, or as
@@ -202,32 +206,69 @@ def seen_by(count: int, language: Language) -> str:
     return one if count == 1 else many.format(count=count)
 
 
-def posting(space: str | None, members: int, text: str, language: Language) -> str:
-    """What posting does, as the owner reads it: where the post goes, how many people see it,
-    and its text, whole when it fits."""
+def _posting_head(space: str | None, members: int, language: Language) -> str:
+    """The first line of the preview of a post, before its text."""
     words = _WORDS[language]
     head = words.post.format(space=space_named(space, language), seen=seen_by(members, language))
-    return _with_text(head, text, language)
+    return head + (" :" if language == "fr" else ":")
+
+
+def posting_room(space: str | None, members: int) -> int:
+    """What the preview of a new post leaves of its summary for the text, in whichever of its
+    languages leaves less: the text a post takes, which the owner reads whole."""
+    return min(
+        BUDGET - shown_size(_posting_head(space, members, language) + "\n")
+        for language in get_args(Language)
+    )
+
+
+def posting(space: str | None, members: int, text: str, language: Language) -> str:
+    """What posting does, as the owner reads it: where the post goes, how many people see it,
+    and its text, whole."""
+    head = _posting_head(space, members, language)
+    return head + "\n" + excerpt(text, posting_room(space, members), language)
 
 
 def _capitalized(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+def _editing_around(
+    item: FeedItem, me: str | None, space: str | None, members: int, language: Language
+) -> tuple[str, str]:
+    """What the preview of a change tells before the new text, and between it and the former."""
+    words = _WORDS[language]
+    named = item_named(item, me, "the", language)
+    seen = seen_by(members, language)
+    head = words.edit.format(item=named, space=space_named(space, language), seen=seen)
+    return head + "\n", "\n" + words.instead + "\n"
+
+
+def editing_room(item: FeedItem, me: str | None, space: str | None, members: int) -> int:
+    """What the preview of a change leaves of its summary for the new text, in whichever of its
+    languages leaves less, FORMER kept for the former text: the new text a change takes, which
+    the owner reads whole."""
+    return min(
+        BUDGET - shown_size(head + middle) - FORMER
+        for head, middle in (
+            _editing_around(item, me, space, members, language) for language in get_args(Language)
+        )
+    )
+
+
 def editing(
     item: FeedItem, me: str | None, space: str | None, members: int, text: str, language: Language
 ) -> str:
-    """What editing a post does, as the owner reads it: its new text and its former one, each
-    whole when they fit, or that it says so already."""
+    """What editing a post does, as the owner reads it: its new text, whole, and its former one,
+    shortened to what the rest of the summary leaves, or that it says so already."""
     words = _WORDS[language]
-    named = item_named(item, me, "the", language)
-    space_name = space_named(space, language)
     if item.body == text:
-        return words.unedited.format(item=_capitalized(named), space=space_name)
-    head = words.edit.format(item=named, space=space_name, seen=seen_by(members, language)) + "\n"
-    middle = "\n" + words.instead + "\n"
-    room = (BUDGET - shown_size(head + middle)) // 2
-    return head + excerpt(text, room, language) + middle + excerpt(item.body or "", room, language)
+        named = _capitalized(item_named(item, me, "the", language))
+        return words.unedited.format(item=named, space=space_named(space, language))
+    head, middle = _editing_around(item, me, space, members, language)
+    new = excerpt(text, editing_room(item, me, space, members), language)
+    former = excerpt(item.body or "", BUDGET - shown_size(head + new + middle), language)
+    return head + new + middle + former
 
 
 def deleting(item: FeedItem, me: str | None, space: str | None, language: Language) -> str:
