@@ -1,6 +1,7 @@
 """Twake Tasks (0.1.1), called as the user with their own token: Tasks acts for the uuid of the
 token's user in their org_id, and shows them the boards of the projects they are a member of."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Literal
@@ -52,7 +53,10 @@ class TaskSummary(BaseModel):
     due_zone: str | None
     deadline: date | None
     assignees: list[str] = Field(description="The emails of the members it is assigned to.")
-    assigned_to_me: bool
+    assigned_to_me: bool | None = Field(
+        description="Whether it is assigned to the user; null in a search for a task with "
+        "assignees, since Tasks does not say which of them is the user: read_task tells."
+    )
     untrusted: TaskText
 
 
@@ -61,9 +65,12 @@ class TaskList(BaseModel):
     truncated: bool = Field(description="Whether more tasks are left out than the list holds.")
 
 
-def task_summary(item: Any, *, board_id: str, board_name: str, email: str) -> TaskSummary:
-    """A task as Tasks gives it, for the user of that email. Raises KeyError, TypeError or
-    ValueError for any other form."""
+# Whether a task is the user's, from what a list of Tasks gives of it; None when it cannot tell
+Whose = Callable[[Any], bool | None]
+
+
+def task_summary(item: Any, *, board_id: str, board_name: str, mine: bool | None) -> TaskSummary:
+    """A task as Tasks gives it. Raises KeyError, TypeError or ValueError for any other form."""
     assignees = [str(assignee["email"]) for assignee in item["assignees"]]
     return TaskSummary(
         board_id=board_id,
@@ -77,8 +84,7 @@ def task_summary(item: Any, *, board_id: str, board_name: str, email: str) -> Ta
         due_zone=item["dueZone"],
         deadline=item["deadline"],
         assignees=assignees,
-        # Members are known by the email they joined with: an alias of the user's does not match
-        assigned_to_me=any(assignee.lower() == email for assignee in assignees),
+        assigned_to_me=mine,
         untrusted=TaskText(
             title=item["title"],
             board_name=board_name,
@@ -98,6 +104,9 @@ class BoardTask:
     """A task, with what its board tells of it besides."""
 
     summary: TaskSummary
+    """Its summary, which does not say whether it is the user's."""
+    assignee_ids: frozenset[str]
+    """The user ids of the members it is assigned to."""
     section: Section | None
     recurring: bool
     comment_count: int
@@ -110,23 +119,27 @@ class BoardContent:
 
     board_id: str
     name: str
-    member_emails: list[str]
-    """The emails the members of its project joined with, lowercased."""
+    members: list[tuple[str, str]]
+    """The members of its project: their user id, and the email they joined with, lowercased."""
     sections: dict[str, Section]
     tasks: dict[str, Any]
     """Its tasks as Tasks gives them, by id."""
 
-    def task(self, task_id: str, email: str) -> BoardTask | None:
-        """The task of that id, for the user of that email; None if the board shows no such
-        task."""
+    def member_named(self, email: str) -> str | None:
+        """The user id of the one member who joined with that email; None if no member did, or
+        several did."""
+        found = [user_id for user_id, joined in self.members if joined == email]
+        return found[0] if len(found) == 1 else None
+
+    def task(self, task_id: str) -> BoardTask | None:
+        """The task of that id; None if the board shows no such task."""
         item = self.tasks.get(task_id)
         if item is None:
             return None
         try:
             return BoardTask(
-                summary=task_summary(
-                    item, board_id=self.board_id, board_name=self.name, email=email
-                ),
+                summary=task_summary(item, board_id=self.board_id, board_name=self.name, mine=None),
+                assignee_ids=frozenset(str(assignee["userId"]) for assignee in item["assignees"]),
                 section=self.sections.get(item["sectionId"]),
                 recurring=item["recurrence"] is not None,
                 comment_count=int(item["commentCount"]),
@@ -186,11 +199,11 @@ class Tasks:
         except ValueError as error:
             raise _unavailable(f"Tasks did not answer GET {path}.") from error
 
-    def _tasks(self, user: User, found: Any) -> list[TaskSummary]:
+    def _tasks(self, found: Any, whose: Whose) -> list[TaskSummary]:
         try:
             return [
                 task_summary(
-                    task, board_id=task["boardId"], board_name=task["boardName"], email=user.email
+                    task, board_id=task["boardId"], board_name=task["boardName"], mine=whose(task)
                 )
                 for task in found["tasks"]
             ]
@@ -207,7 +220,8 @@ class Tasks:
             {"zone": zone, "days": days},
             invalid=invalid_request(f"zone: Tasks does not know the time zone {zone}."),
         )
-        tasks = self._tasks(user, found)
+        # The user's own: assigned to them, the only assignee the agenda shows, or to nobody
+        tasks = self._tasks(found, lambda task: bool(task["assignees"]))
         try:
             return date.fromisoformat(found["today"]), tasks
         except (KeyError, TypeError, ValueError) as error:
@@ -215,12 +229,14 @@ class Tasks:
 
     async def assigned(self, user: User) -> list[TaskSummary]:
         """The open tasks assigned to the user, dated ones first."""
-        return self._tasks(user, await self._get(user, "/api/my-tasks"))
+        return self._tasks(await self._get(user, "/api/my-tasks"), lambda task: True)
 
     async def search(self, user: User, words: str) -> list[TaskSummary]:
         """At most SEARCH_LIMIT tasks whose key starts with the words, or whose title or
         description holds them, closed ones included."""
-        return self._tasks(user, await self._get(user, "/api/search", {"q": words}))
+        found = await self._get(user, "/api/search", {"q": words})
+        # Anyone's tasks, among whose assignees Tasks does not say which is the user
+        return self._tasks(found, lambda task: None if task["assignees"] else False)
 
     async def board(self, user: User, board_id: str) -> BoardContent | None:
         """The board, if the user is a member of its project: Tasks answers for any other as
@@ -232,7 +248,10 @@ class Tasks:
             return BoardContent(
                 board_id=str(found["id"]),
                 name=str(found["name"]),
-                member_emails=[str(member["email"]).lower() for member in found["members"]],
+                members=[
+                    (str(member["userId"]), str(member["email"]).lower())
+                    for member in found["members"]
+                ],
                 sections={
                     str(section["id"]): Section(str(section["name"]), str(section["category"]))
                     for section in found["sections"]

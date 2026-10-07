@@ -67,6 +67,22 @@ async def test_a_key_finds_its_task(client: AsyncClient, boundary: FakeBoundary)
     assert [task["untrusted"]["title"] for task in answer["tasks"]] == ["Fix the login page"]
 
 
+async def test_a_search_tells_only_that_a_task_without_assignees_is_not_the_users(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Tasks does not say who the user is among the assignees of the boards it searches
+    website = boundary.tasks.board("Website", "WEB", MMAUDET, ALICE)
+    boundary.tasks.task(website, "Write the release notes", assignees=[MMAUDET])
+    boundary.tasks.task(website, "Plan the release party")
+
+    answer = await search(client, q="release")
+
+    assert [(task["key"], task["assigned_to_me"]) for task in answer["tasks"]] == [
+        ("WEB-1", None),
+        ("WEB-2", False),
+    ]
+
+
 @pytest.mark.parametrize(
     ("matching", "limit", "found", "truncated"),
     [

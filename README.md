@@ -268,10 +268,11 @@ Reads the user's tasks, on the boards of the projects they are a member of.
 - `due=all`, the default, lists the open tasks assigned to the user (`GET /api/my-tasks`). `overdue`, `today` and `upcoming` read their agenda (`GET /api/agenda?zone=&days=`), which also counts the unassigned tasks of their own projects outside spaces, as `assigned_to_me` tells: the contract keeps the tasks due before today, today, or from today within `days` (1 to 31, 7 by default).
 - `zone`, required, is the user's IANA time zone, such as `Europe/Paris`: due dates are days in it. A zone Tasks does not know is an invalid request.
 - `search_tasks` finds the tasks whose key starts with `q`, or whose title or description holds it (`GET /api/search?q=`, 1 to 200 characters), and keeps the closed ones only with `include_closed=true`.
+- `assigned_to_me` follows what Tasks says, never an email: every task of `due=all` is assigned to the user, and in the agenda a task with assignees is assigned to them while one without is one of their own unassigned tasks. A search holds anyone's tasks, and Tasks does not say which of their assignees is the user: it gives `false` for a task without assignees and `null` otherwise.
 - Lists hold 20 tasks by default, 100 at most, and 50 for a search, the most Tasks gives. Tasks gives no cursor: `truncated` says when a list holds less than all.
 - `read_task` reads the whole board (`GET /api/boards/{board_id}`), then the task's description and comments. The description is cut at 10,000 characters, and each of the latest `comments` comments (0 to 50, 10 by default) at 2,000.
 - A board the user is not a member of answers exactly like an unknown one, and an archived or trashed task like a missing one.
-- The user on a board is the member with their email, whatever its case: when no member has it, or more than one, `read_task` is refused rather than guessed. An alias of the user's address does not match.
+- The user on a board is the member who joined with their email, whatever its case. `read_task` needs them only to tell whether a task with assignees is the user's, and is refused rather than guessing when no member has that email, or more than one, as when the user joined under an alias of their address.
 - Ids are the UUIDs that reads give; a key, such as `WEB-12`, names a task for people only.
 - Titles, descriptions, comments, and the names of boards, projects, sections and labels are written by members: they come under `untrusted`, apart from what the contract computed.
 
@@ -306,8 +307,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `room_encrypted` | the room is encrypted, so its messages cannot be read; `room` gives what it shows of itself |
 | 409 | `file_encrypted` | the file is encrypted on the user's devices |
 | 409 | `file_blocked` | the antivirus of the user's Drive blocks the file |
+| 409 | `owner_not_member` | the task has assignees, and no member of its board, or more than one, has the user's email |
 | 415 | `content_not_extractable` | the file is not text |
-| 409 | `owner_not_member` | no member of the board, or more than one, has the user's email |
 | 429 | `chat_rate_limited` | Chat limits the requests made as the user; `retry_after_ms` says when to try again, when Chat says it |
 | 502 | `calendar_refused` | Calendar refused the user's token |
 | 502 | `calendar_unavailable` | Calendar did not answer, or answered in an unexpected form |

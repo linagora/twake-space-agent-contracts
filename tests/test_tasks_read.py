@@ -213,13 +213,28 @@ async def test_a_board_the_user_is_not_a_member_of_answers_like_an_unknown_one(
 async def test_a_board_that_does_not_name_the_user_once_by_email_is_refused(
     client: AsyncClient, boundary: FakeBoundary, members: list[TasksMember]
 ) -> None:
-    # Tasks shows the board, but which member is the user cannot be told from their email
-    task = boundary.tasks.task(website(boundary, *members), "Write the release notes")
+    # Tasks shows the board, but which member is the user, if any of its assignees, cannot be
+    # told from their email
+    task = boundary.tasks.task(
+        website(boundary, *members), "Write the release notes", assignees=[ALICE]
+    )
 
     response = await read(client, task)
 
     assert response.status_code == 409
     assert response.json()["code"] == "owner_not_member"
+
+
+async def test_a_task_without_assignees_needs_no_member_with_the_users_email(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    joined = TasksMember(MMAUDET.user_id, "michel@twake.test")
+    task = boundary.tasks.task(website(boundary, joined, ALICE), "Write the release notes")
+
+    response = await read(client, task)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["assigned_to_me"] is False
 
 
 @pytest.mark.parametrize(

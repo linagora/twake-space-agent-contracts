@@ -4,7 +4,7 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET
-from tests.fakes import TASKS_TODAY, FakeBoundary, tasks_member
+from tests.fakes import TASKS_TODAY, FakeBoundary, TasksMember, tasks_member
 
 MMAUDET = tasks_member("mmaudet")
 ALICE = tasks_member("alice", "admin")
@@ -138,6 +138,29 @@ async def test_a_task_comes_with_what_members_wrote_apart(
         ],
         "truncated": False,
     }
+
+
+async def test_whose_task_it_is_comes_from_tasks_not_from_the_email(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The user joined the board under another address: Tasks knows them by their uuid all the same
+    joined = TasksMember(MMAUDET.user_id, "michel@twake.test")
+    website = boundary.tasks.board("Website", "WEB", joined, ALICE)
+    boundary.tasks.task(
+        website, "Write the release notes", due_date=TASKS_TODAY, assignees=[joined]
+    )
+    boundary.tasks.task(website, "Review the design", due_date=TASKS_TODAY)
+
+    assigned = await my_tasks(client, due="all")
+    today = await my_tasks(client, due="today")
+
+    assert [(task["key"], task["assigned_to_me"]) for task in assigned["tasks"]] == [
+        ("WEB-1", True)
+    ]
+    assert [(task["key"], task["assigned_to_me"]) for task in today["tasks"]] == [
+        ("WEB-1", True),
+        ("WEB-2", False),
+    ]
 
 
 async def test_a_personal_account_sees_only_the_tasks_outside_organizations(

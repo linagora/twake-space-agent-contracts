@@ -49,6 +49,7 @@ class TaskDetailText(TaskText):
 class TaskDetail(TaskSummary):
     """A task, with its description and its latest comments."""
 
+    assigned_to_me: bool
     section_category: str | None = Field(
         description="backlog, unstarted, started, completed or canceled; null outside sections."
     )
@@ -201,25 +202,31 @@ def router(tasks: Tasks, caller: CallerDependency) -> APIRouter:
             title="Task not found",
             detail=f"Board {board_id} shows no task {task_id}: it may be archived or in the trash.",
         )
-        task = board.task(task_id, user.email)
+        task = board.task(task_id)
         if task is None:
             raise not_found
-        # Members are known by the email they joined with: it alone tells which one is the user
-        if board.member_emails.count(user.email) != 1:
-            raise Problem(
-                status=409,
-                code="owner_not_member",
-                title="Owner not a member",
-                detail="No member of the board, or more than one, has the email of the user you"
-                " act for.",
-            )
+        assigned_to_me = False
+        if task.assignee_ids:
+            # Tasks does not say who the user is: the member who joined with their email alone
+            # tells, and no guess stands in for them
+            me = board.member_named(user.email)
+            if me is None:
+                raise Problem(
+                    status=409,
+                    code="owner_not_member",
+                    title="Owner not a member",
+                    detail="No member of the board, or more than one, has the email of the user"
+                    " you act for: whether the task is theirs cannot be told.",
+                )
+            assigned_to_me = me in task.assignee_ids
         description = await tasks.description(user, board.board_id, task.summary.task_id)
         found = await tasks.comments(user, board.board_id, task.summary.task_id) if comments else []
         # Gone from the board since it was read, to another board or purged from the trash
         if description is None or found is None:
             raise not_found
         return TaskDetail(
-            **task.summary.model_dump(exclude={"untrusted"}),
+            **task.summary.model_dump(exclude={"untrusted", "assigned_to_me"}),
+            assigned_to_me=assigned_to_me,
             section_category=task.section.category if task.section else None,
             recurring=task.recurring,
             description_truncated=len(description) > LONGEST_DESCRIPTION,
