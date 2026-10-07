@@ -11,6 +11,7 @@ from xml.etree.ElementTree import Element
 
 from twake_space_agent_contracts.documents import MOST_COLUMNS, MOST_ROWS, layout
 from twake_space_agent_contracts.documents.archives import (
+    MOST_FILES,
     Package,
     attribute,
     child,
@@ -19,7 +20,7 @@ from twake_space_agent_contracts.documents.archives import (
     relationship_id,
     run_text,
 )
-from twake_space_agent_contracts.documents.reading import Output
+from twake_space_agent_contracts.documents.reading import Output, Unreadable
 
 # What holds no text a reader sees: the properties of a run, and the readings set above words
 _UNSEEN = frozenset({"rPr", "rPh"})
@@ -36,6 +37,8 @@ _ESCAPED = re.compile(r"_x([0-9A-Fa-f]{4})_")
 _COLUMN = re.compile(r"[A-Za-z]{1,3}")
 _LAST_DAY = 2_958_465
 """The day 9999-12-31, the last a date of Excel's may be, counted from 1900."""
+_MOST_FORMATS = 65_536
+"""The formats of a workbook's cells read at most, beyond the 64,000 Excel holds."""
 
 Value = str | int
 """A cell's value as text, or the index of its text among the workbook's shared strings."""
@@ -65,7 +68,7 @@ def read(content: bytes, output: Output) -> None:
     parts = {link.kind: link.target for link in links.values() if package.has(link.target)}
     dates = _date_styles(package, parts["styles"]) if "styles" in parts else frozenset()
     date1904 = False
-    tabs = []
+    tabs: list[_Tab] = []
     for event, element in package.parsed(workbook):
         if event != "end":
             continue
@@ -73,6 +76,9 @@ def read(content: bytes, output: Output) -> None:
         if name == "workbookPr":
             date1904 = attribute(element, "date1904") in ("1", "true")
         elif name == "sheet":
+            # Only a crafted workbook lists more sheets than a zip holds files
+            if len(tabs) == MOST_FILES:
+                raise Unreadable("the workbook lists more sheets than a zip holds files")
             link = links.get(relationship_id(element) or "")
             worksheet = link is not None and link.kind == "worksheet" and package.has(link.target)
             tabs.append(
@@ -209,11 +215,11 @@ def _date_styles(package: Package, part: str) -> frozenset[int]:
         name = local(element.tag)
         if name == "cellXfs":
             within = event == "start"
-        elif event == "end" and name == "numFmt":
+        elif event == "end" and name == "numFmt" and len(formats) < _MOST_FORMATS:
             number = attribute(element, "numFmtId") or ""
             if number.isdigit():
                 formats[int(number)] = attribute(element, "formatCode") or ""
-        elif event == "end" and name == "xf" and within:
+        elif event == "end" and name == "xf" and within and len(styles) < _MOST_FORMATS:
             number = attribute(element, "numFmtId") or ""
             styles.append(int(number) if number.isdigit() else 0)
     return frozenset(index for index, number in enumerate(styles) if _shows_dates(number, formats))

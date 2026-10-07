@@ -3,7 +3,7 @@ import datetime
 from httpx import AsyncClient
 from openpyxl import Workbook
 
-from tests.documents import XLSX, excel_workbook, read_content, workbook
+from tests.documents import XLSX, excel_workbook, read_content, rezipped, workbook
 from tests.fakes import FakeBoundary, text_file
 
 
@@ -142,3 +142,21 @@ async def test_a_damaged_spreadsheet_is_not_extractable(
     assert response.status_code == 415, response.text
     assert response.json()["code"] == "content_not_extractable"
     assert "Rent" not in response.text
+
+
+async def test_a_workbook_that_lists_more_sheets_than_a_zip_holds_files_is_not_extractable(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Sheets that are nowhere, which only a crafted workbook lists, each the reader would remember
+    sheets = "".join(f'<sheet name="S{number}" sheetId="{number}"/>' for number in range(10_001))
+    listing = (
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f"<sheets>{sheets}</sheets></workbook>"
+    ).encode()
+    content = rezipped(excel_workbook("", []), {"xl/workbook.xml": listing})
+    boundary.drive.add(text_file("crafted", "Crafted.xlsx", content=content, mime=XLSX))
+
+    response = await read_content(client, "crafted")
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"
