@@ -235,6 +235,7 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 | `trash_email` | `POST /contracts/v1/mail/emails/{email_id}/trash` | `{"email_id", "mailbox_id", "mailbox_name"}`, the trash |
 
 - Moves the email to the mailbox whose role is `trash`, from spam too, as `archive_email` does to the archive. It never destroys the email, which `move_email` can move back.
+- Without a trash, nothing is moved (`mailbox_not_found`), nor with several (`trash_ambiguous`): `move_email` moves no email to a trash, so the user keeps a single one in Twake Mail.
 - A low-risk write (`x-twake-risk: low`).
 
 ### Drive, as the user
@@ -367,7 +368,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `name_taken` | a file or folder of that name is already in the folder |
 | 409 | `quota_exceeded` | the user's Drive has no room left for the file |
 | 409 | `owner_not_member` | the task has assignees, and no member of its board, or more than one, has the user's email |
-| 409 | `mailbox_ambiguous` | several of the user's mailboxes have the name or the role given: the user says which one |
+| 409 | `mailbox_ambiguous` | several of the user's mailboxes have the name given, or the role archive: the user says which one, and `move_email` takes its id |
+| 409 | `trash_ambiguous` | several of the user's mailboxes have the role trash, which no contract chooses among: the user keeps a single one in Twake Mail |
 | 409 | `mailbox_forbidden` | `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam |
 | 409 | `email_in_spam` | the email is in spam, which only `trash_email` takes it out of |
 | 415 | `content_not_extractable` | the file is not text |

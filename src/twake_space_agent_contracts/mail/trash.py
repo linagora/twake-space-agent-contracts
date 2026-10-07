@@ -27,6 +27,6 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
     )
     async def trash_email(email_id: EmailId, user: Annotated[User, Depends(caller)]) -> Moved:
         placement = await tmail.placement(user, email_id)
-        return await tmail.move(user, placement, placement.with_role("trash"))
+        return await tmail.move(user, placement, placement.trash())
 
     return routes

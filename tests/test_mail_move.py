@@ -110,7 +110,8 @@ async def test_a_name_several_mailboxes_have_is_refused_rather_than_guessed(
         "Ambiguous mailbox",
         409,
         "Several of the user's mailboxes are named Projects: mbx-projects, mbx-old-projects. Ask"
-        " the user which one they mean.",
+        " the user which one they mean, then move the email there with move_email and its"
+        " mailbox_id.",
     )
     assert writes(boundary) == []
 
@@ -282,22 +283,43 @@ async def test_without_the_mailbox_of_its_role_nothing_is_moved(
     assert writes(boundary) == []
 
 
-@pytest.mark.parametrize(("operation", "role", "mailbox_id"), ROLES)
-async def test_two_mailboxes_of_its_role_are_refused_rather_than_guessed(
-    client: AsyncClient, boundary: FakeBoundary, operation: str, role: str, mailbox_id: str
+async def test_two_archives_are_refused_rather_than_guessed(
+    client: AsyncClient, boundary: FakeBoundary
 ) -> None:
-    boundary.tmail.mailboxes[f"{mailbox_id}-2"] = own_mailbox(f"{role} 2", role)
+    boundary.tmail.mailboxes["mbx-archive-2"] = own_mailbox("Archive 2", "archive")
     boundary.tmail.deliver("email-1", INBOX)
 
-    response = await post(client, "email-1", operation)
+    response = await post(client, "email-1", "archive")
 
     assert response.status_code == 409
     assert response.json() == problem(
         "mailbox_ambiguous",
         "Ambiguous mailbox",
         409,
-        f"Several of the user's mailboxes have the role {role}: {mailbox_id}, {mailbox_id}-2."
-        " Ask the user which one they mean.",
+        "Several of the user's mailboxes have the role archive: mbx-archive, mbx-archive-2. Ask"
+        " the user which one they mean, then move the email there with move_email and its"
+        " mailbox_id.",
+    )
+    assert writes(boundary) == []
+
+
+async def test_two_trash_mailboxes_are_left_to_the_user(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # move_email moves no email to a trash: no contract can put it in the one the user means
+    boundary.tmail.mailboxes["mbx-trash-2"] = own_mailbox("Trash 2", "trash")
+    boundary.tmail.deliver("email-1", INBOX)
+
+    response = await post(client, "email-1", "trash")
+
+    assert response.status_code == 409
+    assert response.json() == problem(
+        "trash_ambiguous",
+        "Several trash mailboxes",
+        409,
+        "Several of the user's mailboxes have the role trash: mbx-trash, mbx-trash-2. No"
+        " contract chooses among them: ask the user to keep a single trash folder in Twake Mail,"
+        " then put the email in the trash again.",
     )
     assert writes(boundary) == []
 

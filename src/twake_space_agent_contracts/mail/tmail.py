@@ -553,31 +553,58 @@ class Placement:
         return _one(
             found,
             f"The user has no mailbox of their own named {name}.",
-            f"Several of the user's mailboxes are named {name}",
+            _ambiguous(f"Several of the user's mailboxes are named {name}", found),
         )
 
-    def with_role(self, role: str) -> Mailbox:
-        """The user's own mailbox of that role, such as archive."""
-        found = [mailbox for mailbox in self.mailboxes if mailbox.role == role]
+    def archive(self) -> Mailbox:
+        """The user's archive: their own mailbox whose role is archive."""
+        found = self._with_role("archive")
         return _one(
             found,
-            f"The user has no {role} mailbox.",
-            f"Several of the user's mailboxes have the role {role}",
+            "The user has no archive mailbox.",
+            _ambiguous("Several of the user's mailboxes have the role archive", found),
         )
 
+    def trash(self) -> Mailbox:
+        """The user's trash: their own mailbox whose role is trash."""
+        found = self._with_role("trash")
+        # move_email moves no email to a trash: only the user can leave a single one
+        several = Problem(
+            status=409,
+            code="trash_ambiguous",
+            title="Several trash mailboxes",
+            detail=f"Several of the user's mailboxes have the role trash: {_ids(found)}. No"
+            " contract chooses among them: ask the user to keep a single trash folder in Twake"
+            " Mail, then put the email in the trash again.",
+        )
+        return _one(found, "The user has no trash mailbox.", several)
 
-def _one(found: list[Mailbox], missing: str, several: str) -> Mailbox:
-    """The one mailbox found: none is not found, and several are refused rather than guessed."""
+    def _with_role(self, role: str) -> list[Mailbox]:
+        return [mailbox for mailbox in self.mailboxes if mailbox.role == role]
+
+
+def _ids(mailboxes: list[Mailbox]) -> str:
+    return ", ".join(mailbox.id for mailbox in mailboxes)
+
+
+def _ambiguous(several: str, found: list[Mailbox]) -> Problem:
+    """Several of the user's mailboxes where they mean one: move_email takes the id of that one."""
+    return Problem(
+        status=409,
+        code="mailbox_ambiguous",
+        title="Ambiguous mailbox",
+        detail=f"{several}: {_ids(found)}. Ask the user which one they mean, then move the email"
+        " there with move_email and its mailbox_id.",
+    )
+
+
+def _one(found: list[Mailbox], missing: str, several: Problem) -> Mailbox:
+    """The one mailbox found: none is not found, and several are refused rather than guessed,
+    with the problem given."""
     if not found:
         raise _not_found("mailbox_not_found", "Mailbox not found", missing)
     if len(found) > 1:
-        ids = ", ".join(mailbox.id for mailbox in found)
-        raise Problem(
-            status=409,
-            code="mailbox_ambiguous",
-            title="Ambiguous mailbox",
-            detail=f"{several}: {ids}. Ask the user which one they mean.",
-        )
+        raise several
     return found[0]
 
 

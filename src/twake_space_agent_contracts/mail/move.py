@@ -155,6 +155,6 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
     async def archive_email(email_id: EmailId, user: Annotated[User, Depends(caller)]) -> Moved:
         placement = await tmail.placement(user, email_id)
         out_of_spam(placement)
-        return await tmail.move(user, placement, placement.with_role("archive"))
+        return await tmail.move(user, placement, placement.archive())
 
     return routes
