@@ -427,6 +427,58 @@ Create, change and complete tasks as the user, on the boards they may edit.
 - Each is a low-risk write (`x-twake-risk: low`): the user's own work, which the owner's consent to write in Tasks covers without a confirmation each time.
 - Each tells what it would do ([Previews](#previews)), once it read the board as it would. `create_task` tells the task's title, its board and its section, or the task it goes under, and its priority and due date. `update_task` tells each field it changes, as it would be and as it was, a due date with its time and zone, and that clearing it clears its recurrence. `complete_task` tells the section the task moves to and how many open subtasks complete with it, or, for a recurring task, the due date it is completed for, or that a completed task stays as it is. The digest covers where a new task goes, its board, section and parent, and for a change or a completion the task as it is, with the section a completion moves it to and the subtasks it takes along: a call made once a member changed them answers `changed_since_preview`.
 
+### Contacts, as the user
+
+Twake Contacts keeps the user's address books in esn-sabre, which the contracts reach as Calendar does: through the Calendar side service (`CALENDAR_URL`), with the user's token. They use its `/dav` proxy, which acts in esn-sabre as the token's user, in esn-sabre's JSON dialect of CardDAV, and its search across several address books (`POST /contacts/api/contacts/search`). Contacts has no setting of its own: it is published once `PUBLISHED_APPS` names `contacts`.
+
+- The user's email gives their id and their domain's (`GET /api/users?email=`), which name their home of address books in esn-sabre and their domain's.
+- The address books the user reads are those of their home (`GET /dav/addressbooks/{user id}.json?personal=true&shared=true&subscribed=true&inviteStatus=2&contactsCount=true`): their own, `contacts`, the default one, which esn-sabre gives every user, `collected`, where Contacts collects addresses, and those they created; the delegations they accepted and their subscriptions, which show someone else's book; then their domain's (`GET /dav/addressbooks/{domain id}.json?personal=true&contactsCount=true`), such as `domain-members`, its directory of members. An address book of someone else, which they did not share with the user, answers exactly like an unknown one: the contracts take no other address book.
+- An address book's `book_id` is its home and its name, as `{home}~{name}`, and a contact's `contact_id` the name of its card in the book, without `.vcf`. A book or a card whose name holds other characters than letters, digits, `.`, `_`, `~` and `-`, and `@`, `+` or `=` for a card, or holds `.json`, which esn-sabre removes from wherever a URL holds it, is left out: neither the search of Contacts nor a path of the contracts can name it.
+- The contracts write in the user's own address books alone, those Contacts lets them write in, which `writable` tells. A contact of a book someone else shares with the user, of one they subscribed to, or of their domain's, is refused with `address_book_read_only`, whatever rights Contacts gives the user there: only its owner changes it.
+- Cards come and go in jCard, the JSON of vCard: `GET` with `Accept: application/vcard+json`, which esn-sabre answers in vCard 4.0, and `PUT` in the same form. What people wrote in a contact comes under `untrusted`, on one line but the note, without Unicode's control and format characters: a name, an organization, a job title or a part of an address cut at 200 characters, an email at 320, a phone at 100, a note at 10,000, and 20 emails, phones or addresses at most, which `truncated` tells. Nothing else of a card comes back, such as its photo or its categories.
+- The job title is the card's `ROLE`, where the Contacts web app writes and shows it, else its `TITLE`.
+- The side service forwards neither `If-Match` nor `If-None-Match`, so no write can be conditional: each write reads the card, checks it against the digest of the preview its owner was shown, if any, then writes over it, or deletes it, at once. That keeps the time between the check and the write short, but not nil: a change made by someone else in that time would be lost.
+- A write tells nobody: esn-sabre publishes it inside the platform, so that the apps the user has open show it.
+
+### `contacts.addressbooks.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_address_books` | `GET /contracts/v1/contacts/address-books` | `{"address_books": [{"book_id", "kind", "default", "writable", "contact_count", "untrusted": {"name", "description"}}]}` |
+
+- `kind` is `personal`, one of the user's own; `collected`, theirs too, where Contacts collects addresses; `shared`, someone else's, which they share with the user or the user subscribed to; `domain`, one of the user's domain. The user's own come first, the default one at the top, then the shared ones, then their domain's.
+- `default` marks the book `create_contact` adds contacts to. `contact_count` is how many contacts a book holds, which esn-sabre counts in the user's own books and their domain's only.
+
+### `contacts.contacts.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `search_contacts` | `GET /contracts/v1/contacts/search?q=…&limit=…` | `{"contacts": [{"book_id", "contact_id", "kind", "untrusted": {"name", "emails", "phones", "organization"}}], "truncated"}`, by name |
+| `read_contact` | `GET /contracts/v1/contacts/address-books/{book_id}/contacts/{contact_id}` | `{"book_id", "contact_id", "kind", "writable", "truncated", "untrusted": {"name", "given_name", "family_name", "nickname", "emails": [{"address", "type"}], "phones": [{"number", "type"}], "organization", "title", "addresses": [{"type", "street", "locality", "region", "postal_code", "country"}], "note", "birthday"}}` |
+
+- `search_contacts` finds the contacts whose text holds `q`, 2 to 100 characters, whatever its case, in all the address books `list_address_books` gives. The search of Contacts matches its query as a pattern against the vCard text of each card: the contract sends `q` escaped, its commas, semicolons and backslashes as vCard escapes them, then every other sign but letters and digits by its code, so that it is found as written, never read as a pattern, and that no `.json` reaches the URL esn-sabre reads it in.
+- Contacts finds 200 contacts at most, all books together, in each book by the names of their cards. Of those, the contract keeps the ones whose fields hold `q`, rather than the names vCard writes them under, such as `TEL`, and sorts them by name. `limit` goes from 1 to 100 and is 20 by default; `truncated` tells that more contacts may hold `q`.
+- A `type` is `work`, `home` or `other` for an email, `cell`, `work`, `home`, `fax` or `other` for a phone, and `home`, `work` or `other` for an address, when the card says it.
+
+### `contacts.contact.create.v1`, `contacts.contact.update.v1` and `contacts.contact.delete.v1`
+
+Create, change and delete contacts in the user's own address books, as the user.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `create_contact` | `POST /contracts/v1/contacts/contacts` `{"name", "given_name", "family_name", "nickname", "emails", "phones", "organization", "title", "addresses", "note", "birthday"}` | 201, the contact, as `read_contact` gives it; 200 for the contact the same call added already |
+| `update_contact` | `PATCH /contracts/v1/contacts/address-books/{book_id}/contacts/{contact_id}` with the fields to change | the contact |
+| `delete_contact` | `DELETE /contracts/v1/contacts/address-books/{book_id}/contacts/{contact_id}` | the contact as it was |
+
+- `emails` are `{"address", "type"}`, `phones` `{"number", "type"}`, and `addresses` `{"type", "street", "locality", "region", "postal_code", "country"}`. A text takes 200 characters at most and a note 10,000, and a contact 10 emails, 10 phones and 5 addresses at most. An email must be an address (`invalid_email`), and a phone 3 to 20 digits, maybe after a `+`, with spaces, dots, dashes, slashes or parentheses (`invalid_phone`); `birthday` is a day, such as `1980-05-17`. Text is written on one line but the note, without what a reader does not see. The body takes no other field.
+- `name` is the name Contacts shows. Without it, the contract makes the one the Contacts web app makes: the given and family names, else the organization, the job title, the nickname, the first email or the first phone. A contact with none of them is refused.
+- `create_contact` adds the contact to the user's default address book, `contacts`, and to no other. It writes a vCard 4.0 as the Contacts web app writes one, the job title in `ROLE`. Its UID, which names its card too, comes from the user and the fields given, as a UUID v5: the contract looks for it before writing, so that the same call made again answers 200 with the contact it added, and `contact_exists` when the user changed it since. A contact of the default book with one of the emails, whatever their case, answers `contact_exists` too, with its `book_id` and `contact_id`, and nothing is added: `update_contact` changes it. The contract finds it with the search of Contacts, on the emails escaped, then checks the emails of each contact found. The contact is read back after the write, also when the side service did not confirm it in time.
+- `update_contact` changes the fields given and no other, `null` clearing one; a list given replaces the whole list. All else the card holds stays where it is, such as its photo, its categories or the units of its organization. The name Contacts shows follows what it is made of, unless it was set apart from it: `name` sets it apart, and `null` makes it follow again. A contact left with nothing to show it by is refused. The job title goes to `ROLE`, and to `TITLE` when the card holds one, so that no app shows the former one. A change that changes nothing writes nothing.
+- `delete_contact` deletes the card for good: esn-sabre keeps no trash. It answers the contact as it was, which `create_contact` can add again.
+- A card that the write would make larger than the 1 MiB Contacts takes in a request, such as one holding a large photo, answers `contact_too_large`, before the owner is asked.
+- `create_contact` and `update_contact` are low-risk writes (`x-twake-risk: low`): the user's own contacts, which nobody is told of, and which the owner's consent to write in Contacts covers without a confirmation each time. `delete_contact` is a high-risk write (`x-twake-risk: high`), which the owner confirms call by call: a contact deleted is lost.
+- Each tells what it would do ([Previews](#previews)). `create_contact` tells each field the contact holds, its note whole when it fits, or that the contact is in the address book already; `update_contact`, each field it changes, the name Contacts shows too, as it would be and as it was; `delete_contact`, that the contact goes for good, and each field it holds. The digest covers the contact as the address book holds it, for `create_contact` by its UID, if at all: a call made once it changed answers `changed_since_preview`, and writes nothing.
+
 ## Previews
 
 When the harness asks an owner about a write, for a first use, a high-risk write or a write that a turn an event started prepared, it shows them what the call would do rather than the call as the model wrote it, if the write's operation declares `x-twake-preview: true`. It first calls the contract as the call would go, same method, path, query and body, in the owner's name, with `x-twake-preview: true` and the owner's language in `accept-language`:
@@ -449,6 +501,9 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `complete_task` | where the task goes, or the due date it moves on from, and the subtasks it completes | the task as it is, its completed section and its open subtasks |
 | `create_file` | the file's name, type and size, its folder and its content | the folder, where it is |
 | `create_event` | the event's title, when it takes place, in the user's time zone, whether it leaves them free, where it is and what it is for; or that it is in their calendar already | the event, by its UID, the zone it is written in, and the event as the calendar holds it, if at all |
+| `create_contact` | each field of the contact, its note whole when it fits; or that it is in the address book already | the contact, by its UID, as the address book holds it, if at all |
+| `update_contact` | each field it changes, as it would be and as it was | the contact as it is |
+| `delete_contact` | that the contact goes for good, and each field it holds | the contact as it is |
 
 ## Errors
 
@@ -457,10 +512,13 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | Status | `code` | When |
 |---|---|---|
 | 400 | `invalid_request` | a parameter, or a field of the body, is invalid |
+| 400 | `invalid_email` | an email the call gives is not an address |
+| 400 | `invalid_phone` | a phone the call gives is not a number of 3 to 20 digits |
 | 401 | `missing_token` | no bearer token |
 | 401 | `invalid_token` | the token is not one the broker got for this service: another type, issuer, audience, client or key, or expired |
 | 401 | `missing_drive_token` | a Drive contract without the user's Drive token |
 | 403 | `forbidden_role` | the user is a viewer of the board: they only read it |
+| 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
 | 404 | `event_not_found` | no event with this id concerns the user |
 | 404 | `invitation_not_found` | no invitation with this id was sent to the user |
 | 404 | `invitation_not_in_calendar` | the user's calendars no longer have the invitation, which may have been deleted |
@@ -475,6 +533,9 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `file_not_found` | no file with this id in the user's Drive, out of the trash |
 | 404 | `board_not_found` | the user is a member of no board with this id |
 | 404 | `task_not_found` | the board shows no task with this id: it may be archived or in the trash |
+| 404 | `contacts_user_not_found` | Contacts has no user with the user's email |
+| 404 | `address_book_not_found` | the user reads no address book with this id: neither their own, nor one shared with them, nor their domain's |
+| 404 | `contact_not_found` | the address book has no contact with this id |
 | 409 | `not_an_attendee` | the invitation in the user's calendar does not list the user as an attendee |
 | 409 | `changed_since_preview` | what the call acts on changed since its owner was shown what it would do: nothing was done |
 | 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series |
@@ -495,7 +556,9 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `trash_ambiguous` | several of the user's mailboxes have the role trash, which no contract chooses among: the user keeps a single one in Twake Mail |
 | 409 | `mailbox_forbidden` | `move_email` and `move_emails` do not move an email to drafts, sent, outbox, templates, trash or spam |
 | 409 | `email_in_spam` | the email is in spam, which only `trash_email` and `trash_emails` take it out of; the code of an email refused when several are moved at once |
+| 409 | `contact_exists` | the user's default address book has a contact with one of the emails already, or the one the same call added, changed since: `book_id` and `contact_id` name it, and nothing was added |
 | 413 | `file_too_large` | the document takes more than the 20 MiB the service reads, or more than it reads once uncompressed |
+| 413 | `contact_too_large` | the contact would take more than the 1 MiB Contacts takes in a card: nothing was written |
 | 415 | `content_not_extractable` | the file is neither text nor a document the service reads, or the document is damaged, holds no text, as a scanned PDF, or gave none in the time or the memory its reading has |
 | 429 | `chat_rate_limited` | Chat limits the requests made as the user; `retry_after_ms` says when to try again, when Chat says it |
 | 502 | `calendar_refused` | Calendar refused the user's token |
@@ -510,6 +573,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 502 | `tasks_refused_token` | Tasks refused the user's token |
 | 502 | `tasks_unavailable` | Tasks did not answer, or answered in an unexpected form |
 | 502 | `task_created_partially` | Tasks created the task, then failed to set its priority or due date: `board_id`, `task_id` and `key` name it |
+| 502 | `contacts_refused` | Contacts refused the user's token |
+| 502 | `contacts_unavailable` | Contacts did not answer, or answered in an unexpected form |
 | 503 | `keys_unavailable` | the signing keys of LemonLDAP-NG could not be fetched, and none are held |
 | 503 | `reading_busy` | the service reads as many documents as it may at once, or one of the user's, and none ended in the 10 seconds a request waits: try again in a few seconds |
 
@@ -534,7 +599,7 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `OIDC_ISSUER` | the issuer of the users' tokens, exactly as in their `iss` claim |
 | `OIDC_AUDIENCE` | the audience the tokens must have, `twake-space-agents` by default |
 | `OIDC_JWKS_URL` | the issuer's signing keys, `<issuer>/oauth2/jwks` by default, where LemonLDAP-NG publishes them |
-| `CALENDAR_URL` | the Calendar side service |
+| `CALENDAR_URL` | the Calendar side service, which Calendar and Contacts go through |
 | `PUBLISHED_APPS` | the applications the service publishes, by domain, comma separated: `events,calendar` when unset or empty, and `events` always (see [Applications](#applications)) |
 | `CHAT_URL` | the gateway's outbound route to Synapse, which adds the token of the contracts' application service; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `CHAT_GATEWAY_KEY` | the key the gateway's outbound route to Synapse admits, so that only this service uses the application service's token: sent in `apikey` on each call to `CHAT_URL`, and to no other application; needed once `PUBLISHED_APPS` names `chat`, and only then |
@@ -550,7 +615,7 @@ The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user
 
 ## Test
 
-The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. The documents the fake cozy-stack serves are built in the tests, by python-docx, python-pptx and openpyxl, which only the tests use, or by hand, as are OpenDocument files, PDFs and the documents crafted against a reader, and each is read in its own process, as the service reads them. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
+The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, with esn-sabre's address books behind its `/dav` proxy and its search across them, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. The documents the fake cozy-stack serves are built in the tests, by python-docx, python-pptx and openpyxl, which only the tests use, or by hand, as are OpenDocument files, PDFs and the documents crafted against a reader, and each is read in its own process, as the service reads them. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
 
 ```sh
 uv run pytest
