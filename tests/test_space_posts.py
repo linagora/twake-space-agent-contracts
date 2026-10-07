@@ -375,3 +375,22 @@ async def test_a_post_changed_since_the_preview_is_not_deleted(
     assert (changed.status_code, changed.json()["code"]) == (409, "changed_since_preview")
     assert allowed.status_code == 200, allowed.text
     assert boundary.space.posts == {}
+
+
+async def test_the_preview_of_the_longest_posts_stays_within_what_the_harness_shows(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Characters of four bytes, as many as Space takes: the summary shows the beginning of each
+    # text and says how much it leaves out
+    room = design(boundary)
+    longest = "\N{GRINNING FACE}" * 4000
+    written = boundary.space.post(room, MMAUDET, longest, time="2026-10-06T08:30:00.000Z")
+
+    posted = await post(client, room, {"text": longest}, asking_preview("en"))
+    edited = await edit(
+        client, written, {"text": "\N{THUMBS UP SIGN}" * 4000}, asking_preview("en")
+    )
+
+    for response in (posted, edited):
+        summary, _ = preview_of(response)
+        assert "more characters are not shown)" in summary

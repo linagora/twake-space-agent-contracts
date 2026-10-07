@@ -7,6 +7,7 @@ from twake_space_agent_contracts.previews import (
     BUDGET,
     Language,
     excerpt,
+    fitted,
     one_line,
     person,
     quoted,
@@ -232,26 +233,32 @@ def deleting(item: FeedItem, me: str | None, space: str | None, language: Langua
     return _with_text(head, item.body, language)
 
 
-def _people(people: list[Person], language: Language) -> list[str]:
-    """People, each on a line of its own after a tab, by their name and their email."""
-    return [
-        "\t" + (person(found.display_name, found.email, language) or one_line(found.username))
-        for found in people
-    ]
+def _people(people: list[Person], room: int, language: Language) -> list[str]:
+    """People, each on a line of its own after a tab, by their name and their email, each line
+    within `room` of the summary: a name that would take more is cut."""
+    lines = []
+    for found in people:
+        marks = shown_size("\t" + quoted("", language) + f" <{one_line(found.email, 320)}>")
+        name = fitted(one_line(found.display_name), max(room - marks, shown_size("…")))
+        lines.append("\t" + (person(name, found.email, language) or one_line(found.username)))
+    return lines
 
 
 def adding_members(
     space: str | None, role: str, added: list[Person], left: list[Person], language: Language
 ) -> str:
     """What adding people to a space does, as the owner reads it: whom it takes in and as what,
-    and who are members already, or that nothing changes."""
+    and who are members already, or that nothing changes. Each person takes an equal share of
+    what the summary leaves."""
     words = _WORDS[language]
     named = {"space": space_named(space, language), "roles": words.roles[role]}
+    heads = [words.add.format(**named), words.left] if added else [words.unchanged.format(**named)]
+    room = (BUDGET - shown_size("\n".join(heads))) // max(len(added) + len(left), 1) - 1
     if not added:
-        return "\n".join([words.unchanged.format(**named), *_people(left, language)])
-    lines = [words.add.format(**named), *_people(added, language)]
+        return "\n".join([heads[0], *_people(left, room, language)])
+    lines = [heads[0], *_people(added, room, language)]
     if left:
-        lines += [words.left, *_people(left, language)]
+        lines += [words.left, *_people(left, room, language)]
     return "\n".join(lines)
 
 

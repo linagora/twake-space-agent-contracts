@@ -421,3 +421,25 @@ async def test_a_member_changed_since_the_preview_stays(
     assert response.status_code == 409
     assert response.json()["code"] == "changed_since_preview"
     assert room.members[BOB.user_id] == (BOB, "admin")
+
+
+async def test_the_preview_of_twenty_people_of_long_names_stays_within_what_the_harness_shows(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    room = design(boundary)
+    people = [space_person(f"person{number:02}", "\N{GRINNING FACE}" * 255) for number in range(20)]
+    boundary.space.people(*people)
+
+    response = await add(
+        client,
+        room,
+        {"usernames": [person.username for person in people], "role": "viewer"},
+        asking_preview("en"),
+    )
+
+    summary, _ = preview_of(response)
+    lines = summary.splitlines()
+    assert len(lines) == 21
+    assert all(
+        line.endswith(f"<person{number:02}@twake.test>") for number, line in enumerate(lines[1:])
+    )
