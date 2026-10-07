@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass
 
 import httpx
 from fastapi import APIRouter
-from psycopg_pool import AsyncConnectionPool
 
 from twake_space_agent_contracts import (
     boards,
@@ -40,8 +39,6 @@ class Context:
     """What the routers of an application are built from."""
 
     settings: Settings
-    pool: AsyncConnectionPool
-    """The events database."""
     http: httpx.AsyncClient
     caller: CallerDependency
     clock: Callable[[], float]

@@ -1,23 +1,18 @@
 import re
 import unicodedata
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import httpx
-import psycopg
 import pytest
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
-from testcontainers.community.postgres import PostgresContainer
 
 from tests.fakes import SETTINGS, FakeBoundary, FakeClock, as_user, email_of
 from twake_space_agent_contracts.app import create_app
 from twake_space_agent_contracts.settings import Settings
-
-SCHEMA = Path(__file__).parent.parent / "sql" / "workplace_events.sql"
 
 AS_MMAUDET = as_user(email_of("mmaudet"))
 
@@ -99,15 +94,6 @@ async def pages_of(
     raise AssertionError(f"More than ten pages: {pages}")
 
 
-@pytest.fixture(scope="session")
-def database_url() -> Iterator[str]:
-    with PostgresContainer("postgres:18-alpine", driver=None) as postgres:
-        url = postgres.get_connection_url()
-        with psycopg.connect(url) as connection:
-            connection.execute(SCHEMA.read_text())
-        yield url
-
-
 @pytest.fixture
 def boundary() -> FakeBoundary:
     return FakeBoundary()
@@ -134,12 +120,12 @@ Serve = Callable[[Settings], AbstractAsyncContextManager[AsyncClient]]
 
 
 @pytest.fixture
-def serve(database_url: str, boundary: FakeBoundary, clock: FakeClock) -> Serve:
+def serve(boundary: FakeBoundary, clock: FakeClock) -> Serve:
     """Starts the service with the given settings, what it reaches over HTTP faked."""
 
     def start(settings: Settings) -> AbstractAsyncContextManager[AsyncClient]:
         http = httpx.AsyncClient(transport=httpx.MockTransport(boundary.handle))
-        return serving(create_app(database_url, settings, http=http, clock=clock))
+        return serving(create_app(settings, http=http, clock=clock))
 
     return start
 

@@ -39,13 +39,13 @@ def operation_ids(document: dict[str, Any]) -> set[str]:
 
 
 @pytest.fixture
-def environment(database_url: str, monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    """The environment the image reads, without PUBLISHED_APPS nor any setting of Chat, Mail,
-    Drive or Tasks."""
-    monkeypatch.setenv("DATABASE_URL", database_url)
+def environment(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """The environment the image reads, without a database, which nothing it serves reads, nor
+    PUBLISHED_APPS, nor any setting of Chat, Mail, Drive or Tasks."""
     monkeypatch.setenv("OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("CALENDAR_URL", SETTINGS.calendar_url)
     for name in (
+        "DATABASE_URL",
         "PUBLISHED_APPS",
         *CHAT_SETTINGS,
         "MATRIX_MAIL_DOMAIN",
