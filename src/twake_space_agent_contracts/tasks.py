@@ -77,6 +77,7 @@ class TaskSummary(BaseModel):
     task_id: str
     key: str = Field(description="How people call the task, such as WEB-12: not an id to pass.")
     parent_id: str | None = Field(description="The task this one is a subtask of.")
+    section_id: str | None = Field(description="Its section on the board; null outside sections.")
     state: Literal["open", "completed", "canceled"]
     priority: int | None = Field(description="From 1, the most urgent, to 4.")
     due_date: date | None
@@ -110,6 +111,7 @@ def task_summary(item: Any, *, board_id: str, board_name: str, mine: bool | None
         task_id=item["id"],
         key=item["key"],
         parent_id=item["parentId"],
+        section_id=item["sectionId"],
         state="canceled" if item["canceledAt"] else "completed" if item["completedAt"] else "open",
         priority=item["priority"],
         due_date=item["dueDate"],
