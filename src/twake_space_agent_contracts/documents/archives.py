@@ -41,6 +41,9 @@ Events = Iterator[tuple[str, Element]]
 _END = b"PK\x05\x06"
 _END_SIZE = 22
 _LONGEST_COMMENT = 65_535
+# What locates the ZIP64 record of a zip's directory, right before the record that ends the zip
+_ZIP64_LOCATOR = b"PK\x06\x07"
+_ZIP64_LOCATOR_SIZE = 20
 # How a compound file starts, and the name of the stream where Office keeps a document it encrypts
 _COMPOUND_FILE = bytes.fromhex("d0cf11e0a1b11ae1")
 _ENCRYPTED_PACKAGE = "EncryptedPackage".encode("utf-16-le")
@@ -63,9 +66,15 @@ def open_zip(content: bytes) -> zipfile.ZipFile:
     """The zip, once found within what the service unpacks: as many files as its directory lists,
     and as many bytes as each says it holds, since the zip module never unpacks more of a file than
     it says. Each of those sizes is checked before any file is unpacked."""
-    listed = _directory(content)
-    if listed is not None:
-        files, size = listed
+    end = _end(content)
+    if end is not None:
+        # The zip module would take the counts of a ZIP64 record in place of those checked here:
+        # the format is for zips of more files, or bytes, than any the service reads
+        if end >= _ZIP64_LOCATOR_SIZE and content.startswith(
+            _ZIP64_LOCATOR, end - _ZIP64_LOCATOR_SIZE
+        ):
+            raise Unreadable("a zip of the ZIP64 format")
+        files, size = struct.unpack_from("<HI", content, end + 10)
         # Before the zip module reads the directory, which takes memory for each file it lists
         if files > MOST_FILES or size > LARGEST_DIRECTORY:
             raise TooLarge("the zip lists too many files")
@@ -86,9 +95,9 @@ def open_zip(content: bytes) -> zipfile.ZipFile:
     return archive
 
 
-def _directory(content: bytes) -> tuple[int, int] | None:
-    """How many files the zip's directory lists, and how many bytes it takes, as the record that
-    ends the zip says, found as the zip module finds it; None without such a record."""
+def _end(content: bytes) -> int | None:
+    """Where the record that ends the zip starts, which says how many files its directory lists and
+    how many bytes it takes, found as the zip module finds it; None without such a record."""
     end = len(content) - _END_SIZE
     if end < 0:
         return None
@@ -97,8 +106,7 @@ def _directory(content: bytes) -> tuple[int, int] | None:
         end = content.rfind(_END, max(0, len(content) - _END_SIZE - _LONGEST_COMMENT))
         if end < 0 or end + _END_SIZE > len(content):
             return None
-    files, size = struct.unpack_from("<HI", content, end + 10)
-    return files, size
+    return end
 
 
 def local(name: str) -> str:

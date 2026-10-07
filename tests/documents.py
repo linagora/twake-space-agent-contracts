@@ -277,6 +277,17 @@ def recompressed(content: bytes, name: str, method: int) -> bytes:
     return written.getvalue()
 
 
+def with_zip64_end(content: bytes) -> bytes:
+    """The zip, ended as a zip of the ZIP64 format is, for zips beyond 65,535 files or 4 GiB: by a
+    ZIP64 record of its directory, then its locator, before the usual record, here left with its
+    own counts. The zip module reads the counts of the ZIP64 record in place of the usual ones."""
+    end = len(content) - 22
+    files, size, offset = struct.unpack_from("<HII", content, end + 10)
+    record = struct.pack("<4sQ2H2L4Q", b"PK\x06\x06", 44, 45, 45, 0, 0, files, files, size, offset)
+    locator = struct.pack("<4sLQL", b"PK\x06\x07", 0, end, 1)
+    return content[:end] + record + locator + content[end:]
+
+
 def part_of(content: bytes, name: str) -> bytes:
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
         return archive.read(name)

@@ -30,6 +30,7 @@ from tests.documents import (
     read_content,
     recompressed,
     rezipped,
+    with_zip64_end,
     word,
     workbook,
 )
@@ -379,6 +380,20 @@ async def test_a_part_compressed_otherwise_than_office_compresses_is_not_unpacke
     boundary.drive.add(text_file("odd", "Odd.docx", content=content, mime=DOCX))
 
     response = await read_content(client, "odd")
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"
+
+
+async def test_a_zip_of_the_zip64_format_is_not_read(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The zip module takes the counts of its directory from its ZIP64 record, which may say more
+    # files than the usual record, the one checked before the directory is read
+    content = with_zip64_end(plans())
+    boundary.drive.add(text_file("zip64", "Zip64.docx", content=content, mime=DOCX))
+
+    response = await read_content(client, "zip64")
 
     assert response.status_code == 415, response.text
     assert response.json()["code"] == "content_not_extractable"
