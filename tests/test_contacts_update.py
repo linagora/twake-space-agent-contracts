@@ -393,3 +393,39 @@ async def test_a_contact_that_would_be_larger_than_contacts_takes_is_left_as_it_
     assert response.status_code == 413
     assert response.json()["code"] == "contact_too_large"
     assert boundary.contacts.writes == []
+
+
+async def test_the_preview_of_a_change_of_all_a_contact_holds_fits_what_the_harness_shows(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Each field as long as a read gives it, changed to as long as the contract takes, in
+    # characters of four bytes
+    wide, other = "\U0001f600", "\U0001f601"
+    singles = ("nickname", "org", "role")
+    card = jcard(
+        "full",
+        wide * 300,
+        ["n", {}, "text", [wide * 300, wide * 300, "", "", ""]],
+        *([name, {}, "text", wide * 300] for name in singles),
+        *(["email", {}, "text", f"{'a' * 300}{index}@example.com"] for index in range(25)),
+        *(["tel", {}, "text", f"+33 6 12 34 56 {index:02d}"] for index in range(25)),
+        *(["adr", {}, "text", ["", "", *[wide * 300] * 5]] for _ in range(25)),
+        ["note", {}, "text", wide * 20_000],
+        ["bday", {}, "text", wide * 300],
+    )
+    boundary.contacts.owners(FAMILY, display_name=wide * 300).cards["full.vcf"] = card
+    body = {
+        name: other * 200
+        for name in ("name", "given_name", "family_name", "nickname", "organization", "title")
+    } | {
+        "emails": [{"address": f"{'b' * 200}{index}@example.org"} for index in range(10)],
+        "phones": [{"number": f"+33 7 12 34 56 {index:02d}"} for index in range(10)],
+        "addresses": [{part: other * 200 for part in ("street", "locality", "country")}] * 5,
+        "note": other * 10_000,
+        "birthday": "1980-05-17",
+    }
+
+    response = await update(client, f"{OWN}~{FAMILY}", "full", asking_preview("en"), **body)
+
+    summary, _ = preview_of(response)
+    assert summary.endswith("\nTwake Contacts tells nobody.")
