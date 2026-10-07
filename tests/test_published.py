@@ -1,5 +1,6 @@
 """The applications the service publishes, as the operator sets them in PUBLISHED_APPS."""
 
+import re
 from dataclasses import replace
 from typing import Any
 
@@ -12,7 +13,8 @@ from twake_space_agent_contracts.app import create_app_from_env
 from twake_space_agent_contracts.settings import Settings
 
 PERIOD = {"start": "2026-10-13T17:00:00+02:00", "end": "2026-10-13T18:00:00+02:00"}
-EVENTS_PATHS = {"/contracts/v1/events", "/contracts/v1/events/{event_id}"}
+# A parameter of a path, as the document writes it, such as {event_id}
+PATH_PARAMETER = re.compile(r"\{[^}]+\}")
 CHAT_SETTINGS = {
     "CHAT_URL": "https://gateway.test/synapse/",
     "CHAT_GATEWAY_KEY": CHAT_GATEWAY_KEY,
@@ -39,6 +41,16 @@ def operation_ids(document: dict[str, Any]) -> set[str]:
     return {operation["operationId"] for _, _, operation in operations_of(document)}
 
 
+def operations_in(document: dict[str, Any], domain: str) -> set[tuple[str, str]]:
+    """The path and method of each operation of the application of that domain, the first segment
+    of their contract id."""
+    return {
+        (path, method)
+        for path, method, operation in operations_of(document)
+        if operation["tags"][0].split(".")[0] == domain
+    }
+
+
 @pytest.fixture
 def environment(database_url: str, monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     """The environment the image reads, without PUBLISHED_APPS nor any setting of Chat, Mail,
@@ -58,61 +70,38 @@ def environment(database_url: str, monkeypatch: pytest.MonkeyPatch) -> pytest.Mo
     return monkeypatch
 
 
-async def test_calendar_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> None:
-    without_calendar = replace(SETTINGS, published_apps=SETTINGS.published_apps - {"calendar"})
-    async with serve(without_calendar) as client:
-        document = await document_of(client)
-        unknown = await client.get("/contracts/v1/nothing", headers=AS_MMAUDET)
-        freebusy = await client.get(
-            "/contracts/v1/calendar/freebusy", params=PERIOD, headers=AS_MMAUDET
-        )
-        accept = await client.post(
-            "/contracts/v1/calendar/invitations/invitation-a/accept", headers=AS_MMAUDET
-        )
+@pytest.mark.parametrize(
+    ("domain", "served", "params"),
+    [
+        pytest.param("events", "/contracts/v1/events", {}, id="events"),
+        pytest.param("calendar", "/contracts/v1/calendar/freebusy", PERIOD, id="calendar"),
+    ],
+)
+async def test_an_application_taken_out_is_gone_until_it_is_put_back(
+    client: AsyncClient, serve: Serve, domain: str, served: str, params: dict[str, str]
+) -> None:
+    # client serves every application, as the service does once this one is put back
+    published = await document_of(client)
+    operations = operations_in(published, domain)
+    without = replace(SETTINGS, published_apps=SETTINGS.published_apps - {domain})
+    async with serve(without) as taken_out:
+        document = await document_of(taken_out)
+        unknown = await taken_out.get("/contracts/v1/nothing", headers=AS_MMAUDET)
+        gone = [
+            await taken_out.request(method, PATH_PARAMETER.sub("evt-1", path), headers=AS_MMAUDET)
+            for path, method in sorted(operations)
+        ]
+    answer = await client.get(served, params=params, headers=AS_MMAUDET)
 
-    assert not {"read_freebusy", "accept_invitation"} & operation_ids(document)
-    assert set(document["x-twake-domains"]) == SETTINGS.published_apps - {"calendar"}
+    assert (served, "get") in operations
+    assert not {path for path, _ in operations} & set(document["paths"])
+    assert set(document["x-twake-domains"]) == SETTINGS.published_apps - {domain}
     # Its paths answer exactly like paths the service never had
-    for response in (freebusy, accept):
+    for response in gone:
         assert response.status_code == 404
         assert response.json() == unknown.json()
-
-    async with serve(SETTINGS) as client:
-        document = await document_of(client)
-        freebusy = await client.get(
-            "/contracts/v1/calendar/freebusy", params=PERIOD, headers=AS_MMAUDET
-        )
-
-    assert {"read_freebusy", "accept_invitation"} <= operation_ids(document)
-    assert "calendar" in document["x-twake-domains"]
-    assert freebusy.status_code == 200, freebusy.text
-
-
-async def test_events_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> None:
-    # A deployment whose gateway no longer routes the assistant's feed: its tools would only fail
-    without_events = replace(SETTINGS, published_apps=SETTINGS.published_apps - {"events"})
-    async with serve(without_events) as client:
-        document = await document_of(client)
-        unknown = await client.get("/contracts/v1/nothing", headers=AS_MMAUDET)
-        listed = await client.get("/contracts/v1/events", headers=AS_MMAUDET)
-        read = await client.get("/contracts/v1/events/evt-1", headers=AS_MMAUDET)
-
-    assert not {"read_event", "list_events"} & operation_ids(document)
-    assert not EVENTS_PATHS & set(document["paths"])
-    assert set(document["x-twake-domains"]) == SETTINGS.published_apps - {"events"}
-    # Its paths answer exactly like paths the service never had
-    for response in (listed, read):
-        assert response.status_code == 404
-        assert response.json() == unknown.json()
-
-    async with serve(SETTINGS) as client:
-        document = await document_of(client)
-        listed = await client.get("/contracts/v1/events", headers=AS_MMAUDET)
-
-    assert {"read_event", "list_events"} <= operation_ids(document)
-    assert set(document["paths"]) >= EVENTS_PATHS
-    assert "events" in document["x-twake-domains"]
-    assert listed.status_code == 200, listed.text
+    assert domain in published["x-twake-domains"]
+    assert answer.status_code == 200, answer.text
 
 
 @pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])
