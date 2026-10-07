@@ -13,6 +13,7 @@ from twake_space_agent_contracts import (
     drive_contents,
     drive_create,
     drive_files,
+    event_create,
     events,
     freebusy,
     invitations,
@@ -81,6 +82,7 @@ def _calendar(context: Context) -> list[APIRouter]:
     return [
         freebusy.router(calendar, context.caller),
         invitations.router(context.pool, calendar, context.caller),
+        event_create.router(calendar, context.caller),
     ]
 
 
@@ -170,8 +172,10 @@ APPLICATIONS = (
             fr="voir tes créneaux libres et occupés dans tes agendas",
         ),
         write=Words(
-            en="accept the invitations you received, which tells their organizer",
-            fr="accepter les invitations que tu as reçues, ce qui prévient leur organisateur",
+            en="accept the invitations you received, which tells their organizer, and add events"
+            " to your calendar, with nobody invited",
+            fr="accepter les invitations que tu as reçues, ce qui prévient leur organisateur, et"
+            " ajouter des événements à ton agenda, sans y inviter personne",
         ),
         routers=_calendar,
     ),

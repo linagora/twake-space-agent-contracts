@@ -3,7 +3,7 @@
 import copy
 import json
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -12,12 +12,14 @@ from pydantic import BaseModel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
-from twake_space_agent_contracts.zones import zone_named
+from twake_space_agent_contracts.zones import JCAL_TIME, vtimezone, zone_named
 
 # How esn-sabre (2.4.6 and later) writes UTC times in its JSON free/busy
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
 # The properties of an event that repeats, or of one occurrence of a series
 RECURRENCE = {"rrule", "rdate", "recurrence-id"}
+# Who wrote the events the contracts add, as iCalendar asks every calendar to say
+PRODID = "-//Linagora//Twake Space agent contracts//EN"
 
 
 class BusySlot(BaseModel):
@@ -62,6 +64,17 @@ class EventTime:
     it is not converted. None for a day or a floating time."""
 
 
+@dataclass(frozen=True)
+class EventPeriod:
+    """When an event takes place, as the contracts answer it: aware times, in the zone the event
+    names or in UTC; or its first and last days, for an event of whole days."""
+
+    start: date | datetime
+    end: date | datetime
+    zone: str | None
+    """The zone the event names, UTC for times in UTC; None for whole days."""
+
+
 def _event_time(prop: list[Any] | None) -> EventTime | None:
     """A DTSTART or a DTEND in jCal, None in any form but a date or a date-time."""
     if prop is None or not isinstance(prop[3], str):
@@ -87,7 +100,8 @@ def _event_time(prop: list[Any] | None) -> EventTime | None:
 @dataclass(frozen=True)
 class CalendarEvent:
     """An event in one of the user's calendars: its href as esn-sabre writes it, without the
-    /dav of the side service, and the event in jCal, its components checked."""
+    /dav of the side service, and the event in jCal, its components checked. An event not written
+    yet, which a preview tells of, has no href."""
 
     href: str
     jcal: list[Any]
@@ -101,11 +115,30 @@ class CalendarEvent:
             (prop for vevent in self._vevents() for prop in vevent[1] if prop[0] == name), None
         )
 
+    def _text(self, name: str) -> str | None:
+        """What the event says in a text property; None without it."""
+        prop = self._prop(name)
+        return prop[3] if prop is not None and isinstance(prop[3], str) else None
+
     @property
     def title(self) -> str | None:
-        """Its title, as its organizer wrote it."""
-        prop = self._prop("summary")
-        return prop[3] if prop is not None and isinstance(prop[3], str) else None
+        """Its title, as written in it."""
+        return self._text("summary")
+
+    @property
+    def location(self) -> str | None:
+        """Where it takes place, as written in it."""
+        return self._text("location")
+
+    @property
+    def description(self) -> str | None:
+        """What it is for, as written in it."""
+        return self._text("description")
+
+    @property
+    def busy(self) -> bool:
+        """Whether it makes the user look busy, as free/busy counts it: unless it is transparent."""
+        return (self._text("transp") or "OPAQUE").upper() != "TRANSPARENT"
 
     @property
     def organizer(self) -> tuple[str | None, str | None]:
@@ -128,6 +161,22 @@ class CalendarEvent:
     @property
     def ends(self) -> EventTime | None:
         return _event_time(self._prop("dtend"))
+
+    @property
+    def period(self) -> EventPeriod:
+        """When the event takes place, as the contracts answer it. Times in any other form than
+        aware ones, floating or in a zone the IANA database lacks, are Calendar answering in an
+        unexpected form."""
+        start, end = self.starts, self.ends
+        if start is not None and end is not None:
+            first, last = start.value, end.value
+            if isinstance(first, datetime) and isinstance(last, datetime):
+                if first.tzinfo is not None and last.tzinfo is not None:
+                    return EventPeriod(first, last, start.zone)
+            elif not isinstance(first, datetime) and not isinstance(last, datetime):
+                # iCalendar ends an event of whole days on the day after its last
+                return EventPeriod(first, last - timedelta(days=1), None)
+        raise _unavailable("Calendar gave the times of the event in an unexpected form.")
 
     @property
     def recurring(self) -> bool:
@@ -157,6 +206,63 @@ class CalendarEvent:
                     prop[1]["partstat"] = "ACCEPTED"
                     invited = True
         return CalendarEvent(self.href, jcal) if invited else None
+
+
+def new_event(
+    uid: str,
+    title: str,
+    start: datetime | date,
+    end: datetime | date,
+    zone: str | None,
+    stamp: datetime,
+    *,
+    busy: bool = True,
+    location: str | None = None,
+    description: str | None = None,
+) -> list[Any]:
+    """An event in jCal that invites nobody, its times written in an IANA time zone, which it
+    describes, or else in UTC; or an event of whole days, from its first day to its last, which
+    names no time zone. Stamped when it is written. A transparent event, one that does not make the
+    user busy, is left out of free/busy."""
+    texts = [
+        [name, {}, "text", value]
+        for name, value in (("location", location), ("description", description))
+        if value is not None
+    ]
+
+    def at(name: str, moment: datetime | date) -> list[Any]:
+        if not isinstance(moment, datetime):
+            return [name, {}, "date", moment.isoformat()]
+        if zone is None:
+            return [name, {}, "date-time", moment.astimezone(UTC).strftime(JCAL_TIME) + "Z"]
+        local = moment.astimezone(ZoneInfo(zone)).strftime(JCAL_TIME)
+        return [name, {"tzid": zone}, "date-time", local]
+
+    return [
+        "vcalendar",
+        [["version", {}, "text", "2.0"], ["prodid", {}, "text", PRODID]],
+        [
+            [
+                "vevent",
+                [
+                    ["uid", {}, "text", uid],
+                    ["dtstamp", {}, "date-time", stamp.astimezone(UTC).strftime(JCAL_TIME) + "Z"],
+                    at("dtstart", start),
+                    # iCalendar ends an event of whole days on the day after its last
+                    at("dtend", end if isinstance(end, datetime) else end + timedelta(days=1)),
+                    ["summary", {}, "text", title],
+                    ["transp", {}, "text", "OPAQUE" if busy else "TRANSPARENT"],
+                    *texts,
+                ],
+                [],
+            ],
+            *(
+                [vtimezone(zone, start, end)]
+                if zone is not None and isinstance(start, datetime) and isinstance(end, datetime)
+                else []
+            ),
+        ],
+    ]
 
 
 class Calendar:
@@ -216,16 +322,13 @@ class Calendar:
             )
         return str(found[0]["_id"])
 
-    async def time_zone(self, user: User) -> ZoneInfo | None:
+    async def own_time_zone(self, user: User) -> ZoneInfo | None:
         """The user's time zone in Calendar: the one they set, else the deployment's, which
-        Calendar gives then. None when Calendar gives none the IANA database has, or fails to
-        give one: it only says in which zone to read times."""
-        try:
-            found = await self._call(
-                user, "POST", "/api/configurations", json=[{"name": "core", "keys": ["datetime"]}]
-            )
-        except Problem:
-            return None
+        Calendar gives then; None when it gives none the IANA database has. Calendar failing to
+        give one is a problem: an event to write in it waits for it."""
+        found = await self._call(
+            user, "POST", "/api/configurations", json=[{"name": "core", "keys": ["datetime"]}]
+        )
         try:
             names = [
                 setting["value"]["timeZone"]
@@ -234,9 +337,19 @@ class Calendar:
                 for setting in module["configurations"]
                 if setting["name"] == "datetime"
             ]
-        except (KeyError, TypeError):
-            return None
+        except (KeyError, TypeError) as error:
+            raise _unavailable("Calendar gave the user's settings in an unexpected form.") from (
+                error
+            )
         return zone_named(names[0]) if names else None
+
+    async def time_zone(self, user: User) -> ZoneInfo | None:
+        """The user's time zone in Calendar, as own_time_zone gives it; None as well when Calendar
+        fails to give one: it only says in which zone to read times."""
+        try:
+            return await self.own_time_zone(user)
+        except Problem:
+            return None
 
     async def busy(
         self, user: User, start: datetime, end: datetime, exclude: list[str]
@@ -268,9 +381,12 @@ class Calendar:
             raise _unavailable("Calendar gave free/busy in an unexpected form.") from error
         return sorted(slots, key=lambda slot: slot.start)
 
-    async def find_event(self, user: User, uid: str) -> CalendarEvent | None:
-        """The user's own copy of the event of that UID, from the calendars they own."""
-        user_id = await self.user_id(user)
+    async def find_event(
+        self, user: User, uid: str, user_id: str | None = None
+    ) -> CalendarEvent | None:
+        """The user's own copy of the event of that UID, from the calendars they own; their id in
+        Calendar is looked up unless given."""
+        user_id = user_id or await self.user_id(user)
         found = await self._call(
             user, "REPORT", f"/dav/calendars/{user_id}.json", json={"uid": uid}, missing_ok=True
         )
@@ -289,10 +405,29 @@ class Calendar:
             raise _unavailable("Calendar gave the event in an unexpected form.")
         return CalendarEvent(href, jcal)
 
-    async def save_event(self, user: User, event: CalendarEvent) -> None:
-        """Writes the event back in its place, and esn-sabre tells the organizer of a changed
-        participation. The side service does not forward If-Match: the write cannot be
-        conditional, so it follows the read at once."""
+    async def add_event(
+        self, user: User, uid: str, jcal: list[Any], user_id: str | None = None
+    ) -> CalendarEvent:
+        """Adds a new event to the user's default calendar, whose id esn-sabre makes the user's
+        own, under its UID, then reads it back as Calendar keeps it; their id in Calendar is
+        looked up unless given. The side service waits for esn-sabre longer than the service waits
+        for it: a write it did not confirm may have been kept all the same, which the read tells."""
+        user_id = user_id or await self.user_id(user)
+        unconfirmed: Problem | None = None
+        try:
+            await self._put(user, CalendarEvent(f"/calendars/{user_id}/{user_id}/{uid}.ics", jcal))
+        except Problem as problem:
+            # A token Calendar refuses wrote nothing
+            if problem.code != "calendar_unavailable":
+                raise
+            unconfirmed = problem
+        added = await self.find_event(user, uid, user_id)
+        if added is None:
+            raise unconfirmed or _unavailable("Calendar did not keep the event it was given.")
+        return added
+
+    async def _put(self, user: User, event: CalendarEvent) -> None:
+        """Puts the event at its href, a new one or in place of the one there."""
         await self._request(
             user,
             "PUT",
@@ -302,3 +437,9 @@ class Calendar:
             # with "[", whatever this header says
             headers={"Content-Type": "text/calendar; charset=utf-8"},
         )
+
+    async def save_event(self, user: User, event: CalendarEvent) -> None:
+        """Writes the event back in its place, and esn-sabre tells the organizer of a changed
+        participation. The side service does not forward If-Match: the write cannot be
+        conditional, so it follows the read at once."""
+        await self._put(user, event)

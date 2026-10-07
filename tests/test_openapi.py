@@ -3,6 +3,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 
 from tests.conftest import operations_of
@@ -225,6 +226,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "list_events": ["events.read.v1"],
         "read_freebusy": ["calendar.freebusy.read.v1"],
         "accept_invitation": ["calendar.invitation.accept.v1"],
+        "create_event": ["calendar.event.create.v1"],
         "list_rooms": ["chat.rooms.read.v1"],
         "read_room": ["chat.rooms.read.v1"],
         "list_room_members": ["chat.members.read.v1"],
@@ -339,13 +341,9 @@ async def test_each_published_application_is_named_in_plain_words(client: AsyncC
     assert problems == []
 
 
-async def test_mail_words_name_each_of_its_writes(client: AsyncClient) -> None:
-    # The harness asks the owner once for all the writes of an application, in its words: they must
-    # name every write of Mail, so that a merge that keeps the words of one contract fails
-    document = (await client.get("/openapi.json")).json()
-    words = document["x-twake-domains"]["mail"]["write"]
-    # What names each write of Mail, in English and in French
-    named = {
+# What names each write of an application in its words, in English and in French
+WRITES_NAMED = {
+    "mail": {
         "create_reply_draft": ("drafts", "brouillons"),
         "move_email": ("move", "déplacer"),
         "archive_email": ("archive", "archiver"),
@@ -353,12 +351,28 @@ async def test_mail_words_name_each_of_its_writes(client: AsyncClient) -> None:
         "move_emails": ("move", "déplacer"),
         "archive_emails": ("archive", "archiver"),
         "trash_emails": ("trash", "corbeille"),
-    }
+    },
+    "calendar": {
+        "accept_invitation": ("accept", "accepter"),
+        "create_event": ("add events", "ajouter des événements"),
+    },
+}
+
+
+@pytest.mark.parametrize("domain", sorted(WRITES_NAMED))
+async def test_the_words_of_an_application_name_each_of_its_writes(
+    client: AsyncClient, domain: str
+) -> None:
+    # The harness asks the owner once for all the writes of an application, in its words: they must
+    # name every write there, so that a merge that keeps the words of one contract fails
+    document = (await client.get("/openapi.json")).json()
+    words = document["x-twake-domains"][domain]["write"]
+    named = WRITES_NAMED[domain]
 
     writes = {
         operation["operationId"]
         for _, method, operation in operations_of(document)
-        if method != "get" and operation["tags"][0].startswith("mail.")
+        if method != "get" and operation["tags"][0].startswith(f"{domain}.")
     }
 
     assert writes == set(named)
@@ -426,6 +440,7 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
 
     assert declared == {
         "accept_invitation": ("post", True),
+        "create_event": ("post", True),
         "create_reply_draft": ("post", True),
         "move_email": ("post", True),
         "archive_email": ("post", True),
@@ -460,6 +475,32 @@ async def test_accepting_an_invitation_is_a_low_risk_write(client: AsyncClient) 
     accept = document["paths"]["/contracts/v1/calendar/invitations/{event_id}/accept"]["post"]
 
     assert accept["x-twake-risk"] == "low"
+
+
+async def test_creating_an_event_is_a_low_risk_write(client: AsyncClient) -> None:
+    # The user's own time, with nobody invited: once the owner allowed writing in Calendar, it runs
+    # without asking
+    document = (await client.get("/openapi.json")).json()
+
+    create = document["paths"]["/contracts/v1/calendar/events"]["post"]
+
+    assert create["x-twake-risk"] == "low"
+
+
+async def test_the_body_of_a_new_event_is_whole_and_closed(client: AsyncClient) -> None:
+    # The model gets the body as the document writes it: whole, taking these fields and no other,
+    # so that no attendee, repetition or alarm ever reaches Calendar
+    document = (await client.get("/openapi.json")).json()
+
+    create = document["paths"]["/contracts/v1/calendar/events"]["post"]
+    schema = create["requestBody"]["content"]["application/json"]["schema"]
+
+    assert "$ref" not in json.dumps(schema)
+    assert sorted(schema["properties"]) == sorted(
+        ["title", "start", "end", "time_zone", "busy", "location", "description"]
+    )
+    assert sorted(schema["required"]) == ["end", "start", "title"]
+    assert schema["additionalProperties"] is False
 
 
 async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:

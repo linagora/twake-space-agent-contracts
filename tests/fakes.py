@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import jwt
@@ -140,13 +140,30 @@ def uids_of(jcal: list[Any]) -> set[str]:
     return {prop[3] for component in jcal[2] for prop in component[1] if prop[0] == "uid"}
 
 
+def is_calendar_object(jcal: list[Any]) -> bool:
+    """Whether esn-sabre would store this jCal, as iCalendar requires: a calendar with its version
+    and producer, holding events that each have a UID, a time stamp and a start."""
+
+    def names(component: list[Any]) -> set[str]:
+        return {prop[0] for prop in component[1]}
+
+    vevents = [component for component in jcal[2] if component[0] == "vevent"]
+    return (
+        jcal[0] == "vcalendar"
+        and {"version", "prodid"} <= names(jcal)
+        and bool(vevents)
+        and all({"uid", "dtstamp", "dtstart"} <= names(vevent) for vevent in vevents)
+    )
+
+
 class FakeCalendar:
     """The Calendar side service, as the contracts go through it with the bearer's token.
 
     The user lookup by email; the user's settings, of which their time zone, always given, the
     deployment's when they set none; the JSON free/busy of esn-sabre, which leaves out the events
     whose UIDs it is given, with times written as esn-sabre writes them, 20261006T150000Z; and the
-    user's own events, found by UID with esn-sabre's JSON REPORT and written back with PUT.
+    user's own events, found by UID with esn-sabre's JSON REPORT, and written back, or added to
+    their default calendar, with PUT.
     """
 
     def __init__(self) -> None:
@@ -165,6 +182,9 @@ class FakeCalendar:
         """Events by href, as esn-sabre writes it: without the /dav of the side service."""
         self.writes: list[str] = []
         """The hrefs written, in order."""
+        self.failing_writes: Literal["landed", "lost"] | None = None
+        """How a write fails, if it does: "landed", kept, but answered after the service gave up
+        waiting, as when esn-sabre is slow; "lost", refused with a 503 and not kept."""
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if self.down:
@@ -236,14 +256,27 @@ class FakeCalendar:
     def _write(self, request: httpx.Request, user: str | None) -> httpx.Response:
         href = request.url.path.removeprefix("/dav")
         stored = self.objects.get(href)
+        # A new event goes in the caller's default calendar, whose id esn-sabre makes their own
+        default_calendar = f"/calendars/{user}/{user}"
+        if stored is None and user is not None and posixpath.dirname(href) == default_calendar:
+            stored = CalendarObject(user, [])
         if stored is None or stored.owner != user:
             return httpx.Response(403)
         # esn-sabre reads jCal whenever the body starts with "[", whatever its Content-Type
         if not request.content.startswith(b"["):
             return httpx.Response(415)
-        stored.jcal = json.loads(request.content)
+        jcal = json.loads(request.content)
+        if not is_calendar_object(jcal):
+            return httpx.Response(415)
+        if self.failing_writes == "lost":
+            return httpx.Response(503)
+        created = href not in self.objects
+        stored.jcal = jcal
+        self.objects[href] = stored
         self.writes.append(href)
-        return httpx.Response(204)
+        if self.failing_writes == "landed":
+            raise httpx.ReadTimeout("Calendar answered too late", request=request)
+        return httpx.Response(201 if created else 204)
 
     def _free_busy(self, request: httpx.Request, user: str | None) -> httpx.Response:
         # esn-sabre answers JSON for this exact Accept only
