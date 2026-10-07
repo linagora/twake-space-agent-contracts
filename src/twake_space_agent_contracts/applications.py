@@ -72,6 +72,9 @@ class Application:
     """What writing covers there, in 200 characters at most; None when no contract writes."""
     routers: Callable[[Context], Sequence[APIRouter]]
     """The routers of its contracts, one per contract."""
+    events_database: bool = False
+    """Whether its contracts read the events database, which the service connects to only while
+    it publishes an application that does."""
 
     def described(self) -> Description:
         """Its entry in x-twake-domains, as the harness reads it."""
@@ -177,6 +180,7 @@ APPLICATIONS = (
         ),
         write=None,
         routers=lambda context: [events.router(context.pool, context.caller)],
+        events_database=True,
     ),
     Application(
         domain="calendar",
@@ -192,6 +196,8 @@ APPLICATIONS = (
             " ajouter des événements à ton agenda, sans y inviter personne",
         ),
         routers=_calendar,
+        # An invitation is accepted once found among the events stored for the user
+        events_database=True,
     ),
     Application(
         domain="chat",
@@ -263,19 +269,9 @@ APPLICATIONS = (
 )
 
 
-# The assistant's own feed of workplace events, which the harness reads without asking and checks
-# the invitations it brings with: published whatever PUBLISHED_APPS says
-ALWAYS_PUBLISHED = frozenset({"events"})
-
-
 def published(domains: Collection[str]) -> list[Application]:
-    """The applications of these domains and those always published, in the order they are
-    declared in."""
+    """The applications of these domains, in the order they are declared in."""
     unknown = ", ".join(sorted(set(domains) - {application.domain for application in APPLICATIONS}))
     if unknown:
         raise ValueError(f"PUBLISHED_APPS names applications the service does not have: {unknown}")
-    return [
-        application
-        for application in APPLICATIONS
-        if application.domain in domains or application.domain in ALWAYS_PUBLISHED
-    ]
+    return [application for application in APPLICATIONS if application.domain in domains]

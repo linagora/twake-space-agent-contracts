@@ -1,17 +1,32 @@
 """The applications the service publishes, as the operator sets them in PUBLISHED_APPS."""
 
+from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from typing import Any
 
+import httpx
+import psycopg
 import pytest
 from httpx import AsyncClient
+from psycopg.conninfo import make_conninfo
 
 from tests.conftest import AS_MMAUDET, Serve, operations_of, serving
-from tests.fakes import CHAT_GATEWAY_KEY, ISSUER, SETTINGS, FakeBoundary, as_drive_owner, email_of
-from twake_space_agent_contracts.app import create_app_from_env
+from tests.fakes import (
+    CHAT_GATEWAY_KEY,
+    ISSUER,
+    SETTINGS,
+    FakeBoundary,
+    FakeClock,
+    as_drive_owner,
+    email_of,
+)
+from twake_space_agent_contracts.app import create_app, create_app_from_env
 from twake_space_agent_contracts.settings import Settings
 
 PERIOD = {"start": "2026-10-13T17:00:00+02:00", "end": "2026-10-13T18:00:00+02:00"}
+EVENTS_PATHS = {"/contracts/v1/events", "/contracts/v1/events/{event_id}"}
+# The name the service under test gives its connections to the events database
+SERVICE_CONNECTIONS = "agent-contracts-under-test"
 CHAT_SETTINGS = {
     "CHAT_URL": "https://gateway.test/synapse/",
     "CHAT_GATEWAY_KEY": CHAT_GATEWAY_KEY,
@@ -36,6 +51,19 @@ async def document_of(client: AsyncClient) -> dict[str, Any]:
 
 def operation_ids(document: dict[str, Any]) -> set[str]:
     return {operation["operationId"] for _, _, operation in operations_of(document)}
+
+
+async def connections_named(database_url: str, application_name: str) -> int:
+    """How many connections the database holds that give that application name."""
+    async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        cursor = await connection.execute(
+            "SELECT count(*) FROM pg_stat_activity WHERE application_name = %s",
+            (application_name,),
+        )
+        row = await cursor.fetchone()
+    assert row is not None
+    count: int = row[0]
+    return count
 
 
 @pytest.fixture
@@ -87,28 +115,75 @@ async def test_calendar_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> 
     assert freebusy.status_code == 200, freebusy.text
 
 
-async def test_events_stay_published_whatever_the_setting_says(serve: Serve) -> None:
-    # The harness reads the assistant's own feed without asking, and checks invitations with it
-    calendar_only = replace(SETTINGS, published_apps=frozenset({"calendar"}))
-    async with serve(calendar_only) as client:
+async def test_events_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> None:
+    # A deployment whose gateway no longer routes the assistant's feed: its tools would only fail
+    without_events = replace(SETTINGS, published_apps=SETTINGS.published_apps - {"events"})
+    async with serve(without_events) as client:
         document = await document_of(client)
-        events = await client.get("/contracts/v1/events", headers=AS_MMAUDET)
+        unknown = await client.get("/contracts/v1/nothing", headers=AS_MMAUDET)
+        listed = await client.get("/contracts/v1/events", headers=AS_MMAUDET)
+        read = await client.get("/contracts/v1/events/evt-1", headers=AS_MMAUDET)
 
-    assert {"read_event", "list_events", "read_freebusy"} <= operation_ids(document)
-    assert set(document["x-twake-domains"]) == {"events", "calendar"}
-    assert events.status_code == 200, events.text
+    assert not {"read_event", "list_events"} & operation_ids(document)
+    assert not EVENTS_PATHS & set(document["paths"])
+    assert set(document["x-twake-domains"]) == SETTINGS.published_apps - {"events"}
+    # Its paths answer exactly like paths the service never had
+    for response in (listed, read):
+        assert response.status_code == 404
+        assert response.json() == unknown.json()
+
+    async with serve(SETTINGS) as client:
+        document = await document_of(client)
+        listed = await client.get("/contracts/v1/events", headers=AS_MMAUDET)
+
+    assert {"read_event", "list_events"} <= operation_ids(document)
+    assert set(document["paths"]) >= EVENTS_PATHS
+    assert "events" in document["x-twake-domains"]
+    assert listed.status_code == 200, listed.text
+
+
+async def test_the_events_database_is_reached_only_while_an_application_reading_it_is_published(
+    database_url: str, boundary: FakeBoundary, clock: FakeClock
+) -> None:
+    # events and calendar read it: a service that publishes neither has no use for it
+    named = make_conninfo(database_url, application_name=SERVICE_CONNECTIONS)
+
+    def start(*domains: str) -> AbstractAsyncContextManager[AsyncClient]:
+        settings = replace(SETTINGS, published_apps=frozenset(domains))
+        http = httpx.AsyncClient(transport=httpx.MockTransport(boundary.handle))
+        return serving(create_app(named, settings, http=http, clock=clock))
+
+    async with start("contacts") as client:
+        await document_of(client)
+        unread = await connections_named(database_url, SERVICE_CONNECTIONS)
+
+    async with start("calendar") as client:
+        accept = await client.post(
+            "/contracts/v1/calendar/invitations/evt-1/accept", headers=AS_MMAUDET
+        )
+        read = await connections_named(database_url, SERVICE_CONNECTIONS)
+
+    assert unread == 0
+    # Without events, Calendar still looks the invitation up among the stored events
+    assert accept.status_code == 404, accept.text
+    assert accept.json()["code"] == "invitation_not_found"
+    assert read > 0
 
 
 @pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])
 async def test_without_applications_set_events_and_calendar_are_published(
-    environment: pytest.MonkeyPatch, value: str | None
+    environment: pytest.MonkeyPatch, serve: Serve, value: str | None
 ) -> None:
     # What the service published before the setting existed; a chart may render it empty
     if value is not None:
         environment.setenv("PUBLISHED_APPS", value)
 
-    async with serving(create_app_from_env()) as client:
+    async with serve(Settings.from_env()) as client:
         document = await document_of(client)
+        events = await client.get("/contracts/v1/events", headers=AS_MMAUDET)
+        freebusy = await client.get(
+            "/contracts/v1/calendar/freebusy", params=PERIOD, headers=AS_MMAUDET
+        )
 
     assert operation_ids(document) == {
         "read_event",
@@ -118,6 +193,8 @@ async def test_without_applications_set_events_and_calendar_are_published(
         "create_event",
     }
     assert set(document["x-twake-domains"]) == {"events", "calendar"}
+    assert events.status_code == 200, events.text
+    assert freebusy.status_code == 200, freebusy.text
 
 
 async def test_the_setting_lists_the_applications_by_their_domain(
@@ -199,7 +276,7 @@ async def test_chat_published_with_its_settings_is_served(
         document = await document_of(client)
         rooms = await client.get("/contracts/v1/chat/rooms", headers=AS_MMAUDET)
 
-    assert set(document["x-twake-domains"]) == {"events", "chat"}
+    assert set(document["x-twake-domains"]) == {"chat"}
     assert rooms.status_code == 200, rooms.text
 
 
@@ -274,7 +351,7 @@ async def test_drive_published_with_the_domain_of_its_instances_is_served(
         document = await document_of(client)
         items = await client.get("/contracts/v1/drive/folders/root/items", headers=as_drive_owner())
 
-    assert set(document["x-twake-domains"]) == {"events", "drive"}
+    assert set(document["x-twake-domains"]) == {"drive"}
     assert items.status_code == 200, items.text
 
 
