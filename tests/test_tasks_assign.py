@@ -89,7 +89,23 @@ async def test_an_email_that_names_no_member_once_lists_those_to_choose_from(
     assert problem["code"] == "assignee_not_member"
     assert "bob@twake.test" in problem["detail"]
     assert problem["members"] == ["alice@twake.test", "mmaudet@twake.test"]
+    assert problem["more_members"] == 0
     assert boundary.tasks.writes == []
+
+
+async def test_the_members_to_choose_from_are_twenty_at_most(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # A project has as many members as its space: the problem lists twenty, then counts the others
+    members = [tasks_member(f"member{number:02}") for number in range(25)]
+    task = boundary.tasks.task(website(boundary, MMAUDET, *members), "Fix the login page")
+
+    response = await assign(client, task, assignees=["alice@twake.test"])
+
+    assert response.status_code == 409
+    problem = response.json()
+    assert problem["members"] == [f"member{number:02}@twake.test" for number in range(20)]
+    assert problem["more_members"] == 6
 
 
 async def test_an_email_counts_once_whatever_its_case(

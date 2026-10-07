@@ -63,6 +63,9 @@ MOST_ASSIGNEES = 50
 """The most people Tasks assigns a task to."""
 LONGEST_EMAIL = 254
 """The longest email address, as SMTP takes one."""
+LISTED_MEMBERS = 20
+"""How many of the members of a board a problem lists, at most: a project has as many members as
+the space it is the project of."""
 SHOWN_SUBTASKS = 10
 """How many of the subtasks that go with a deleted task its preview names, at most."""
 MOST_PEOPLE = 10
@@ -255,9 +258,13 @@ def _members(board: BoardContent, emails: list[str]) -> list[str]:
             code="assignee_not_member",
             title="Assignee not a member",
             detail=f"No member of board {board.board_id}, or more than one, joined with"
-            f" {', '.join(unknown)}: a task is assigned to members of its board alone, which"
-            " members lists by the emails assign_task takes.",
-            extensions={"members": members},
+            f" {', '.join(unknown)}: a task is assigned to members of its board alone. members"
+            f" lists the first {LISTED_MEMBERS} of the emails assign_task takes, in alphabetical"
+            " order, and more_members how many others it takes.",
+            extensions={
+                "members": members[:LISTED_MEMBERS],
+                "more_members": max(0, len(members) - LISTED_MEMBERS),
+            },
         )
     return chosen
 
