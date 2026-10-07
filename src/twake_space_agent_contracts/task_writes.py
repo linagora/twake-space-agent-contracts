@@ -198,7 +198,7 @@ class DeletedTask(WrittenTask):
 
 def _written(board: BoardContent, task: BoardTask, email: str) -> WrittenTask:
     """The task as the board shows it to the user of that email."""
-    me = board.member_named(email)
+    me = board.member_id(email)
     section = task.section
     return WrittenTask(
         **task.summary.model_dump(exclude={"untrusted", "assigned_to_me"}),
@@ -224,7 +224,7 @@ async def _editable(tasks: Tasks, user: User, board_id: str) -> BoardContent:
     if board is None:
         raise board_not_found(board_id)
     # Tasks does not say who the user is: the member who joined with their email alone tells
-    if board.member_named(user.email) is None:
+    if board.member_id(user.email) is None:
         raise owner_not_member("nothing is written on it")
     if board.role not in ("editor", "admin"):
         raise forbidden_role(board_id)
@@ -233,20 +233,20 @@ async def _editable(tasks: Tasks, user: User, board_id: str) -> BoardContent:
     return board
 
 
-def _members(board: BoardContent, emails: list[str]) -> list[str]:
+def _assignee_ids(board: BoardContent, emails: list[str]) -> list[str]:
     """The user ids of the members who joined with these emails, whatever their case, in their
     order and each once: a task is assigned to members of its board alone."""
     chosen: list[str] = []
     unknown: list[str] = []
     for email in dict.fromkeys(email.strip().lower() for email in emails):
-        member = board.member_named(email)
+        member = board.member_id(email)
         if member is None:
             unknown.append(email)
         elif member not in chosen:
             chosen.append(member)
     if unknown:
         # Tasks does not say who a member is but by the email they joined with: one alone tells
-        members = sorted({email for _, email in board.members if board.member_named(email)})
+        members = sorted({email for _, email in board.members if board.member_id(email)})
         raise Problem(
             status=409,
             code="assignee_not_member",
@@ -470,7 +470,7 @@ def _due(on: date | str | None, at: str | None, zone: str | None, language: Lang
     return f"{shown} ({one_line(zone)})" if zone else shown
 
 
-def members_named(emails: list[str], language: Language) -> str:
+def shown_emails(emails: list[str], language: Language) -> str:
     """Members by the email they joined with, as a preview names them: the first ones, then how
     many others."""
     return people([(None, email) for email in emails], len(emails), language)
@@ -674,7 +674,7 @@ def _assigning(board: BoardContent, task: BoardTask, chosen: list[str], language
         # By email, whatever order the call gave them in
         emails = sorted(joined[user_id] for user_id in user_ids if user_id in joined)
         if emails:
-            lines.append(line.format(people=members_named(emails, language)))
+            lines.append(line.format(people=shown_emails(emails, language)))
     added = any(user_id not in now for user_id in chosen)
     lines.append(words.told_assigned if added else words.told)
     return "\n".join(lines)
@@ -970,7 +970,7 @@ def _assign(tasks: Tasks, caller: CallerDependency) -> APIRouter:
                 )
         board = await _editable(tasks, user, board_id)
         task = _shown(board, task_id)
-        chosen = _members(board, assignment.assignees)
+        chosen = _assignee_ids(board, assignment.assignees)
         # What the owner allows: the task as it is, whom it is assigned to, and whom it would be
         digest = digest_of(board_id, _acted_on(task), sorted(task.assignee_ids), sorted(chosen))
         if preview.asked:
@@ -979,7 +979,7 @@ def _assign(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         # Nothing to write, and nobody to tell
         if set(chosen) == task.assignee_ids:
             return _written(board, task, user.email)
-        await tasks.assign(user, board_id, task_id, chosen)
+        await tasks.assign_task(user, board_id, task_id, chosen)
         return await _now(tasks, user, board_id, task_id)
 
     return routes

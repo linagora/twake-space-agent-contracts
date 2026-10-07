@@ -26,7 +26,7 @@ from twake_space_agent_contracts.task_writes import (
     EXAMPLE_IDS,
     BoardId,
     TaskId,
-    members_named,
+    shown_emails,
     task_names,
 )
 from twake_space_agent_contracts.tasks import (
@@ -124,7 +124,7 @@ def _around(
     if mentioned:
         one, several = words.mentions
         mentions = one if len(mentioned) == 1 else several
-        tail = mentions.format(people=members_named(mentioned, language)) + "\n" + tail
+        tail = mentions.format(people=shown_emails(mentioned, language)) + "\n" + tail
     return head, tail
 
 
@@ -213,7 +213,7 @@ def router(tasks: Tasks, caller: CallerDependency) -> APIRouter:
             told = _commenting(board, task, body, mentioned, preview.language)
             return preview.answer(told, digest)
         preview.check(digest)
-        comment_id, created_at = await tasks.comment(user, board_id, task_id, body)
+        comment_id, created_at = await tasks.comment_on_task(user, board_id, task_id, body)
         return AddedComment(
             board_id=board_id,
             task_id=task_id,

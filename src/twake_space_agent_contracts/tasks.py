@@ -251,7 +251,7 @@ class BoardContent:
     tasks: dict[str, Any]
     """Its tasks as Tasks gives them, by id."""
 
-    def member_named(self, email: str) -> str | None:
+    def member_id(self, email: str) -> str | None:
         """The user id of the one member who joined with that email; None if no member did, or
         several did."""
         found = [user_id for user_id, joined in self.members if joined == email]
@@ -469,7 +469,7 @@ class Tasks:
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Tasks gave the agenda in an unexpected form.") from error
 
-    async def assigned(self, user: User) -> list[TaskSummary]:
+    async def my_tasks(self, user: User) -> list[TaskSummary]:
         """The open tasks assigned to the user, dated ones first."""
         return self._tasks(await self._get(user, "/api/my-tasks"), lambda task: True)
 
@@ -546,7 +546,9 @@ class Tasks:
         instead."""
         await self._write(user, "POST", board_id, task_id, {"state": "completed"}, "/complete")
 
-    async def assign(self, user: User, board_id: str, task_id: str, user_ids: list[str]) -> None:
+    async def assign_task(
+        self, user: User, board_id: str, task_id: str, user_ids: list[str]
+    ) -> None:
         """Assigns the task to these members of the board, by their user ids, and to no other."""
         await self._write(user, "PUT", board_id, task_id, {"userIds": user_ids}, "/assignees")
 
@@ -560,7 +562,7 @@ class Tasks:
         a recurring one to its next due date instead."""
         await self._write(user, "POST", board_id, task_id, {"sectionId": section_id}, "/move")
 
-    async def comment(
+    async def comment_on_task(
         self, user: User, board_id: str, task_id: str, body: str
     ) -> tuple[str, datetime]:
         """Adds a comment of the user to the task: its id, and when Tasks took it."""
@@ -570,7 +572,7 @@ class Tasks:
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Tasks gave the new comment in an unexpected form.") from error
 
-    async def comments(self, user: User, board_id: str, task_id: str) -> list[Comment] | None:
+    async def task_comments(self, user: User, board_id: str, task_id: str) -> list[Comment] | None:
         """The task's comments, oldest first; None if the board has no such task."""
         path = f"/api/boards/{board_id}/tasks/{task_id}/comments"
         found = await self._get(user, path, missing_ok=True)

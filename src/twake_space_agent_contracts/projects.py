@@ -71,8 +71,8 @@ class _Words:
     """What a preview of a new project tells the owner, in one language."""
 
     create: str
-    same_name: tuple[str, str]
-    """For one project of that name already, and for several."""
+    namesakes_already: tuple[str, str]
+    """That the user has one project of that name already, or several."""
     member: str
 
 
@@ -80,7 +80,7 @@ _WORDS: dict[Language, _Words] = {
     "fr": _Words(
         create="Créer le projet {name} dans Twake Tasks, avec un premier tableau du même nom, dont"
         " les clés des tâches commencent par {prefix}",
-        same_name=(
+        namesakes_already=(
             "Tu es déjà membre d'un projet de ce nom : celui-ci en sera un autre.",
             "Tu es déjà membre de {count} projets de ce nom : celui-ci en sera un autre.",
         ),
@@ -89,7 +89,7 @@ _WORDS: dict[Language, _Words] = {
     "en": _Words(
         create="Create the project {name} in Twake Tasks, with a first board of the same name,"
         " whose task keys start with {prefix}",
-        same_name=(
+        namesakes_already=(
             "You are a member of a project of that name already: this one is another.",
             "You are a member of {count} projects of that name already: this one is another.",
         ),
@@ -103,16 +103,16 @@ def _named_so(project: Project, name: str) -> bool:
     return " ".join(project.untrusted.name.split()).casefold() == " ".join(name.split()).casefold()
 
 
-def _creating(name: str, prefix: str, same_name: int, language: Language) -> str:
+def _creating(name: str, prefix: str, namesake_count: int, language: Language) -> str:
     """What creating the project does, as the owner reads it: its name, its board's, the keys of
     its tasks, and that the user has projects of that name already, if they do."""
     words = _WORDS[language]
     lines = [
         words.create.format(name=quoted(one_line(name, LONGEST_NAME), language), prefix=prefix)
     ]
-    if same_name:
-        one, several = words.same_name
-        lines.append(one if same_name == 1 else several.format(count=same_name))
+    if namesake_count:
+        one, several = words.namesakes_already
+        lines.append(one if namesake_count == 1 else several.format(count=namesake_count))
     lines.append(words.member)
     return "\n".join(lines)
 
@@ -178,13 +178,13 @@ def _create(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         if new.key_prefix == INBOX:
             raise key_prefix_taken(INBOX)
         # Tasks takes a project of a name the user has already as another one
-        same_name = sorted(
+        namesake_ids = sorted(
             found.project_id for found in await tasks.projects(user) if _named_so(found, name)
         )
         # What the owner allows: a project of that name, beside those they have of it already
-        digest = digest_of(" ".join(name.split()).casefold(), new.key_prefix, same_name)
+        digest = digest_of(" ".join(name.split()).casefold(), new.key_prefix, namesake_ids)
         if preview.asked:
-            summary = _creating(name, new.key_prefix, len(same_name), preview.language)
+            summary = _creating(name, new.key_prefix, len(namesake_ids), preview.language)
             return preview.answer(summary, digest)
         preview.check(digest)
         project, board = await tasks.create_project(user, name, new.key_prefix)
