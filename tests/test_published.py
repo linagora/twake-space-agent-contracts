@@ -7,12 +7,13 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET, Serve, operations_of, serving
-from tests.fakes import ISSUER, SETTINGS, FakeBoundary, email_of
+from tests.fakes import ISSUER, SETTINGS, FakeBoundary, as_drive_owner, email_of
 from twake_space_agent_contracts.app import create_app_from_env
 from twake_space_agent_contracts.settings import Settings
 
 PERIOD = {"start": "2026-10-13T17:00:00+02:00", "end": "2026-10-13T18:00:00+02:00"}
 CHAT_SETTINGS = {"CHAT_URL": "https://gateway.test/synapse/", "MATRIX_SERVER_NAME": "twake.test"}
+DRIVE_SETTINGS = ("DRIVE_INSTANCE_DOMAIN", "DRIVE_SCHEME", "DRIVE_PORT")
 
 
 async def document_of(client: AsyncClient) -> dict[str, Any]:
@@ -26,12 +27,18 @@ def operation_ids(document: dict[str, Any]) -> set[str]:
 
 @pytest.fixture
 def environment(database_url: str, monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    """The environment the image reads, without PUBLISHED_APPS nor any setting of Chat or
-    Mail."""
+    """The environment the image reads, without PUBLISHED_APPS nor any setting of Chat, Mail or
+    Drive."""
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("CALENDAR_URL", SETTINGS.calendar_url)
-    for name in ("PUBLISHED_APPS", *CHAT_SETTINGS, "MATRIX_MAIL_DOMAIN", "MAIL_URL"):
+    for name in (
+        "PUBLISHED_APPS",
+        *CHAT_SETTINGS,
+        "MATRIX_MAIL_DOMAIN",
+        "MAIL_URL",
+        *DRIVE_SETTINGS,
+    ):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
@@ -188,3 +195,49 @@ async def test_tmail_is_needed_once_mail_is_published_only(
 
     with pytest.raises(ValueError, match="MAIL_URL"):
         create_app_from_env()
+
+
+async def test_drive_unpublished_needs_none_of_its_settings(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    # The image runs on dev before Drive goes live there
+    environment.setenv("PUBLISHED_APPS", "events,calendar")
+
+    async with serving(create_app_from_env()) as client:
+        document = await document_of(client)
+
+    assert set(document["x-twake-domains"]) == {"events", "calendar"}
+
+
+@pytest.mark.parametrize(
+    ("domain", "refusal"),
+    [
+        (None, "drive, which needs DRIVE_INSTANCE_DOMAIN$"),
+        ("169.254.169.254", "DRIVE_INSTANCE_DOMAIN is not a domain name"),
+    ],
+    ids=["missing", "an address"],
+)
+def test_drive_published_without_the_domain_of_its_instances_stops_the_service_from_starting(
+    environment: pytest.MonkeyPatch, domain: str | None, refusal: str
+) -> None:
+    environment.setenv("PUBLISHED_APPS", "events,calendar,drive")
+    if domain is not None:
+        environment.setenv("DRIVE_INSTANCE_DOMAIN", domain)
+
+    with pytest.raises(ValueError, match=refusal):
+        create_app_from_env()
+
+
+async def test_drive_published_with_the_domain_of_its_instances_is_served(
+    environment: pytest.MonkeyPatch, serve: Serve, boundary: FakeBoundary
+) -> None:
+    # Its instances are reached over HTTPS unless told otherwise
+    environment.setenv("PUBLISHED_APPS", "drive")
+    environment.setenv("DRIVE_INSTANCE_DOMAIN", "twake.test")
+
+    async with serve(Settings.from_env()) as client:
+        document = await document_of(client)
+        items = await client.get("/contracts/v1/drive/folders/root/items", headers=as_drive_owner())
+
+    assert set(document["x-twake-domains"]) == {"events", "drive"}
+    assert items.status_code == 200, items.text

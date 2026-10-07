@@ -8,11 +8,12 @@ import httpx
 from fastapi import APIRouter
 from psycopg_pool import AsyncConnectionPool
 
-from twake_space_agent_contracts import events, freebusy, invitations
+from twake_space_agent_contracts import drive_contents, drive_files, events, freebusy, invitations
 from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.chat import members, messages, rooms
 from twake_space_agent_contracts.chat.synapse import Synapse
+from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import emails, mailboxes, threads
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
@@ -104,6 +105,16 @@ def _mail(context: Context) -> list[APIRouter]:
     ]
 
 
+def _drive(context: Context) -> list[APIRouter]:
+    domain = context.settings.drive_instance_domain
+    # Required once Drive is published, and only then: the service runs before Drive goes live
+    if domain is None:
+        raise ValueError("PUBLISHED_APPS names drive, which needs DRIVE_INSTANCE_DOMAIN")
+    drive = Drive(context.settings, context.http)
+    drive_owner = drive_owner_dependency(context.caller, domain)
+    return [drive_files.router(drive, drive_owner), drive_contents.router(drive, drive_owner)]
+
+
 APPLICATIONS = (
     Application(
         domain="events",
@@ -146,6 +157,17 @@ APPLICATIONS = (
         read=Words(en="list, search and read your mail", fr="lister, chercher et lire tes mails"),
         write=None,
         routers=_mail,
+    ),
+    Application(
+        domain="drive",
+        name=Words(en="Twake Drive", fr="Twake Drive"),
+        read=Words(
+            en="list, search and read your files",
+            fr="lister, chercher et lire tes fichiers",
+        ),
+        # The words of writing come with its first write contract
+        write=None,
+        routers=_drive,
     ),
 )
 

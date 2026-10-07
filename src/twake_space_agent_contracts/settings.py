@@ -34,10 +34,19 @@ class Settings:
     mail_url: str | None = None
     """TMail, the Twake Mail backend, whose JMAP API mail goes through with the user's token:
     needed once Mail is published only."""
+    drive_instance_domain: str | None = None
+    """The domain of the users' cozy-stack instances, each one name under it, such as
+    alice.<domain>: the service sends a Drive token to no other host. Needed once Drive is
+    published, and only then."""
+    drive_scheme: str = "https"
+    """How the service reaches the users' cozy-stack instances, whose hosts the gateway gives."""
+    drive_port: int | None = None
+    """The port of those instances, when it is not the scheme's, such as a local stack's."""
 
     @classmethod
     def from_env(cls) -> "Settings":
         issuer = os.environ["OIDC_ISSUER"]
+        drive_port = os.environ.get("DRIVE_PORT")
         return cls(
             issuer=issuer,
             audience=os.environ.get("OIDC_AUDIENCE", "twake-space-agents"),
@@ -55,4 +64,7 @@ class Settings:
             matrix_server_name=os.environ.get("MATRIX_SERVER_NAME") or None,
             matrix_mail_domain=os.environ.get("MATRIX_MAIL_DOMAIN") or None,
             mail_url=os.environ.get("MAIL_URL", "").rstrip("/") or None,
+            drive_instance_domain=os.environ.get("DRIVE_INSTANCE_DOMAIN") or None,
+            drive_scheme=os.environ.get("DRIVE_SCHEME", "https"),
+            drive_port=int(drive_port) if drive_port else None,
         )
