@@ -31,6 +31,7 @@ from twake_space_agent_contracts.previews import (
     shown_size,
 )
 from twake_space_agent_contracts.problems import Problem, invalid_request
+from twake_space_agent_contracts.text import UNSEEN
 
 LARGEST = 1_048_576
 """The bytes a new file holds at most, its content encoded in UTF-8: 1 MiB."""
@@ -39,10 +40,10 @@ NAME = r"^[^./][^/]*\.(md|markdown|txt)$"
 ASCII, which the gateway checks as the service does."""
 # The extensions a name ends with, for each type of text a file is created in
 EXTENSIONS = {"text/markdown": (".md", ".markdown"), "text/plain": (".txt",)}
-# What no name holds, as no text others wrote keeps it: what a reader does not see (Unicode's Cc,
-# Cf and Cs), such as U+202E, which reverses what follows it, or U+200B, which shows nothing; and
-# the line and paragraph separators (Zl and Zp), which break a name over lines
-UNSEEN = {"Cc", "Cf", "Cs", "Zl", "Zp"}
+# What no name holds, as no text others wrote keeps it: what a reader does not see, such as U+202E,
+# which reverses what follows it, or U+200B, which shows nothing; and the line and paragraph
+# separators (Zl and Zp), which break a name over lines
+NOT_IN_NAMES = UNSEEN | {"Zl", "Zp"}
 
 
 class NewFile(BaseModel):
@@ -74,7 +75,7 @@ class NewFile(BaseModel):
 def _encoded(new: NewFile) -> bytes:
     """The content to write, once the name, whose form its pattern already holds, and the content
     are found right."""
-    if any(unicodedata.category(character) in UNSEEN for character in new.name):
+    if any(unicodedata.category(character) in NOT_IN_NAMES for character in new.name):
         raise invalid_request("name: no control, invisible or direction-changing character")
     extensions = EXTENSIONS[new.mime]
     if not new.name.endswith(extensions):

@@ -20,6 +20,7 @@ from fastapi import Depends, Header
 from fastapi.responses import JSONResponse
 
 from twake_space_agent_contracts.problems import Problem, invalid_request
+from twake_space_agent_contracts.text import UNSEEN, seen
 
 PREVIEW_HEADER = "x-twake-preview"
 DIGEST_HEADER = "x-twake-preview-digest"
@@ -40,10 +41,6 @@ shown whole when it fits, takes what the rest of its summary leaves of it."""
 # The line breaks the harness reads as such when it quotes a summary line by line
 _BREAKS = re.compile("\r\n|[\r\x85\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]")
 
-# What the harness refuses in a summary, as no text to show an owner: control characters but line
-# feeds and tabs, and format characters, which can turn text right to left or show nothing. What
-# someone else wrote also loses surrogates left alone, which no text holds.
-_UNSHOWN = {"Cc", "Cf", "Cs"}
 # The quotation marks Unicode does not class as opening or closing quotes (Pi and Pf), and what
 # passes for one of those the summaries quote with
 _QUOTES = frozenset(
@@ -115,7 +112,7 @@ def _shown(summary: str) -> str:
     return "".join(
         character
         for character in summary
-        if character in "\n\t" or unicodedata.category(character) not in _UNSHOWN
+        if character in "\n\t" or unicodedata.category(character) not in UNSEEN
     ).strip()
 
 
@@ -196,12 +193,7 @@ or the digest of the one the owner was shown."""
 def one_line(text: str | None, longest: int = LONGEST) -> str:
     """Text someone else wrote, as a summary shows it: on one line, without what a reader does not
     see, cut after `longest` characters."""
-    kept = "".join(
-        character
-        for character in text or ""
-        if character.isspace() or unicodedata.category(character) not in _UNSHOWN
-    )
-    line = " ".join(kept.split())
+    line = " ".join(seen(text or "").split())
     return line if len(line) <= longest else line[: longest - 1].rstrip() + "…"
 
 
@@ -289,7 +281,7 @@ def excerpt(text: str, budget: int, language: Language) -> str:
     kept = "".join(
         character
         for character in _BREAKS.sub("\n", text)
-        if character in "\n\t" or unicodedata.category(character) not in _UNSHOWN
+        if character in "\n\t" or unicodedata.category(character) not in UNSEEN
     ).rstrip()
     shown = "\t" + kept.replace("\n", "\n\t")
     return shown if shown_size(shown) <= budget else _cut(kept, budget, language, "\t")

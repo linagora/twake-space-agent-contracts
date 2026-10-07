@@ -6,7 +6,6 @@ mailboxes, and every call goes to the user's personal account."""
 
 import hashlib
 import re
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,6 +17,7 @@ from pydantic.alias_generators import to_camel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
+from twake_space_agent_contracts.text import seen
 
 CORE = "urn:ietf:params:jmap:core"
 MAIL = "urn:ietf:params:jmap:mail"
@@ -67,11 +67,6 @@ _MAILBOXES = ("Mailbox/get", {"ids": None, "properties": MAILBOX_PROPERTIES})
 LEFT_OUT = {"trash", "spam", "junk"}
 SPAM_ROLES = {"spam", "junk"}
 
-# What a reader does not see (Unicode's Cc, Cf and Cs): the control characters but for whitespace,
-# which is collapsed; the format characters, which are invisible and can reorder text, such as
-# bidirectional marks, zero-width spaces and tags; and surrogates left alone, which no text holds
-UNSEEN = {"Cc", "Cf", "Cs"}
-
 
 def _mail_problem(code: str, title: str, detail: str) -> Problem:
     return Problem(status=502, code=code, title=title, detail=detail)
@@ -93,20 +88,15 @@ def _email_not_found(email_id: str) -> Problem:
     )
 
 
-def _seen(text: str) -> str:
-    """The text without what a reader does not see."""
-    return "".join(c for c in text if c.isspace() or unicodedata.category(c) not in UNSEEN)
-
-
 def _line(text: str | None, longest: int = LONGEST_LINE) -> str:
     """Text other people wrote, on one line, without what a reader does not see, cut after
     `longest` characters."""
-    return " ".join(_seen(text or "").split())[:longest]
+    return " ".join(seen(text or "").split())[:longest]
 
 
 def _paragraphs(text: str) -> str:
     """Text other people wrote, without what a reader does not see, its blank runs collapsed."""
-    lines = (" ".join(line.split()) for line in _seen(text).splitlines())
+    lines = (" ".join(line.split()) for line in seen(text).splitlines())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
