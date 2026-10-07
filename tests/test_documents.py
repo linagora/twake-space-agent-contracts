@@ -1,5 +1,6 @@
 """What every reader of documents shares, whatever the document's kind."""
 
+import subprocess
 import sys
 import time
 import tracemalloc
@@ -106,3 +107,28 @@ async def test_a_reading_that_takes_more_memory_than_given_is_refused(
         await Reader().read("pdf", pdf("\n".join([" "] * 500_000)), 1_000)
 
     assert refused.value.reason == "memory"
+
+
+# The service as uvicorn starts it, then whether it may be inspected, which prctl tells
+SERVICE_STARTED = """
+import ctypes, os
+os.environ |= {
+    "DATABASE_URL": "postgresql://reader@localhost/events",
+    "OIDC_ISSUER": "https://sign-up.test/",
+    "CALENDAR_URL": "https://calendar.test",
+}
+from twake_space_agent_contracts.app import create_app_from_env
+create_app_from_env()
+print(ctypes.CDLL(None).prctl(3, 0, 0, 0, 0))
+"""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux has prctl")
+def test_the_processes_the_service_starts_cannot_inspect_it() -> None:
+    # Its reading processes run as the same user: once the service may not be dumped, none may
+    # trace it, nor read its memory or its environment, where its settings are, through /proc
+    started = subprocess.run(
+        [sys.executable, "-c", SERVICE_STARTED], capture_output=True, text=True, check=True
+    )
+
+    assert started.stdout.strip() == "0"

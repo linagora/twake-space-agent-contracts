@@ -6,6 +6,7 @@ its standard input, and writes its text, or why it has none, as JSON
 (python -m twake_space_agent_contracts.documents <kind> <budget> <seconds> <memory> <processor>)."""
 
 import asyncio
+import ctypes
 import json
 import signal
 import sys
@@ -41,6 +42,8 @@ text, as a PDF of images; its reading gave no text in the time it has; or it too
 the reading is given."""
 
 _REASONS: dict[str, Reason] = {reason: reason for reason in get_args(Reason)}
+# The option of Linux's prctl that sets whether the process may be dumped
+_SET_DUMPABLE = 4
 
 AT_ONCE = 2
 """The documents read at the same time, each in its own process, the others waiting their turn:
@@ -63,6 +66,16 @@ beyond the first 65,536."""
 ANSWER_BEYOND_TEXT = 4_096
 """The bytes a process's answer takes at most beyond its text: its JSON, and the line that says why
 its reading stopped."""
+
+
+def forbid_inspection() -> None:
+    """Keeps the processes that read documents, which run as the same user as the service, from
+    inspecting it: once the service may not be dumped, no process but root's may trace it, nor read
+    its memory or its environment, where its settings are, through /proc. Only Linux has this."""
+    if sys.platform != "linux":
+        return
+    if ctypes.CDLL(None, use_errno=True).prctl(_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "the service could not forbid its inspection")
 
 
 @dataclass(frozen=True)
