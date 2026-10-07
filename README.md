@@ -115,9 +115,10 @@ Accepts, as the user, an invitation the user received: only their own participat
 
 ### Chat, as the user
 
-Synapse, the homeserver of Twake Chat, accepts no token of LemonLDAP-NG. The service calls its client API through the gateway's outbound route (`CHAT_URL`), which adds the token of the contracts' application service, and names the user in `user_id`: the service never holds that token.
+Synapse, the homeserver of Twake Chat, accepts no token of LemonLDAP-NG. The service calls its client API through the gateway's outbound route (`CHAT_URL`), which adds the token of the contracts' application service, and names the user in `user_id`: the service never holds that token. The route admits this service alone, by its key (`CHAT_GATEWAY_KEY`), so that only this service uses the application service's token.
 
-- Chat is published once `PUBLISHED_APPS` names `chat`. The service then needs `CHAT_URL` and `MATRIX_SERVER_NAME`, and does not start without them; while Chat is not published, it needs neither.
+- Chat is published once `PUBLISHED_APPS` names `chat`. The service then needs `CHAT_URL`, `CHAT_GATEWAY_KEY` and `MATRIX_SERVER_NAME`, and does not start without them; while Chat is not published, it needs none of them.
+- The service presents its key on each call to `CHAT_URL`, in the `apikey` header, where APISIX's key-auth takes it by default, never in an address, which logs show. No call to another application carries it, and neither a log nor a problem shows it. A key the route does not admit answers `chat_refused`.
 - The user's Matrix id is `@<local part>:<MATRIX_SERVER_NAME>` for the email `<local part>@<MATRIX_MAIL_DOMAIN>`, as the harness maps its users. A user of another mail domain has no Chat account.
 - That id serves once the account lists the user's email among its addresses (`GET /_matrix/client/v3/account/3pid`), checked at the user's first call, then kept while the service runs. An account that does not list it may be someone else's: the contracts refuse it rather than guess.
 - A room the user has not joined, which they may have left, answers exactly like an unknown one: the service checks each room against those the user has joined (`GET /joined_rooms`).
@@ -450,6 +451,7 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `CALENDAR_URL` | the Calendar side service |
 | `PUBLISHED_APPS` | the applications the service publishes, by domain, comma separated: `events,calendar` when unset or empty, and `events` always (see [Applications](#applications)) |
 | `CHAT_URL` | the gateway's outbound route to Synapse, which adds the token of the contracts' application service; needed once `PUBLISHED_APPS` names `chat`, and only then |
+| `CHAT_GATEWAY_KEY` | the key the gateway's outbound route to Synapse admits, so that only this service uses the application service's token: sent in `apikey` on each call to `CHAT_URL`, and to no other application; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `MATRIX_SERVER_NAME` | the name of Chat's homeserver, which ends its users' Matrix ids; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `MATRIX_MAIL_DOMAIN` | the mail domain of its users, the server name by default |
 | `MAIL_URL` | TMail's JMAP API, under which the service calls `/jmap/session` and `/jmap`; needed once `PUBLISHED_APPS` names `mail`, and only then |
