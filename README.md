@@ -216,6 +216,7 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 - `Mailbox/get`, `Email/get` and `Identity/get` in one request, then `Email/set` creates the draft. An email outside the user's own mailboxes answers 404 `email_not_found`, like an unknown one, and a user without a Drafts mailbox gets `mailbox_not_found`.
 - `reply_to_differs` tells that the draft answers another address than the sender's. The recipients and the subject come back under `untrusted`, 100 addresses at most per header, `recipients_truncated` telling that the draft has more.
 - It is a low-risk write (`x-twake-risk: low`): nothing leaves the mailbox until the user sends the draft.
+- It tells what it would do ([Previews](#previews)): that the draft is never sent, whom it answers, ten people at most per header and how many others, its subject, the first 300 characters of its text, and that it goes to a Reply-To address rather than to the sender, when it does. The digest covers the draft as it would be created, but for its text, which is the call's own.
 
 ### `mail.email.move.v1`
 
@@ -228,8 +229,9 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 - `archive_email` takes the mailbox whose role is `archive`: without one, nothing is moved (`mailbox_not_found`), nor with several (`mailbox_ambiguous`).
 - `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam (`mailbox_forbidden`): the first four hold what the user writes and sends, `trash_email` puts emails in the trash, and TMail reports an email moved into spam to the rspamd filter that all users share, which is for `report_spam`, a later high-risk contract.
 - Neither takes an email out of spam (`email_in_spam`): TMail reports an email moved out of spam as ham to that shared filter, which is for `report_not_spam`, a later high-risk contract, not for a move. `trash_email` still can, since a move to the trash reports nothing.
-- `Mailbox/get` and `Email/get` find the user's mailboxes and those the email is in, then `Email/set` patches its `mailboxIds`: the email leaves the user's other mailboxes, while a mailbox of someone else that is shared with the user keeps it.
+- `Mailbox/get` and `Email/get` find the user's mailboxes, those the email is in, and its subject and senders, then `Email/set` patches its `mailboxIds`: the email leaves the user's other mailboxes, while a mailbox of someone else that is shared with the user keeps it.
 - Both are low-risk writes (`x-twake-risk: low`): the email can be moved back.
+- Both tell what they would do ([Previews](#previews)): which email, by its subject and its senders, goes to which mailbox. The digest covers the email, the mailboxes it is in and the one it would go to: a call made once the email moved answers `changed_since_preview`.
 
 ### `mail.email.trash.v1`
 
@@ -239,6 +241,7 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 
 - Moves the email to the mailbox whose role is `trash`, from spam too, as `archive_email` does to the archive. It never destroys the email, which `move_email` can move back.
 - Without a trash, nothing is moved (`mailbox_not_found`), nor with several (`trash_ambiguous`): `move_email` moves no email to a trash, so the user keeps a single one in Twake Mail.
+- It tells what it would do as `move_email` does ([Previews](#previews)), and that the email can be taken out of the trash.
 - A low-risk write (`x-twake-risk: low`).
 
 ### Drive, as the user
@@ -383,6 +386,8 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | Operation | The summary tells | The digest covers |
 |---|---|---|
 | `accept_invitation` | the event's title, when it takes place, in the user's time zone, and who organizes it | the event as the user would accept it |
+| `create_reply_draft` | whom the draft answers, its subject and the start of its text, never sent | the draft as it would be created, but for its text |
+| `move_email`, `archive_email`, `trash_email` | which email, by its subject and senders, goes to which mailbox | the email, where it is, and where it would go |
 
 ## Errors
 

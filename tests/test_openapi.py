@@ -388,7 +388,13 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         if "x-twake-preview" in operation
     }
 
-    assert declared == {"accept_invitation": ("post", True)}
+    assert declared == {
+        "accept_invitation": ("post", True),
+        "create_reply_draft": ("post", True),
+        "move_email": ("post", True),
+        "archive_email": ("post", True),
+        "trash_email": ("post", True),
+    }
 
 
 async def test_the_harness_alone_asks_for_a_preview(client: AsyncClient) -> None:

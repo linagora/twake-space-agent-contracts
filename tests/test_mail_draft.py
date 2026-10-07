@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient, Response
 
-from tests.conftest import AS_MMAUDET
+from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
 from tests.fakes import (
     DRAFTS,
     INBOX,
@@ -39,9 +39,11 @@ def reply_draft_of(email_id: str) -> str:
     return f"/contracts/v1/mail/emails/{email_id}/reply-draft"
 
 
-async def reply(client: AsyncClient, email_id: str, **body: Any) -> Response:
+async def reply(
+    client: AsyncClient, email_id: str, headers: dict[str, str] | None = None, **body: Any
+) -> Response:
     return await client.post(
-        reply_draft_of(email_id), json={"text": TEXT} | body, headers=AS_MMAUDET
+        reply_draft_of(email_id), json={"text": TEXT} | body, headers=AS_MMAUDET | (headers or {})
     )
 
 
@@ -352,3 +354,100 @@ async def test_a_reply_draft_is_a_low_risk_write_that_sends_nothing(client: Asyn
 
     assert operation["x-twake-risk"] == "low"
     assert "It never sends anything" in operation["description"]
+
+
+async def test_a_preview_tells_the_owner_whom_the_draft_answers_and_creates_nothing(
+    client: AsyncClient, tmail: FakeTMail
+) -> None:
+    tmail.deliver("email-1", INBOX, to=[MICHEL_MARIE, BOB], cc=[ALICE])
+
+    response = await reply(client, "email-1", asking_preview("fr"), reply_all=True)
+
+    told, _ = preview_of(response)
+    assert told == (
+        "Préparer dans tes brouillons une réponse, jamais envoyée : tu la relis et l'envoies"
+        " toi-même.\n"
+        "À : Paul Martin <paul.martin@twake.test>, Bob <bob@twake.test>\n"
+        "Cc : Alice <alice@twake.test>\n"
+        "Objet : « Re: Budget Q4 »\n"
+        "Texte : « Hello Paul, the budget suits me. Michel-Marie »"
+    )
+    assert tmail.created == []
+    assert [call.name for call in tmail.calls] == ["Mailbox/get", "Email/get", "Identity/get"]
+
+
+async def test_a_preview_says_the_draft_answers_another_address_than_the_senders(
+    client: AsyncClient, tmail: FakeTMail
+) -> None:
+    tmail.deliver("email-1", INBOX, replyTo=[MALLORY])
+
+    told, _ = preview_of(await reply(client, "email-1", asking_preview("en")))
+
+    assert told == (
+        "Prepare a reply in your drafts, never sent: you review it and send it yourself.\n"
+        "To: Mallory <mallory@elsewhere.test>\n"
+        "Subject: “Re: Budget Q4”\n"
+        "Text: “Hello Paul, the budget suits me. Michel-Marie”\n"
+        "It goes to the reply address the email gives, not to its sender."
+    )
+
+
+async def test_a_preview_of_a_long_reply_shows_its_beginning_and_counts_the_rest(
+    client: AsyncClient, tmail: FakeTMail
+) -> None:
+    others = [{"name": f"Person {n}", "email": f"person{n}@twake.test"} for n in range(1, 12)]
+    tmail.deliver("email-1", INBOX, to=[MICHEL_MARIE, *others])
+
+    told, _ = preview_of(
+        await reply(client, "email-1", asking_preview("fr"), text="a" * 400, reply_all=True)
+    )
+
+    to, text = told.splitlines()[1], told.splitlines()[3]
+    shown = ", ".join(f"Person {n} <person{n}@twake.test>" for n in range(1, 10))
+    assert to == f"À : Paul Martin <paul.martin@twake.test>, {shown} et 2 autres"
+    assert text == f"Texte : « {'a' * 299}… »"
+
+
+async def test_a_preview_refuses_what_drafting_would_refuse(
+    client: AsyncClient, tmail: FakeTMail
+) -> None:
+    boss_mailbox = StoredMailbox(
+        email_of("boss"),
+        {"name": "Boss", "parentId": None, "role": None, "totalEmails": 1, "unreadEmails": 0},
+        shared_with={MMAUDET},
+    )
+    tmail.mailboxes["mbx-boss"] = boss_mailbox
+    tmail.deliver("email-boss", "mbx-boss")
+
+    response = await reply(client, "email-boss", asking_preview("fr"))
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "email_not_found"
+    assert tmail.created == []
+
+
+async def test_the_owner_who_allowed_what_they_were_shown_gets_the_draft(
+    client: AsyncClient, tmail: FakeTMail
+) -> None:
+    tmail.deliver("email-1", INBOX)
+    _, digest = preview_of(await reply(client, "email-1", asking_preview("fr")))
+
+    response = await reply(client, "email-1", allowed_after(digest))
+
+    assert response.status_code == 201, response.text
+    assert created_draft(tmail)["to"] == [PAUL]
+
+
+async def test_a_draft_whose_place_changed_since_the_preview_is_not_made(
+    client: AsyncClient, tmail: FakeTMail
+) -> None:
+    tmail.deliver("email-1", INBOX)
+    _, digest = preview_of(await reply(client, "email-1", asking_preview("fr")))
+    # The user's Drafts mailbox is replaced before they say yes
+    tmail.mailboxes["mbx-drafts-2"] = tmail.mailboxes.pop(DRAFTS)
+
+    response = await reply(client, "email-1", allowed_after(digest))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "changed_since_preview"
+    assert tmail.created == []
