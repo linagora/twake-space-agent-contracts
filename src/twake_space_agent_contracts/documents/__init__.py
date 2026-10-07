@@ -1,8 +1,8 @@
-"""The text of the user's documents, such as Word documents, which the service reads in a process of
-its own, one per document: whatever a document crafted against its parser makes it do, such as
-take all the memory, crash or never end, happens in that process rather than in the service, which
-stops it once it takes too long. The process reads the document from its standard input, and
-writes its text, or why it has none, as JSON
+"""The text of the user's documents, such as Word documents or PDFs, which the service reads in a
+process of its own, one per document: whatever a document crafted against its parser makes it do,
+such as take all the memory, crash or never end, happens in that process rather than in the
+service, which stops it once it takes too long. The process reads the document from its standard
+input, and writes its text, or why it has none, as JSON
 (python -m twake_space_agent_contracts.documents <kind> <budget> <seconds>)."""
 
 import asyncio
