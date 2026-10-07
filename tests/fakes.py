@@ -1381,6 +1381,9 @@ class FakeTasks:
     {"error": "not_found"}, as an unknown one does. The agenda, the tasks assigned to the
     person and a search list tasks of every board they are a member of, archived and trashed
     tasks left out; a description and comments are read by the task's id on its board.
+
+    Boards are listed only as opening the web app lists them, which first sets up the person's
+    Inbox if they have none, and makes them a member of the projects they were invited to.
     """
 
     def __init__(self) -> None:
@@ -1388,6 +1391,8 @@ class FakeTasks:
         self.tasks: dict[str, TasksTask] = {}
         self.organizations: dict[str, str | None] = {}
         """The org_id of each person, by email: linagora unless set."""
+        self.invitations: dict[str, list[tuple[str, str]]] = {}
+        """By email, the projects a person was invited to, with the role offered."""
         self.down = False
         """Whether Tasks answers 503, as while it cannot check tokens."""
         self.unreachable = False
@@ -1430,9 +1435,12 @@ class FakeTasks:
         if request.method != "GET":
             return httpx.Response(404)
         if request.url.path == "/api/boards":
-            # Like opening the web app, it creates the person's Inbox and accepts their pending
-            # invitations to projects: a read never acts for the user
-            raise AssertionError("GET /api/boards acts for the user: no contract may call it")
+            self._welcome(person, subject)
+            listed = sorted(
+                (board for board in self.boards.values() if self._role(board, person)),
+                key=lambda board: (not board.inbox, board.name),
+            )
+            return httpx.Response(200, json={"boards": [self._listed(b, person) for b in listed]})
         if request.url.path == "/api/my-tasks":
             return httpx.Response(
                 200,
@@ -1447,6 +1455,25 @@ class FakeTasks:
         if request.url.path == "/api/search":
             return self._search(person, params.get("q", "").strip())
         return self._board_read(request.url.path, person)
+
+    def _welcome(self, person: TasksPerson, email: str) -> None:
+        """What opening Tasks does first: it sets up the person's Inbox if they have none, and
+        makes them a member of the projects of their organization they were invited to."""
+        if not any(board.inbox and self._role(board, person) for board in self.boards.values()):
+            inbox = TasksBoard(
+                tasks_id(f"Inbox of {email}"),
+                "Inbox",
+                "INBOX",
+                [TasksMember(person.user_id, email, "admin")],
+                project="Personal",
+                inbox=True,
+                organization=person.organization,
+            )
+            self.boards[inbox.id] = inbox
+        for project, role in self.invitations.pop(email, []):
+            for board in self.boards.values():
+                if board.project == project and board.organization == person.organization:
+                    board.members.append(TasksMember(person.user_id, email, role))
 
     def _role(self, board: TasksBoard, person: TasksPerson) -> str | None:
         # Each row belongs to an organization, or to none, and shows within it only
@@ -1562,6 +1589,26 @@ class FakeTasks:
             "name": board.project,
             "personal": board.inbox,
             "managed": board.managed,
+        }
+
+    def _listed(self, board: TasksBoard, person: TasksPerson) -> dict[str, Any]:
+        return {
+            "id": board.id,
+            "name": board.name,
+            "keyPrefix": board.key_prefix,
+            "project": self._project(board),
+            "inbox": board.inbox,
+            "role": self._role(board, person),
+            "archived": board.archived,
+            "favorite": False,
+            "openTasks": sum(
+                1
+                for task in self.tasks.values()
+                if task.board == board.id
+                and task.parent_id is None
+                and task.state == "open"
+                and not task.hidden
+            ),
         }
 
     def _board(self, board: TasksBoard, person: TasksPerson) -> dict[str, Any]:

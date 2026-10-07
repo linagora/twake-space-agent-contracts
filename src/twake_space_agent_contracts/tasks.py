@@ -62,6 +62,31 @@ def owner_not_member(consequence: str) -> Problem:
     )
 
 
+class BoardText(BaseModel):
+    """What members wrote: the names of the board and of its project."""
+
+    name: str
+    project_name: str
+
+
+class Board(BaseModel):
+    """A board of a project the user is a member of."""
+
+    board_id: str
+    key_prefix: str
+    project_id: str
+    role: str = Field(
+        description="The user's role in the project: viewer, editor or admin. A viewer only reads."
+    )
+    inbox: bool = Field(description="Whether this is the user's Inbox, their personal board.")
+    space: bool = Field(
+        description="Whether the project is a Twake Space's, whose members are the space's."
+    )
+    archived: bool
+    open_tasks: int
+    untrusted: BoardText
+
+
 class TaskText(BaseModel):
     """What members wrote: the task's title, and the names of its board and labels."""
 
@@ -246,6 +271,31 @@ class Tasks:
         if invalid is not None and response.status_code == 400:
             raise invalid
         return self._json(response, "GET", path)
+
+    async def boards(self, user: User) -> list[Board]:
+        """The boards of the projects the user is a member of: their Inbox, their favorite
+        boards, then the others by name.
+
+        As opening the Tasks web app does, this sets up the user's Inbox if they have none, and
+        makes them a member of the projects they were invited to: never a read."""
+        found = await self._get(user, "/api/boards")
+        try:
+            return [
+                Board(
+                    board_id=board["id"],
+                    key_prefix=board["keyPrefix"],
+                    project_id=board["project"]["id"],
+                    role=board["role"],
+                    inbox=board["inbox"],
+                    space=board["project"]["managed"],
+                    archived=board["archived"],
+                    open_tasks=board["openTasks"],
+                    untrusted=BoardText(name=board["name"], project_name=board["project"]["name"]),
+                )
+                for board in found["boards"]
+            ]
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Tasks gave the boards in an unexpected form.") from error
 
     def _tasks(self, found: Any, whose: Whose) -> list[TaskSummary]:
         try:

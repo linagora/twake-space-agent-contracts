@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from psycopg_pool import AsyncConnectionPool
 
 from twake_space_agent_contracts import (
+    boards,
     drive_contents,
     drive_create,
     drive_files,
@@ -136,7 +137,7 @@ def _tasks(context: Context) -> list[APIRouter]:
     if context.settings.tasks_url is None:
         raise ValueError("PUBLISHED_APPS names tasks, which needs TASKS_URL")
     tasks = Tasks(context.settings.tasks_url, context.http)
-    return [task_reads.router(tasks, context.caller)]
+    return [boards.router(tasks, context.caller), task_reads.router(tasks, context.caller)]
 
 
 APPLICATIONS = (
@@ -208,7 +209,7 @@ APPLICATIONS = (
             en="list, search and read your tasks",
             fr="lister, chercher et lire tes tâches",
         ),
-        write=None,
+        write=Words(en="open your boards", fr="ouvrir tes tableaux"),
         routers=_tasks,
     ),
 )

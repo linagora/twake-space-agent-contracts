@@ -242,6 +242,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "list_my_tasks": ["tasks.task.read.v1"],
         "search_tasks": ["tasks.task.read.v1"],
         "read_task": ["tasks.task.read.v1"],
+        "open_boards": ["tasks.board.open.v1"],
         "create_reply_draft": ["mail.draft.create.v1"],
         "create_file": ["drive.file.create.v1"],
         "move_email": ["mail.email.move.v1"],
@@ -401,6 +402,16 @@ async def test_moving_an_email_is_a_low_risk_write(client: AsyncClient) -> None:
 
     moves = ("move_email", "archive_email", "trash_email")
     assert {name: risks.get(name) for name in moves} == dict.fromkeys(moves, "low")
+
+
+async def test_opening_tasks_is_a_low_risk_write(client: AsyncClient) -> None:
+    # Opening Tasks sets up the user's own Inbox and accepts the invitations made to them: once
+    # the owner allowed writing in Tasks, it runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    opening = document["paths"]["/contracts/v1/tasks/boards/open"]["post"]
+
+    assert opening["x-twake-risk"] == "low"
 
 
 async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(
