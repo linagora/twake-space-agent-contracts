@@ -251,6 +251,9 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "move_email": ["mail.email.move.v1"],
         "archive_email": ["mail.email.move.v1"],
         "trash_email": ["mail.email.trash.v1"],
+        "move_emails": ["mail.email.move.v1"],
+        "archive_emails": ["mail.email.move.v1"],
+        "trash_emails": ["mail.email.trash.v1"],
     }
 
 
@@ -347,6 +350,9 @@ async def test_mail_words_name_each_of_its_writes(client: AsyncClient) -> None:
         "move_email": ("move", "déplacer"),
         "archive_email": ("archive", "archiver"),
         "trash_email": ("trash", "corbeille"),
+        "move_emails": ("move", "déplacer"),
+        "archive_emails": ("archive", "archiver"),
+        "trash_emails": ("trash", "corbeille"),
     }
 
     writes = {
@@ -359,6 +365,36 @@ async def test_mail_words_name_each_of_its_writes(client: AsyncClient) -> None:
     unnamed = [
         name for name, (en, fr) in named.items() if en not in words["en"] or fr not in words["fr"]
     ]
+    assert unnamed == []
+
+
+async def test_each_move_of_one_email_sends_several_to_its_batch(client: AsyncClient) -> None:
+    # Asked to trash 35 emails, the model called trash_email once per email, and the harness
+    # stopped it at its limit of tool calls per message: each move of one email tells the model
+    # to move several in one call, and the batch to call it instead of one call per email
+    document = (await client.get("/openapi.json")).json()
+    descriptions = {
+        operation["operationId"]: operation["description"]
+        for _, _, operation in operations_of(document)
+    }
+    batches = {
+        "move_email": "move_emails",
+        "archive_email": "archive_emails",
+        "trash_email": "trash_emails",
+    }
+
+    unsent = [
+        single
+        for single, batch in batches.items()
+        if f"For several emails, call {batch} once with all their ids" not in descriptions[single]
+    ]
+    unnamed = [
+        batch
+        for single, batch in batches.items()
+        if f"rather than {single} once per email" not in descriptions[batch]
+    ]
+
+    assert unsent == []
     assert unnamed == []
 
 
@@ -394,6 +430,9 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "move_email": ("post", True),
         "archive_email": ("post", True),
         "trash_email": ("post", True),
+        "move_emails": ("post", True),
+        "archive_emails": ("post", True),
+        "trash_emails": ("post", True),
         "create_task": ("post", True),
         "update_task": ("patch", True),
         "complete_task": ("post", True),
@@ -433,7 +472,8 @@ async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:
 
 
 async def test_moving_an_email_is_a_low_risk_write(client: AsyncClient) -> None:
-    # The email can be moved back: once the owner allowed writing in Mail, it runs without asking
+    # The emails can be moved back, one or several at once: once the owner allowed writing in
+    # Mail, each move runs without asking
     document = (await client.get("/openapi.json")).json()
 
     risks = {
@@ -441,7 +481,14 @@ async def test_moving_an_email_is_a_low_risk_write(client: AsyncClient) -> None:
         for _, _, operation in operations_of(document)
     }
 
-    moves = ("move_email", "archive_email", "trash_email")
+    moves = (
+        "move_email",
+        "archive_email",
+        "trash_email",
+        "move_emails",
+        "archive_emails",
+        "trash_emails",
+    )
     assert {name: risks.get(name) for name in moves} == dict.fromkeys(moves, "low")
 
 
@@ -495,6 +542,40 @@ async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: Async
         ),
     }
     assert [schema["additionalProperties"] for schema in schemas.values()] == [False, False]
+
+
+async def test_the_bodies_of_the_batched_mail_moves_are_whole_and_closed(
+    client: AsyncClient,
+) -> None:
+    # The model gets each body as the document writes it, whole, and the gateway checks each call
+    # against it: 1 to 50 email ids and nothing else, but the one mailbox of move_emails
+    document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
+
+    schemas = {
+        name: operations[name]["requestBody"]["content"]["application/json"]["schema"]
+        for name in ("move_emails", "archive_emails", "trash_emails")
+    }
+
+    assert "$ref" not in json.dumps(schemas)
+    assert {name: sorted(schema["properties"]) for name, schema in schemas.items()} == {
+        "move_emails": ["email_ids", "mailbox_id", "mailbox_name"],
+        "archive_emails": ["email_ids"],
+        "trash_emails": ["email_ids"],
+    }
+    assert [schema["additionalProperties"] for schema in schemas.values()] == [False] * 3
+    assert [schema["required"] for schema in schemas.values()] == [["email_ids"]] * 3
+    for schema in schemas.values():
+        ids = schema["properties"]["email_ids"]
+        assert (ids["type"], ids["minItems"], ids["maxItems"]) == ("array", 1, 50)
+        assert ids["items"] == {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,255}$"}
+    # As move_email's: exactly one mailbox, by its id or by its name
+    assert schemas["move_emails"]["oneOf"] == [
+        {"required": ["mailbox_id"]},
+        {"required": ["mailbox_name"]},
+    ]
 
 
 async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(

@@ -1,6 +1,7 @@
-"""mail.email.move.v1: an email of the user moved to another of their own mailboxes, or archived."""
+"""mail.email.move.v1: emails of the user moved to another of their own mailboxes, or archived,
+one at a time or several at once."""
 
-from typing import Annotated, Literal, Self
+from typing import Annotated, Self
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -9,12 +10,23 @@ from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import PydanticCustomError
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.mail import EXAMPLE_ID, EmailId, people
+from twake_space_agent_contracts.mail import EXAMPLE_ID, EmailId, Move, email_named
+from twake_space_agent_contracts.mail.batch import (
+    OTHER_ID,
+    OUTCOMES,
+    EmailIds,
+    Emails,
+    MovedEmails,
+    for_several,
+    in_one_call,
+    moved_emails,
+)
 from twake_space_agent_contracts.mail.tmail import (
     JMAP_ID,
     SPAM_ROLES,
     Mailbox,
     Moved,
+    OwnMailboxes,
     Placement,
     TMail,
 )
@@ -32,18 +44,22 @@ from twake_space_agent_contracts.problems import Problem
 # that all users share, as spam or as ham. That is for report_spam and report_not_spam, later
 # contracts of high risk, and never for a move
 SHARED_FILTER = "the spam filter that all users share"
-SPECIAL = {
-    **dict.fromkeys(
-        ("drafts", "sent", "outbox", "templates"), "it holds what the user writes and sends"
-    ),
-    "trash": "trash_email puts emails there",
-    **dict.fromkeys(
-        SPAM_ROLES,
-        f"TMail would report it as spam to {SHARED_FILTER}, which takes report_spam, a"
-        " high-risk contract not offered yet",
-    ),
-}
-"""The special mailboxes an email is not moved to, by role, and why."""
+
+
+def _special(trash: str) -> dict[str, str]:
+    """The special mailboxes an email is not moved to, by role, and why: `trash` names the
+    contract that puts emails in the trash, trash_email for one email, trash_emails for several."""
+    return {
+        **dict.fromkeys(
+            ("drafts", "sent", "outbox", "templates"), "it holds what the user writes and sends"
+        ),
+        "trash": f"{trash} puts emails there",
+        **dict.fromkeys(
+            SPAM_ROLES,
+            f"TMail would report it as spam to {SHARED_FILTER}, which takes report_spam, a"
+            " high-risk contract not offered yet",
+        ),
+    }
 
 
 class Destination(BaseModel):
@@ -85,17 +101,34 @@ class Destination(BaseModel):
             )
         return self
 
-    def mailbox(self, placement: Placement) -> Mailbox:
-        """The one of the user's own mailboxes it names."""
+    def mailbox(self, mailboxes: OwnMailboxes, trash: str) -> Mailbox:
+        """The one of the user's own mailboxes it names, unless an email is not moved there:
+        `trash` names the contract that puts emails in the trash instead."""
         match self.mailbox_id, self.mailbox_name:
             case str() as mailbox_id, None:
-                return placement.with_id(mailbox_id)
+                mailbox = mailboxes.with_id(mailbox_id)
             case None, str() as name:
-                return placement.named(name)
-        raise AssertionError("A destination names exactly one mailbox, as validated")
+                mailbox = mailboxes.named(name)
+            case _:
+                raise AssertionError("A destination names exactly one mailbox, as validated")
+        special = _special(trash)
+        if mailbox.role in special:
+            raise Problem(
+                status=409,
+                code="mailbox_forbidden",
+                title="Mailbox forbidden",
+                detail=f"An email is not moved to the {mailbox.role} mailbox: "
+                f"{special[mailbox.role]}.",
+            )
+        return mailbox
 
 
-Move = Literal["move", "archive", "trash"]
+class EmailsTo(Destination):
+    """Emails of the user, and one of their own mailboxes: exactly one of mailbox_id and
+    mailbox_name."""
+
+    email_ids: EmailIds
+
 
 # What a preview of each move tells the owner, in each language
 _MOVES: dict[Move, dict[Language, str]] = {
@@ -113,23 +146,13 @@ _MOVES: dict[Move, dict[Language, str]] = {
         "en": "Trash {email}: it goes to the folder {mailbox}, from which it can be moved back",
     },
 }
-_EMAIL: dict[Language, tuple[str, str, str]] = {
-    "fr": ("le mail {subject}", "le mail sans objet", "{email} de {senders}"),
-    "en": ("the email {subject}", "the email with no subject", "{email} from {senders}"),
-}
 
 
 def _summary(move: Move, placement: Placement, mailbox: Mailbox, language: Language) -> str:
     """What the move does, as the owner reads it: which email, by its subject and its senders,
     who wrote them, goes to which of their mailboxes."""
-    titled, untitled, sent = _EMAIL[language]
-    subject = one_line(placement.subject)
-    email = titled.format(subject=quoted(subject, language)) if subject else untitled
-    senders = people(placement.senders, len(placement.senders), language)
-    if senders:
-        email = sent.format(email=email, senders=senders)
     folder = quoted(one_line(mailbox.name), language)
-    return _MOVES[move][language].format(email=email, mailbox=folder)
+    return _MOVES[move][language].format(email=email_named(placement, language), mailbox=folder)
 
 
 async def moved(
@@ -150,17 +173,27 @@ async def moved(
     return await tmail.move(user, placement, mailbox)
 
 
+def _email_in_spam(trash: str) -> Problem:
+    """An email in spam, which a move does not take out of it, since TMail would report it as ham:
+    `trash` names the contract that can still put it in the trash, for one email or several."""
+    return Problem(
+        status=409,
+        code="email_in_spam",
+        title="Email in spam",
+        detail=f"The email is in spam: TMail would report it as not spam to {SHARED_FILTER},"
+        " which takes report_not_spam, a high-risk contract not offered yet, rather than a"
+        f" move. {trash} can still put it in the trash, which reports nothing.",
+    )
+
+
 def out_of_spam(placement: Placement) -> None:
     """Refuses to move an email out of spam, which TMail would report as ham."""
     if placement.in_spam:
-        raise Problem(
-            status=409,
-            code="email_in_spam",
-            title="Email in spam",
-            detail=f"The email is in spam: TMail would report it as not spam to {SHARED_FILTER},"
-            " which takes report_not_spam, a high-risk contract not offered yet, rather than a"
-            " move. trash_email can still put it in the trash, which reports nothing.",
-        )
+        raise _email_in_spam("trash_email")
+
+
+IN_SPAM = _email_in_spam("trash_emails")
+"""Why an email that several are moved with stays in spam."""
 
 
 def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
@@ -172,9 +205,10 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         summary="Move an email of the user to another of their mailboxes",
         description=(
             "Moves an email of the user you act for to another of their own mailboxes, out of the "
-            "others it is in. Name the mailbox by mailbox_id, its id as list_mailboxes gives it, "
-            "or by mailbox_name, its name whatever its case: a name that several of their "
-            "mailboxes have is refused, and you ask the user which one they mean. An email is not "
+            f"others it is in. {for_several('move_emails', 'move_email')} Name the mailbox by "
+            "mailbox_id, its id as list_mailboxes gives it, or by mailbox_name, its name whatever "
+            "its case: a name that several of their mailboxes have is refused, and you ask the "
+            "user which one they mean. An email is not "
             "moved to drafts, sent, outbox, templates, trash or spam: trash_email puts it in the "
             "trash. An email in spam is not taken out of it. The email can be moved back. "
             f"Example, for an email that list_emails gave with the id {EXAMPLE_ID}, to the user's "
@@ -194,15 +228,7 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
     ) -> Moved | JSONResponse:
         placement = await tmail.placement(user, email_id)
         out_of_spam(placement)
-        mailbox = destination.mailbox(placement)
-        if mailbox.role in SPECIAL:
-            raise Problem(
-                status=409,
-                code="mailbox_forbidden",
-                title="Mailbox forbidden",
-                detail=f"An email is not moved to the {mailbox.role} mailbox: "
-                f"{SPECIAL[mailbox.role]}.",
-            )
+        mailbox = destination.mailbox(placement, "trash_email")
         return await moved(tmail, user, placement, mailbox, "move", preview)
 
     @routes.post(
@@ -211,9 +237,10 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         summary="Archive an email of the user",
         description=(
             "Moves an email of the user you act for to their archive, their mailbox whose role is "
-            "archive, out of the others it is in. A user without an archive is answered "
-            "mailbox_not_found. An email in spam is not taken out of it. The email can be moved "
-            "back with move_email. Example, for an email that list_emails gave with the id "
+            "archive, out of the others it is in. "
+            f"{for_several('archive_emails', 'archive_email')} A user without an archive is "
+            "answered mailbox_not_found. An email in spam is not taken out of it. The email can be "
+            "moved back with move_email. Example, for an email that list_emails gave with the id "
             f"{EXAMPLE_ID}: email_id={EXAMPLE_ID}."
         ),
         response_model=Moved,
@@ -227,5 +254,64 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         placement = await tmail.placement(user, email_id)
         out_of_spam(placement)
         return await moved(tmail, user, placement, placement.archive(), "archive", preview)
+
+    @routes.post(
+        "/move",
+        operation_id="move_emails",
+        summary="Move several emails of the user to another of their mailboxes in one call",
+        description=(
+            "Moves several emails of the user you act for to another of their own mailboxes in "
+            "one call, each out of the others it is in: to move several emails, "
+            f"{in_one_call('move_email')}. Name the mailbox as move_email does, by mailbox_id or "
+            "by mailbox_name: a name that several of their mailboxes have is refused, and you ask "
+            "the user which one they mean. No email is moved to drafts, sent, outbox, templates, "
+            "trash or spam: trash_emails puts emails in the trash. An email in spam is not taken "
+            f"out of it, but refused with the code email_in_spam. {OUTCOMES} The emails can be "
+            "moved back. Example, for two emails that list_emails gave with the ids "
+            f"{EXAMPLE_ID} and {OTHER_ID}, to the user's mailbox named Projects: "
+            f'body={{"email_ids": ["{EXAMPLE_ID}", "{OTHER_ID}"], "mailbox_name": "Projects"}}.'
+        ),
+        response_model=MovedEmails,
+        # The emails can be moved back: the owner's consent to write in Mail covers it, as it
+        # covers moving them one at a time. It tells what it would do, for when the owner is asked.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
+    )
+    async def move_emails(
+        emails: EmailsTo, user: Annotated[User, Depends(caller)], preview: Previewing
+    ) -> MovedEmails | JSONResponse:
+        placements = await tmail.placements(user, emails.email_ids)
+        mailbox = emails.mailbox(placements, "trash_emails")
+        return await moved_emails(
+            tmail, user, placements, emails.email_ids, mailbox, "move", preview, IN_SPAM
+        )
+
+    @routes.post(
+        "/archive",
+        operation_id="archive_emails",
+        summary="Archive several emails of the user in one call",
+        description=(
+            "Moves several emails of the user you act for to their archive in one call, their "
+            "mailbox whose role is archive, each out of the others it is in: to archive several "
+            f"emails, {in_one_call('archive_email')}. A user without an archive is answered "
+            "mailbox_not_found, and no email moves. An email in spam is not taken out of it, but "
+            f"refused with the code email_in_spam. {OUTCOMES} The emails can be moved back with "
+            "move_emails. Example, for two emails that list_emails gave with the ids "
+            f"{EXAMPLE_ID} and {OTHER_ID}: "
+            f'body={{"email_ids": ["{EXAMPLE_ID}", "{OTHER_ID}"]}}.'
+        ),
+        response_model=MovedEmails,
+        # The emails can be moved back: the owner's consent to write in Mail covers it, as it
+        # covers archiving them one at a time. It tells what it would do, for when the owner is
+        # asked.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
+    )
+    async def archive_emails(
+        emails: Emails, user: Annotated[User, Depends(caller)], preview: Previewing
+    ) -> MovedEmails | JSONResponse:
+        placements = await tmail.placements(user, emails.email_ids)
+        archive = placements.archive()
+        return await moved_emails(
+            tmail, user, placements, emails.email_ids, archive, "archive", preview, IN_SPAM
+        )
 
     return routes

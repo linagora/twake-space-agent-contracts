@@ -166,7 +166,7 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 
 - The service reads the JMAP session first (`GET /jmap/session`). Its `username` must be the token's subject, whatever its case, or the contract answers `mail_account_mismatch`. Only its primary mail account (`primaryAccounts["urn:ietf:params:jmap:mail"]`) is used, the user's own: never an account delegated to the user. The account is kept 5 minutes at most per token.
 - Everything else is one `POST /jmap` per step, with the method calls the contract needs and no other: `Mailbox/get`, `Email/query`, `Email/get`, `Thread/get`, `Identity/get` and `Email/set`, never `EmailSubmission/set`: no contract sends mail. None uses James's shares capability, so that TMail keeps to the user's own mailboxes, and only the request of `Identity/get` uses the submission capability, which that method needs. The service goes to the base URL it is given, never to the URLs of the session.
-- A mailbox, an email or a conversation outside the user's own mailboxes, such as in a mailbox shared with them, answers exactly like an unknown one: 404.
+- A mailbox, an email or a conversation outside the user's own mailboxes, such as in a mailbox shared with them, answers exactly like an unknown one: 404, or, for one of several emails moved at once, `not_found`.
 - Text other people wrote comes back under `untrusted`: names and addresses, subjects, previews and bodies, without what a reader does not see, Unicode's control and format characters, invisible or bidirectional. A subject or a preview stops at 1,000 characters, a name at 200, an address at 320, and a header gives 100 addresses at most. What TMail itself tells, ids, times and flags, stays outside.
 - Reading never marks an email as read.
 - Mail is published once `PUBLISHED_APPS` names `mail`, and then needs `MAIL_URL`: the service does not start without it.
@@ -224,25 +224,40 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 |---|---|---|
 | `move_email` | `POST /contracts/v1/mail/emails/{email_id}/move` `{"mailbox_id"}` or `{"mailbox_name"}` | `{"email_id", "mailbox_id", "mailbox_name"}`, the mailbox the email is now in |
 | `archive_email` | `POST /contracts/v1/mail/emails/{email_id}/archive` | the same |
+| `move_emails` | `POST /contracts/v1/mail/emails/move` `{"email_ids", "mailbox_id"}` or `{"email_ids", "mailbox_name"}` | `{"mailbox_id", "mailbox_name", "counts", "emails"}`, the mailbox and what became of each email ([several emails at once](#several-emails-at-once)) |
+| `archive_emails` | `POST /contracts/v1/mail/emails/archive` `{"email_ids"}` | the same |
 
-- `move_email` takes the mailbox by `mailbox_id`, its id as `list_mailboxes` gives it, or by `mailbox_name`, its name whatever its case, from 1 to 200 characters: exactly one of them, as the schema of its body says, so that the gateway refuses a body that names none or both. A name that several of the user's mailboxes have is refused (`mailbox_ambiguous`) rather than guessed.
-- `archive_email` takes the mailbox whose role is `archive`: without one, nothing is moved (`mailbox_not_found`), nor with several (`mailbox_ambiguous`).
-- `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam (`mailbox_forbidden`): the first four hold what the user writes and sends, `trash_email` puts emails in the trash, and TMail reports an email moved into spam to the rspamd filter that all users share, which is for `report_spam`, a later high-risk contract.
-- Neither takes an email out of spam (`email_in_spam`): TMail reports an email moved out of spam as ham to that shared filter, which is for `report_not_spam`, a later high-risk contract, not for a move. `trash_email` still can, since a move to the trash reports nothing.
+- `move_email` and `move_emails` take the mailbox by `mailbox_id`, its id as `list_mailboxes` gives it, or by `mailbox_name`, its name whatever its case, from 1 to 200 characters: exactly one of them, as the schema of their body says, so that the gateway refuses a body that names none or both. A name that several of the user's mailboxes have is refused (`mailbox_ambiguous`) rather than guessed.
+- `archive_email` and `archive_emails` take the mailbox whose role is `archive`: without one, nothing is moved (`mailbox_not_found`), nor with several (`mailbox_ambiguous`).
+- No move takes an email to drafts, sent, outbox, templates, trash or spam (`mailbox_forbidden`): the first four hold what the user writes and sends, `trash_email` and `trash_emails` put emails in the trash, and TMail reports an email moved into spam to the rspamd filter that all users share, which is for `report_spam`, a later high-risk contract.
+- None takes an email out of spam (`email_in_spam`): TMail reports an email moved out of spam as ham to that shared filter, which is for `report_not_spam`, a later high-risk contract, not for a move. `trash_email` and `trash_emails` still can, since a move to the trash reports nothing.
 - `Mailbox/get` and `Email/get` find the user's mailboxes, those the email is in, and its subject and senders, then `Email/set` patches its `mailboxIds`: the email leaves the user's other mailboxes, while a mailbox of someone else that is shared with the user keeps it.
-- Both are low-risk writes (`x-twake-risk: low`): the email can be moved back.
-- Both tell what they would do ([Previews](#previews)): which email, by its subject and its senders, goes to which mailbox. The digest covers the email, the mailboxes it is in and the one it would go to: a call made once the email moved answers `changed_since_preview`.
+- All four are low-risk writes (`x-twake-risk: low`): the emails can be moved back.
+- `move_email` and `archive_email` tell what they would do ([Previews](#previews)): which email, by its subject and its senders, goes to which mailbox. The digest covers the email, the mailboxes it is in and the one it would go to: a call made once the email moved answers `changed_since_preview`.
 
 ### `mail.email.trash.v1`
 
 | Operation | Request | Answer |
 |---|---|---|
 | `trash_email` | `POST /contracts/v1/mail/emails/{email_id}/trash` | `{"email_id", "mailbox_id", "mailbox_name"}`, the trash |
+| `trash_emails` | `POST /contracts/v1/mail/emails/trash` `{"email_ids"}` | `{"mailbox_id", "mailbox_name", "counts", "emails"}`, the trash and what became of each email ([several emails at once](#several-emails-at-once)) |
 
-- Moves the email to the mailbox whose role is `trash`, from spam too, as `archive_email` does to the archive. It never destroys the email, which `move_email` can move back.
-- Without a trash, nothing is moved (`mailbox_not_found`), nor with several (`trash_ambiguous`): `move_email` moves no email to a trash, so the user keeps a single one in Twake Mail.
-- It tells what it would do as `move_email` does ([Previews](#previews)), and that the email can be taken out of the trash.
-- A low-risk write (`x-twake-risk: low`).
+- Moves the emails to the mailbox whose role is `trash`, from spam too, as `archive_email` and `archive_emails` do to the archive. It never destroys an email, which `move_email` or `move_emails` can move back.
+- Without a trash, nothing is moved (`mailbox_not_found`), nor with several (`trash_ambiguous`): no move takes an email to a trash, so the user keeps a single one in Twake Mail.
+- `trash_email` tells what it would do as `move_email` does ([Previews](#previews)), and that the email can be taken out of the trash.
+- Both are low-risk writes (`x-twake-risk: low`).
+
+### Several emails at once
+
+`move_emails`, `archive_emails` and `trash_emails` move up to 50 emails in one call, where the contracts for one email would take a call per email, more than the harness lets a model make in one message. The description of each contract for one email sends the model to its batch for several emails.
+
+- `email_ids` lists 1 to 50 ids, as `list_emails` or `search_emails` give them, and the body takes nothing else but the mailbox of `move_emails`. An id given twice is moved once.
+- One request reads the user's mailboxes and all the emails (`Mailbox/get` and `Email/get`), then one `Email/set` moves those that have to: TMail takes 500 objects in each by default (`get.max.size` and `set.max.size` in its `jmap.properties`).
+- Each email keeps the rules of the contracts for one email: only the user's own mailboxes, a mailbox shared with them keeping its copy, never destroyed, and out of spam to the trash only.
+- What concerns all the emails refuses the whole call, and no email moves: a body the schema refuses, or a mailbox not found, ambiguous or forbidden, with the problem the contract for one email answers. A contract its detail names to go on with is the batched one, such as `move_emails` with a `mailbox_id`.
+- Otherwise the call answers `200`, and `emails` tells what became of each email, in the order given: `{"email_id", "outcome", "code", "detail"}`, `outcome` being `moved`; `already_there`, for an email in that mailbox only, which is not written; `not_found`, for an email outside the user's own mailboxes, unknown, or gone before the write; or `refused`, with the `code` and the `detail` of a problem: `email_in_spam` for an email in spam that `move_emails` or `archive_emails` keeps there, `mail_unavailable` for one TMail did not move, whatever it answered. `code` and `detail` are null for the other outcomes, and `counts` gives how many emails had each. No email is left out, so that no failure is silent.
+- A failure of the whole request, such as TMail answering an error to `Email/set` itself, answers `502`, as for one email: the call made again answers the emails that moved as `already_there`.
+- Each tells what it would do ([Previews](#previews)): how many emails go to which mailbox, each on a line of its own, named by its subject and its senders as the preview of one email names it, ten at most and as many as fit in the summary, then how many others; then how many stay where they are, there already, outside the user's own mailboxes, or in spam. The digest covers each email, the user's own mailboxes it is in or that it is not found, and the mailbox they go to: a call made once one of them moved, or turned up, answers `changed_since_preview` and moves none.
 
 ### Drive, as the user
 
@@ -392,6 +407,7 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `accept_invitation` | the event's title, when it takes place, in the user's time zone, and who organizes it | the event as the user would accept it |
 | `create_reply_draft` | whom the draft answers, its subject and its text, never sent | the draft as it would be created, but for its text |
 | `move_email`, `archive_email`, `trash_email` | which email, by its subject and senders, goes to which mailbox | the email, where it is, and where it would go |
+| `move_emails`, `archive_emails`, `trash_emails` | how many emails go to which mailbox, ten of them at most by their subject and senders, and how many stay where they are, and why | each email, where it is or that it is not found, and where they would go |
 | `create_task` | the task's title, where it goes and when it is due | its board, its section or the task it goes under |
 | `update_task` | each field it changes, as it would be and as it was | the task as it is |
 | `complete_task` | where the task goes, or the due date it moves on from, and the subtasks it completes | the task as it is, its completed section and its open subtasks |
@@ -415,7 +431,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `chat_account_not_found` | Chat has no account for the user's email |
 | 404 | `room_not_found` | the user has joined no room with this id |
 | 404 | `mailbox_not_found` | the user has no mailbox of their own with this id or name, none with the role archive or trash, or no Drafts mailbox for a draft |
-| 404 | `email_not_found` | the user has no email with this id in their own mailboxes |
+| 404 | `email_not_found` | the user has no email with this id in their own mailboxes; one of several emails moved at once is answered `not_found` instead |
 | 404 | `thread_not_found` | the user has no conversation with this id in their own mailboxes |
 | 404 | `drive_instance_unknown` | no Drive instance of the platform is known for the user: LemonLDAP-NG gives no `workplaceFqdn` for them, or one outside `DRIVE_INSTANCE_DOMAIN` |
 | 404 | `folder_not_found` | no folder with this id in the user's Drive, out of the trash |
@@ -437,10 +453,10 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `board_archived` | the board is archived |
 | 409 | `section_required` | a new task names no section, and the board has none `unstarted` to put it in: `sections` lists them |
 | 409 | `no_completed_section` | the task is in a section, and the board has no `completed` section to move it to |
-| 409 | `mailbox_ambiguous` | several of the user's mailboxes have the name given, or the role archive: the user says which one, and `move_email` takes its id |
+| 409 | `mailbox_ambiguous` | several of the user's mailboxes have the name given, or the role archive: the user says which one, and `move_email`, or `move_emails` for several emails, takes its id |
 | 409 | `trash_ambiguous` | several of the user's mailboxes have the role trash, which no contract chooses among: the user keeps a single one in Twake Mail |
-| 409 | `mailbox_forbidden` | `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam |
-| 409 | `email_in_spam` | the email is in spam, which only `trash_email` takes it out of |
+| 409 | `mailbox_forbidden` | `move_email` and `move_emails` do not move an email to drafts, sent, outbox, templates, trash or spam |
+| 409 | `email_in_spam` | the email is in spam, which only `trash_email` and `trash_emails` take it out of; the code of an email refused when several are moved at once |
 | 415 | `content_not_extractable` | the file is not text |
 | 429 | `chat_rate_limited` | Chat limits the requests made as the user; `retry_after_ms` says when to try again, when Chat says it |
 | 502 | `calendar_refused` | Calendar refused the user's token |
@@ -449,7 +465,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 502 | `chat_unavailable` | Chat did not answer, or answered in an unexpected form |
 | 502 | `mail_account_mismatch` | the JMAP session TMail opened for the token is another user's |
 | 502 | `mail_refused` | TMail refused the user's token |
-| 502 | `mail_unavailable` | TMail did not answer, answered an error, or in an unexpected form |
+| 502 | `mail_unavailable` | TMail did not answer, answered an error, or in an unexpected form; the code of an email TMail did not move when several are moved at once |
 | 502 | `drive_refused` | the user's Drive instance refused their Drive token |
 | 502 | `drive_unavailable` | the user's Drive instance did not answer, or answered in an unexpected form |
 | 502 | `tasks_refused_token` | Tasks refused the user's token |
