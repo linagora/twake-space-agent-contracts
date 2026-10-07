@@ -9,11 +9,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from xml.etree.ElementTree import Element
 
-from twake_space_agent_contracts.documents import MOST_COLUMNS, MOST_ROWS
+from twake_space_agent_contracts.documents import MOST_COLUMNS, MOST_ROWS, layout
 from twake_space_agent_contracts.documents.archives import (
     Package,
     attribute,
-    cell_text,
     child,
     local,
     open_office,
@@ -87,15 +86,18 @@ def read(content: bytes, output: Output) -> None:
     for number, tab in enumerate(tabs, start=1):
         sheet = _sheet(package, tab.part, dates, date1904) if tab.part else _Sheet()
         strings = _strings(package, shared, sheet) if shared else {}
-        heading = f"# Sheet {number}" + (" (hidden)" if tab.hidden else "")
-        output.gap()
-        output.add(f"{heading}: {tab.name}" if tab.name else heading)
-        note = _cut(sheet)
-        if note:
-            output.note(note)
-        for row in sheet.rows:
-            values = (strings.get(value, "") if isinstance(value, int) else value for value in row)
-            output.add("\t".join(values))
+        layout.sheet(
+            output,
+            number,
+            name=tab.name,
+            hidden=tab.hidden,
+            values=[
+                [strings.get(value, "") if isinstance(value, int) else value for value in row]
+                for row in sheet.rows
+            ],
+            more_rows=sheet.more_rows,
+            more_columns=sheet.more_columns,
+        )
 
 
 def _sheet(package: Package, part: str, dates: frozenset[int], date1904: bool) -> _Sheet:
@@ -166,16 +168,16 @@ def _value(cell: Element, dates: frozenset[int], date1904: bool) -> Value:
 
 def _text(text: str) -> str:
     """A text of the workbook, on one line, the characters Excel escaped as they are."""
-    return cell_text(_ESCAPED.sub(lambda escaped: chr(int(escaped.group(1), 16)), text))
+    return layout.cell_text(_ESCAPED.sub(lambda escaped: chr(int(escaped.group(1), 16)), text))
 
 
 def _number(raw: str) -> str:
-    """A number as Excel shows it in its General format, up to 15 digits."""
+    """A number as Excel shows it in its General format."""
     try:
         number = float(raw)
     except ValueError:
         return _text(raw)
-    return format(number, ".15g") if math.isfinite(number) else _text(raw)
+    return layout.number(number) if math.isfinite(number) else _text(raw)
 
 
 def _date(raw: str, date1904: bool) -> str | None:
@@ -196,12 +198,7 @@ def _date(raw: str, date1904: bool) -> str | None:
         moment = start + timedelta(seconds=round(days * 86_400))
     except OverflowError:
         return None
-    time = "%H:%M" if moment.second == 0 else "%H:%M:%S"
-    if days < 1:
-        return moment.strftime(time)
-    if moment.time() == datetime.min.time():
-        return moment.strftime("%Y-%m-%d")
-    return moment.strftime(f"%Y-%m-%d {time}")
+    return layout.moment(moment, time_only=days < 1)
 
 
 def _date_styles(package: Package, part: str) -> frozenset[int]:
@@ -253,16 +250,3 @@ def _strings(package: Package, part: str, sheet: _Sheet) -> dict[int, str]:
         if index > last:
             break
     return strings
-
-
-def _cut(sheet: _Sheet) -> str | None:
-    """What a note says the sheet leaves out, if anything."""
-    rows = f"its first {MOST_ROWS} rows that hold values"
-    columns = f"its first {MOST_COLUMNS} columns"
-    if sheet.more_rows and sheet.more_columns:
-        return f"Only {rows}, and {columns}, are given."
-    if sheet.more_rows:
-        return f"Only {rows} are given."
-    if sheet.more_columns:
-        return f"Only {columns} are given."
-    return None

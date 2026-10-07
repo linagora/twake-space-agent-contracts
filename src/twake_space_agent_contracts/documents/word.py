@@ -5,10 +5,10 @@ import re
 from dataclasses import dataclass, field
 from xml.etree.ElementTree import Element
 
+from twake_space_agent_contracts.documents import layout
 from twake_space_agent_contracts.documents.archives import (
     Package,
     attribute,
-    cell_text,
     child,
     local,
     open_office,
@@ -63,49 +63,33 @@ def read(content: bytes, output: Output) -> None:
                 _paragraph(element, styles, output)
             element.clear()
         elif name == "tbl" and tables:
-            rows = _rows(tables.pop())
+            cells = _cells(tables.pop())
             # A table in a cell of another is part of that cell's text
             if tables and tables[-1].rows and tables[-1].rows[-1]:
-                tables[-1].rows[-1][-1].append(" ".join(" ".join(row) for row in rows))
-            elif rows:
-                output.gap()
-                output.add("\n".join("\t".join(row) for row in rows))
-                output.gap()
+                tables[-1].rows[-1][-1].append(" ".join(layout.rows(cells)))
+            else:
+                layout.table(output, cells)
             element.clear()
 
 
-def _rows(table: _Table) -> list[list[str]]:
-    """The table's rows that hold any text, each cell on one line, without the empty cells that
-    end a row."""
-    rows = []
-    for row in table.rows:
-        cells = [cell_text(" ".join(paragraphs)) for paragraphs in row]
-        while cells and not cells[-1]:
-            cells.pop()
-        if cells:
-            rows.append(cells)
-    return rows
+def _cells(table: _Table) -> list[list[str]]:
+    """The text of each cell of each row of the table, its paragraphs on one line."""
+    return [[" ".join(paragraphs) for paragraphs in row] for row in table.rows]
 
 
 def _paragraph(element: Element, styles: dict[str, _Style], output: Output) -> None:
-    text = _text(element).strip()
-    if not text:
-        return
     properties = child(element, "pPr")
     style_id = attribute(child(properties, "pStyle"), "val")
-    level = _outline(properties)
-    if level is None:
-        level = _style_outline(styles, style_id)
+    outline = _outline(properties)
+    if outline is None:
+        outline = _style_outline(styles, style_id)
     numbering = child(properties, "numPr")
-    if level is not None:
-        output.gap()
-        output.add("#" * min(level + 1, 6) + " " + " ".join(text.split()))
-    elif _listed(numbering, styles, style_id):
-        depth = attribute(child(numbering, "ilvl"), "val") or "0"
-        indent = "  " * int(depth) if depth.isdigit() and int(depth) < 9 else ""
-        output.add(f"{indent}- {text}")
-    else:
-        output.add(text)
+    depth = None
+    if outline is None and _listed(numbering, styles, style_id):
+        level = attribute(child(numbering, "ilvl"), "val") or "0"
+        depth = int(level) if level.isdigit() else 0
+    heading = outline + 1 if outline is not None else None
+    layout.paragraph(output, _text(element), level=heading, depth=depth)
 
 
 def _text(paragraph: Element) -> str:

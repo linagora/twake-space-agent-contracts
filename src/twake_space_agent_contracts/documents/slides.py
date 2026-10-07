@@ -4,10 +4,10 @@ rows of tab-separated cells, and its speaker notes under a heading of their own.
 
 from xml.etree.ElementTree import Element
 
+from twake_space_agent_contracts.documents import layout
 from twake_space_agent_contracts.documents.archives import (
     Package,
     attribute,
-    cell_text,
     child,
     local,
     open_office,
@@ -55,18 +55,16 @@ def _slide(package: Package, part: str, number: int, output: Output) -> None:
                 lines.append(text)
             element.clear()
         elif name == "graphicFrame":
-            lines.extend(_rows(element))
+            lines.extend(layout.rows(_cells(element)))
             element.clear()
-    heading = f"# Slide {number}" + (" (hidden)" if hidden else "")
-    title = " ".join(title for title in titles if title)
-    output.gap()
-    output.add(f"{heading}: {title}" if title else heading)
-    for line in lines:
-        output.add(line)
-    notes = _notes(package, part)
-    if notes:
-        output.add("## Notes")
-        output.add(notes)
+    layout.slide(
+        output,
+        number,
+        hidden=hidden,
+        title=" ".join(title for title in titles if title),
+        lines=lines,
+        notes=_notes(package, part),
+    )
 
 
 def _placeholder(shape: Element) -> str | None:
@@ -87,21 +85,15 @@ def _shape_text(shape: Element) -> str:
     return "\n".join(paragraphs).strip()
 
 
-def _rows(frame: Element) -> list[str]:
-    """The rows of a table, as tab-separated cells, the empty ones at the end of a row left out."""
-    rows = []
-    for table in frame.iter():
-        if local(table.tag) != "tbl":
-            continue
-        for row in table:
-            if local(row.tag) != "tr":
-                continue
-            cells = [cell_text(_shape_text(cell)) for cell in row if local(cell.tag) == "tc"]
-            while cells and not cells[-1]:
-                cells.pop()
-            if cells:
-                rows.append("\t".join(cells))
-    return rows
+def _cells(frame: Element) -> list[list[str]]:
+    """The text of each cell of each row of the tables in the frame."""
+    return [
+        [_shape_text(cell) for cell in row if local(cell.tag) == "tc"]
+        for table in frame.iter()
+        if local(table.tag) == "tbl"
+        for row in table
+        if local(row.tag) == "tr"
+    ]
 
 
 def _notes(package: Package, slide: str) -> str:

@@ -266,8 +266,3 @@ def run_text(element: Element, unseen: frozenset[str] = frozenset()) -> str:
             pieces.append("-")
         found.extend(reversed(inner))
     return "".join(pieces)
-
-
-def cell_text(text: str) -> str:
-    """Text that sits in a cell of a row: on one line, without the tabs that part cells."""
-    return " ".join(text.split())
