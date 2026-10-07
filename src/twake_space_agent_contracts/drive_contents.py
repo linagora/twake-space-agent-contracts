@@ -144,12 +144,13 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
                 read = await reader.read(kind, content, max_bytes)
             except Refused as refused:
                 raise refusal(refused.reason) from None
-        # Text others wrote, without what a reader does not see, nor control characters
-        text = plain_text(seen(read.text)).encode()
+        # Text others wrote, without what a reader does not see, nor control characters: no more
+        # of it is cleaned than the max_bytes characters that hold max_bytes bytes, at most
+        text = plain_text(seen(read.text[:max_bytes])).encode()
         return FileContent(
             id=file.id,
             size=file.size if file.size is not None else len(content),
-            truncated=read.cut or len(text) > max_bytes,
+            truncated=read.cut or len(read.text) > max_bytes or len(text) > max_bytes,
             untrusted=FileText(
                 name=plain_line(file.name),
                 mime=plain_line(file.mime or ""),

@@ -2,8 +2,13 @@
 
 import time
 import tracemalloc
+from collections.abc import Callable
 
-from tests.documents import rezipped, word
+import pytest
+from openpyxl import Workbook
+
+from tests.documents import pdf, rezipped, word, workbook
+from twake_space_agent_contracts.documents import Kind, Reader
 from twake_space_agent_contracts.documents import word as word_reader
 from twake_space_agent_contracts.documents.reading import Output
 
@@ -36,3 +41,32 @@ def test_reading_keeps_only_what_is_open_and_what_is_being_read() -> None:
     assert output.text() == "End"
     # Kept whole, those paragraphs take some 37 MiB
     assert peak < 10 * MIB
+
+
+# Twenty thousand characters on one line
+LONG = "word " * 4_000
+
+
+def _long_cell(book: Workbook) -> None:
+    sheet = book.active
+    assert sheet is not None
+    sheet["A1"] = LONG
+
+
+LONG_LINES: dict[Kind, Callable[[], bytes]] = {
+    "docx": lambda: word(lambda document: document.add_paragraph(LONG)),
+    "xlsx": lambda: workbook(_long_cell),
+    "pdf": lambda: pdf(LONG),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(LONG_LINES))
+async def test_a_reading_gives_no_more_text_than_its_budget_however_long_a_line(
+    kind: Kind,
+) -> None:
+    # A paragraph, a cell or a page on one line far longer than asked: the reading process cuts
+    # it, rather than hand the service all of it
+    text = await Reader().read(kind, LONG_LINES[kind](), 1_000)
+
+    assert text.cut is True
+    assert 900 < len(text.text) <= 1_000

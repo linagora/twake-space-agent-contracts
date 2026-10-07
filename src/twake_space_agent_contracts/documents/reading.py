@@ -58,12 +58,19 @@ class Output:
         """Whether the text leaves out some of the document."""
 
     def add(self, text: str) -> None:
-        """Adds the text, on lines of its own."""
+        """Adds the text, on lines of its own, as far as the budget goes: a line that goes beyond
+        it is cut there, and the reading stops, so that the text never holds more characters than
+        the budget, however long a line."""
         for line in text.split("\n"):
+            # What the text may still take, its size counting a line break after each line
+            room = self._budget - self._size
+            if len(line) > room:
+                if room > 0:
+                    self._lines.append(line[:room])
+                    self._size += room
+                raise Full
             self._lines.append(line)
             self._size += len(line) + 1
-            if self._size > self._budget:
-                raise Full
         self.tick()
 
     def gap(self) -> None:

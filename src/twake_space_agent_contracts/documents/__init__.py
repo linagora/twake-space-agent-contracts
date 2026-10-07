@@ -48,6 +48,12 @@ READING_SECONDS = 10.0
 LONGEST_SECONDS = 15.0
 """The time a process has to answer, past which the service stops it: the time it reads for, and
 the time to start and to stop, if what it was reading lets it."""
+ESCAPED_SIZE = 12
+"""The bytes JSON takes at most for a character of a text it escapes, as \\ud83d\\ude00 for one
+beyond the first 65,536."""
+ANSWER_BEYOND_TEXT = 4_096
+"""The bytes a process's answer takes at most beyond its text: its JSON, and the line that says why
+its reading stopped."""
 
 
 @dataclass(frozen=True)
@@ -91,9 +97,17 @@ class Reader:
             stderr=DEVNULL,
             env={},
         )
+        # The answer of a process that keeps to its budget: past that, it is not read any further
+        most = ESCAPED_SIZE * budget + ANSWER_BEYOND_TEXT
         try:
             async with asyncio.timeout(LONGEST_SECONDS):
-                output, _ = await process.communicate(content)
+                async with asyncio.TaskGroup() as exchange:
+                    exchange.create_task(_feed(process, content))
+                    answering = exchange.create_task(_answer(process, most))
+                output = answering.result()
+                if len(output) > most:
+                    raise Refused("unreadable")
+                await process.wait()
         except TimeoutError:
             raise Refused("too_long") from None
         finally:
@@ -104,6 +118,31 @@ class Reader:
         if process.returncode != 0:
             raise Refused("unreadable")
         return _text(output)
+
+
+async def _feed(process: asyncio.subprocess.Process, content: bytes) -> None:
+    """Gives the process the document, on its standard input."""
+    assert process.stdin is not None
+    try:
+        process.stdin.write(content)
+        await process.stdin.drain()
+        process.stdin.close()
+    except (BrokenPipeError, ConnectionResetError):
+        # The process stopped before reading it all, as one that crashed: its exit says so
+        pass
+
+
+async def _answer(process: asyncio.subprocess.Process, most: int) -> bytes:
+    """What the process answers on its standard output, and no more than one byte past the most
+    it may answer."""
+    assert process.stdout is not None
+    answer = bytearray()
+    while len(answer) <= most:
+        chunk = await process.stdout.read(most + 1 - len(answer))
+        if not chunk:
+            break
+        answer += chunk
+    return bytes(answer)
 
 
 def _text(output: bytes) -> Text:

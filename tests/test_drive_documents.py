@@ -32,8 +32,9 @@ from tests.documents import (
     workbook,
 )
 from tests.fakes import FakeBoundary, text_file
-from twake_space_agent_contracts import documents
+from twake_space_agent_contracts import documents, drive_contents
 from twake_space_agent_contracts.drive_contents import LARGEST_DOCUMENT
+from twake_space_agent_contracts.text import seen
 
 WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 MIB = 1_048_576
@@ -323,3 +324,44 @@ async def test_what_a_document_says_comes_under_untrusted_only(
     assert PLANTED in answer["untrusted"]["content"]
     assert PLANTED not in json.dumps({key: answer[key] for key in ("id", "size", "truncated")})
     assert REVERSED not in answer["untrusted"]["content"]
+
+
+async def test_the_service_reads_no_more_of_a_reading_than_its_text_takes(
+    client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # What a reading process may answer is its text, at most max_bytes characters as JSON escapes
+    # them, and this much besides: here nothing, so that any answer takes more
+    monkeypatch.setattr(documents, "ANSWER_BEYOND_TEXT", 0)
+    boundary.drive.add(text_file("doc", "Doc.docx", content=plans(), mime=DOCX))
+
+    response = await read_content(client, "doc", max_bytes=1)
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"
+
+
+async def test_the_text_of_a_reading_is_cut_before_it_is_cleaned(
+    client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A reading that gives more than asked, which none does, has no more than max_bytes of its
+    # characters cleaned, whatever it gave
+    async def more_than_asked(
+        reader: documents.Reader, kind: documents.Kind, content: bytes, budget: int
+    ) -> documents.Text:
+        return documents.Text("é" * 100_000, cut=False)
+
+    cleaned: list[int] = []
+
+    def counting(text: str) -> str:
+        cleaned.append(len(text))
+        return seen(text)
+
+    monkeypatch.setattr(documents.Reader, "read", more_than_asked)
+    monkeypatch.setattr(drive_contents, "seen", counting)
+    boundary.drive.add(text_file("doc", "Doc.docx", content=plans(), mime=DOCX))
+
+    answer = (await read_content(client, "doc", max_bytes=1_000)).json()
+
+    assert answer["untrusted"]["content"] == "é" * 500
+    assert answer["truncated"] is True
+    assert cleaned == [1_000]
