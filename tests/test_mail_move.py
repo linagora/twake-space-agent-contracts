@@ -332,6 +332,17 @@ async def test_a_move_that_names_no_single_mailbox_is_an_invalid_request(
     assert boundary.tmail.calls == []
 
 
+async def test_a_move_without_a_body_names_the_body(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    response = await post(client, "email-1", "move")
+
+    assert response.json() == problem(
+        "invalid_request", "Invalid request", 400, "body: Field required"
+    )
+    assert boundary.tmail.calls == []
+
+
 @pytest.mark.parametrize(
     ("operation", "body"),
     [

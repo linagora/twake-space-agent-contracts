@@ -47,10 +47,11 @@ def invalid_request(detail: str) -> Problem:
 
 
 def _invalid_request(error: RequestValidationError) -> Problem:
-    # Each location starts with where the value came from (query, path...), then its name
+    # Each location starts with where the value came from (query, path...), then its name: a value
+    # without one, such as a whole body, goes by where it came from
     return invalid_request(
         "; ".join(
-            f"{'.'.join(str(part) for part in issue['loc'][1:])}: {issue['msg']}"
+            f"{'.'.join(str(part) for part in issue['loc'][1:]) or issue['loc'][0]}: {issue['msg']}"
             for issue in error.errors()
         )
     )
