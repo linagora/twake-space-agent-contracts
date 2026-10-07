@@ -160,3 +160,22 @@ async def test_a_workbook_that_lists_more_sheets_than_a_zip_holds_files_is_not_e
 
     assert response.status_code == 415, response.text
     assert response.json()["code"] == "content_not_extractable"
+
+
+async def test_only_the_first_65536_formats_of_a_workbook_are_read(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Formats 1 and 65,536 show days, those between nothing of their own: past the 64,000 formats
+    # Excel holds, a workbook's formats are not read, nor remembered
+    formats = '<xf numFmtId="0"/><xf numFmtId="14"/>' + "<xf/>" * 65_534 + '<xf numFmtId="14"/>'
+    styles = (
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<cellXfs count="65537">{formats}</cellXfs></styleSheet>'
+    ).encode()
+    days = '<row r="1"><c r="A1" s="1"><v>46296</v></c><c r="B1" s="65536"><v>46296</v></c></row>'
+    content = rezipped(excel_workbook(days, []), {"xl/styles.xml": styles})
+    boundary.drive.add(text_file("formats", "Formats.xlsx", content=content, mime=XLSX))
+
+    response = await read_content(client, "formats")
+
+    assert response.json()["untrusted"]["content"] == "# Sheet 1: Sheet1\n2026-10-01\t46296"
