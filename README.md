@@ -108,6 +108,7 @@ Accepts, as the user, an invitation the user received: only their own participat
 
 - `event_id` is the id of a stored invitation (`com.twake.calendar.event.invited.v1`) sent to the user; its `data.object.uid` names the calendar event.
 - The service finds the user's own copy of the event with the JSON `REPORT /dav/calendars/<user id>.json` of esn-sabre on `{"uid"}`, sets `PARTSTAT=ACCEPTED` on the user's `ATTENDEE`, and puts the event back in jCal. esn-sabre then sends the iTIP reply to the organizer.
+- A user whose copy of the event does not invite them, as it does not list them as an attendee or as they organize it, whom Twake Calendar lists among its attendees too, as its chair, is answered `invitation_not_found` exactly as for an unknown invitation, before anything else is checked: the contract never reveals that an event exists, and the organizer's assistant cannot accept the meeting the organizer called.
 - Nothing else in the event changes: esn-sabre refuses an attendee who changes what the organizer set.
 - A recurring invitation is refused, since the stored invitation does not say which occurrence it is about: the user answers it in Calendar. So is a cancelled event, which stays in the user's calendar but whose organizer esn-sabre would not tell.
 - The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
@@ -522,7 +523,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 403 | `forbidden_role` | the user is a viewer of the board: they only read it |
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
 | 404 | `event_not_found` | no event with this id concerns the user |
-| 404 | `invitation_not_found` | no invitation with this id was sent to the user |
+| 404 | `invitation_not_found` | no invitation with this id was sent to the user, or the user's copy of the event does not invite them: it does not list them as an attendee, or they organize it |
 | 404 | `invitation_not_in_calendar` | the user's calendars no longer have the invitation, which may have been deleted |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `chat_account_not_found` | Chat has no account for the user's email |
@@ -538,7 +539,6 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `contacts_user_not_found` | Contacts has no user with the user's email |
 | 404 | `address_book_not_found` | the user reads no address book with this id: neither their own, nor one shared with them, nor their domain's |
 | 404 | `contact_not_found` | the address book has no contact with this id |
-| 409 | `not_an_attendee` | the invitation in the user's calendar does not list the user as an attendee |
 | 409 | `changed_since_preview` | what the call acts on changed since its owner was shown what it would do: nothing was done |
 | 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series |
 | 409 | `invitation_cancelled` | the organizer cancelled the event |

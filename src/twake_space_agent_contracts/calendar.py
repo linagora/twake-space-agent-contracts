@@ -193,8 +193,12 @@ class CalendarEvent:
 
     def accepted_by(self, email: str) -> "CalendarEvent | None":
         """The event with the participation of that user accepted, and nothing else changed;
-        None if it does not invite them. Addresses compare lowercased, as sabre's iTIP broker
-        compares them."""
+        None if it does not invite them: if it does not list them as an attendee, or if they
+        organize it, whom Twake Calendar lists among its attendees too, as its chair. Addresses
+        compare lowercased, as sabre's iTIP broker compares them."""
+        email = email.lower()
+        if (self.organizer[1] or "").lower() == email:
+            return None
         address = f"mailto:{email}"
         jcal = copy.deepcopy(self.jcal)
         invited = False

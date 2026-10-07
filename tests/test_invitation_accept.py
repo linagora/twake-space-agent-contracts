@@ -90,6 +90,16 @@ def with_props(event: list[Any], **props: list[Any] | None) -> list[Any]:
     return changed
 
 
+def own_meeting(address: str = "mailto:mmaudet@twake.test") -> list[Any]:
+    """A meeting the user organizes, as their own calendar holds it: Twake Calendar lists its
+    organizer among its attendees too, as its chair."""
+    return with_props(
+        invitation_a(None),
+        organizer=["organizer", {"cn": "Michel-Marie"}, "cal-address", address],
+        attendee=["attendee", {"partstat": "ACCEPTED", "role": "CHAIR"}, "cal-address", address],
+    )
+
+
 def paris(name: str, time: str) -> list[Any]:
     return [name, {"tzid": "Europe/Paris"}, "date-time", time]
 
@@ -155,16 +165,34 @@ async def test_an_invitation_gone_from_the_calendar_is_reported(
     assert response.json()["code"] == "invitation_not_in_calendar"
 
 
-async def test_a_user_the_event_does_not_list_is_not_made_an_attendee(
-    client: AsyncClient, store: Store, boundary: FakeBoundary
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(invitation_a(None), id="not listing them"),
+        pytest.param(invitation_a(None, WEEKLY), id="a series not listing them"),
+        pytest.param(invitation_a(None, CANCELLED), id="cancelled, not listing them"),
+        pytest.param(own_meeting(), id="their own meeting"),
+        pytest.param(own_meeting("MAILTO:MMaudet@Twake.test"), id="their own, in capitals"),
+    ],
+)
+@pytest.mark.parametrize("asked", [{}, asking_preview("fr")], ids=["accepting", "a preview"])
+async def test_a_copy_that_does_not_invite_the_user_is_answered_as_an_unknown_invitation(
+    client: AsyncClient,
+    store: Store,
+    boundary: FakeBoundary,
+    event: list[Any],
+    asked: dict[str, str],
 ) -> None:
+    # The contract never tells that an event exists to a user it does not invite, nor lets the
+    # organizer's assistant accept the meeting the organizer called
+    unknown = await accept(client, "invitation-a", asked)
     await invite_mmaudet(store)
-    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, invitation_a(None))
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
 
-    response = await accept(client, "invitation-a")
+    response = await accept(client, "invitation-a", asked)
 
-    assert response.status_code == 409
-    assert response.json()["code"] == "not_an_attendee"
+    assert (unknown.status_code, unknown.json()["code"]) == (404, "invitation_not_found")
+    assert (response.status_code, response.json()) == (unknown.status_code, unknown.json())
     assert boundary.calendar.writes == []
 
 
@@ -499,9 +527,8 @@ async def test_an_invitation_changed_since_the_preview_is_not_accepted(
     [
         (invitation_a("NEEDS-ACTION", WEEKLY), "recurring_invitation"),
         (invitation_a("NEEDS-ACTION", CANCELLED), "invitation_cancelled"),
-        (invitation_a(None), "not_an_attendee"),
     ],
-    ids=["recurring", "cancelled", "not an attendee"],
+    ids=["recurring", "cancelled"],
 )
 async def test_a_preview_refuses_what_accepting_would_refuse(
     client: AsyncClient, store: Store, boundary: FakeBoundary, event: list[Any], code: str

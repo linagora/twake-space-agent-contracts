@@ -73,6 +73,17 @@ def _summary(event: CalendarEvent, zone: ZoneInfo | None, language: Language) ->
     return ", ".join(parts) + "\n" + words.told
 
 
+def _not_sent(event_id: str) -> Problem:
+    """What a user is answered for an invitation they did not receive, whether the event exists or
+    not."""
+    return Problem(
+        status=404,
+        code="invitation_not_found",
+        title="Invitation not found",
+        detail=f"No invitation {event_id} was sent to this user.",
+    )
+
+
 def router(pool: AsyncConnectionPool, calendar: Calendar, caller: CallerDependency) -> APIRouter:
     routes = APIRouter(
         prefix="/contracts/v1/calendar/invitations", tags=["calendar.invitation.accept.v1"]
@@ -103,12 +114,7 @@ def router(pool: AsyncConnectionPool, calendar: Calendar, caller: CallerDependen
         stored = await events.user_event(pool, user.email, event_id)
         uid = stored.invitation_uid() if stored is not None else None
         if uid is None:
-            raise Problem(
-                status=404,
-                code="invitation_not_found",
-                title="Invitation not found",
-                detail=f"No invitation {event_id} was sent to this user.",
-            )
+            raise _not_sent(event_id)
         event = await calendar.find_event(user, uid)
         if event is None:
             raise Problem(
@@ -118,6 +124,11 @@ def router(pool: AsyncConnectionPool, calendar: Calendar, caller: CallerDependen
                 detail="The user's calendars no longer have this invitation: it may have been"
                 " deleted.",
             )
+        accepted = event.accepted_by(user.email)
+        # A copy that does not invite the user is answered as for an unknown invitation, before
+        # anything else is checked: the contract never tells that an event exists
+        if accepted is None:
+            raise _not_sent(event_id)
         # The stored invitation does not say which occurrence of a series it is about
         if event.recurring:
             raise Problem(
@@ -134,15 +145,6 @@ def router(pool: AsyncConnectionPool, calendar: Calendar, caller: CallerDependen
                 code="invitation_cancelled",
                 title="Invitation cancelled",
                 detail="The organizer cancelled this event: there is nothing to accept.",
-            )
-        accepted = event.accepted_by(user.email)
-        if accepted is None:
-            raise Problem(
-                status=409,
-                code="not_an_attendee",
-                title="Not an attendee",
-                detail="The invitation in the user's calendar does not list the user as an"
-                " attendee.",
             )
         # What the owner allows: the event as they would accept it, where it is
         digest = digest_of(accepted.href, accepted.jcal)
