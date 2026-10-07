@@ -240,6 +240,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "search_tasks": ["tasks.task.read.v1"],
         "read_task": ["tasks.task.read.v1"],
         "create_reply_draft": ["mail.draft.create.v1"],
+        "create_file": ["drive.file.create.v1"],
     }
 
 
@@ -346,6 +347,15 @@ async def test_accepting_an_invitation_is_a_low_risk_write(client: AsyncClient) 
     accept = document["paths"]["/contracts/v1/calendar/invitations/{event_id}/accept"]["post"]
 
     assert accept["x-twake-risk"] == "low"
+
+
+async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:
+    # A new file only the user sees: once the owner allowed writing in Drive, it runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    create = document["paths"]["/contracts/v1/drive/files"]["post"]
+
+    assert create["x-twake-risk"] == "low"
 
 
 async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(

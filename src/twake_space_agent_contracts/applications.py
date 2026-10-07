@@ -10,6 +10,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from twake_space_agent_contracts import (
     drive_contents,
+    drive_create,
     drive_files,
     events,
     freebusy,
@@ -121,7 +122,11 @@ def _drive(context: Context) -> list[APIRouter]:
         raise ValueError("PUBLISHED_APPS names drive, which needs DRIVE_INSTANCE_DOMAIN")
     drive = Drive(context.settings, context.http)
     drive_owner = drive_owner_dependency(context.caller, domain)
-    return [drive_files.router(drive, drive_owner), drive_contents.router(drive, drive_owner)]
+    return [
+        drive_files.router(drive, drive_owner),
+        drive_contents.router(drive, drive_owner),
+        drive_create.router(drive, drive_owner),
+    ]
 
 
 def _tasks(context: Context) -> list[APIRouter]:
@@ -185,8 +190,11 @@ APPLICATIONS = (
             en="list, search and read your files",
             fr="lister, chercher et lire tes fichiers",
         ),
-        # The words of writing come with its first write contract
-        write=None,
+        write=Words(
+            en="create text files in your Drive, never in a folder shared with others",
+            fr="créer des fichiers texte dans ton Drive, jamais dans un dossier partagé avec"
+            " d'autres",
+        ),
         routers=_drive,
     ),
     Application(

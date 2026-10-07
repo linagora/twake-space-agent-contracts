@@ -2,6 +2,7 @@
 the Calendar side service, TMail, Synapse behind the gateway's outbound route, the owner's
 cozy-stack instance and Twake Tasks. Also the clock the token checks read."""
 
+import base64
 import hashlib
 import json
 import posixpath
@@ -836,6 +837,8 @@ class FakeTMail:
 
 ROOT_ID = "io.cozy.files.root-dir"
 TRASH_ID = "io.cozy.files.trash-dir"
+SHARED_WITH_ME_ID = "io.cozy.files.shared-with-me-dir"
+SHARED_DRIVES_ID = "io.cozy.files.shared-drives-dir"
 # The class cozy-stack gives a file, when it is not the first part of its MIME type
 CLASSES = {
     "application/pdf": "pdf",
@@ -858,6 +861,18 @@ class DriveDoc:
     encrypted: bool = False
     antivirus: str | None = None
     """The status of the antivirus scan, once the stack scanned the file."""
+    sharing: str | None = None
+    """The sharing whose root this is, on either side, which the stack references from it."""
+
+
+@dataclass
+class Link:
+    """A share-by-link permission: whoever holds its code reads these files and folders, and
+    what is in the folders, until it expires."""
+
+    values: list[str]
+    expires_at: str | None = None
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 def folder(doc_id: str, name: str, parent: str = ROOT_ID, **more: Any) -> DriveDoc:
@@ -917,7 +932,9 @@ class FakeDrive:
     when the request says it, else by a cursor on the key of the next item. POST /files/_all_docs
     gives items with their path. POST /files/_find evaluates a Mango selector, sorts only along an
     index made with POST /data/io.cozy.files/_index, as CouchDB does, and pages with bookmarks.
-    Also GET /files/download/:id and the capabilities.
+    POST /files/:dir-id creates a file, never over another item of its name. GET
+    /permissions/doctype/io.cozy.files/shared-by-link pages the links. Also GET
+    /files/download/:id and the capabilities.
     """
 
     def __init__(self) -> None:
@@ -925,11 +942,20 @@ class FakeDrive:
         self.add(DriveDoc(ROOT_ID, "directory", "", ""), folder(TRASH_ID, ".cozy_trash"))
         self.flat_subdomains = True
         self.down = False
+        self.capabilities_down = False
+        """Whether the instance fails to give its capabilities, and answers the rest."""
         self.refused_tokens = False
+        self.read_only_token = False
+        """Whether the Drive token may read only, without POST, which the stack answers 403."""
         self.forbidden: set[str] = set()
         """Ids the Drive token may not read, which the stack answers 403."""
         self.blocked: set[str] = set()
         """Ids of the files whose download the antivirus blocks, which the stack answers 451."""
+        self.free_space: int | None = None
+        """The bytes left in the instance's quota, None without a quota."""
+        self.trashed_meanwhile: set[str] = set()
+        """Ids of the folders that someone trashes once read, before a file is written there."""
+        self.links: list[Link] = []
         self.indexes: dict[str, dict[str, Any]] = {}
         """Mango indexes, by design document."""
         self.bookmarks: dict[str, int] = {}
@@ -946,6 +972,11 @@ class FakeDrive:
             return "/"
         return posixpath.join(self.path_of(self.docs[doc.dir_id]), doc.name)
 
+    def child(self, folder_id: str, name: str) -> DriveDoc | None:
+        """The item of that name in the folder."""
+        found = [doc for doc in self.docs.values() if doc.dir_id == folder_id and doc.name == name]
+        return found[0] if found else None
+
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if self.down:
@@ -955,6 +986,8 @@ class FakeDrive:
             return httpx.Response(401)
         method, path = request.method, request.url.path
         if (method, path) == ("GET", "/settings/capabilities"):
+            if self.capabilities_down:
+                return httpx.Response(503)
             capabilities = {"file_versioning": True, "flat_subdomains": self.flat_subdomains}
             return httpx.Response(
                 200,
@@ -968,6 +1001,10 @@ class FakeDrive:
             return self._find(json.loads(request.content))
         if (method, path) == ("POST", "/data/io.cozy.files/_index"):
             return self._define_index(json.loads(request.content))
+        if (method, path) == ("GET", "/permissions/doctype/io.cozy.files/shared-by-link"):
+            return self._links_page(request)
+        if method == "POST" and re.fullmatch(r"/files/[^/]+", path):
+            return self._create(request, path.removeprefix("/files/"))
         if method == "GET" and path.startswith("/files/download/"):
             return self._download(path.removeprefix("/files/download/"))
         if method == "GET" and path.startswith("/files/"):
@@ -986,6 +1023,8 @@ class FakeDrive:
         }
         if doc.id != ROOT_ID:
             stored |= {"name": doc.name, "dir_id": doc.dir_id}
+        if doc.sharing is not None:
+            stored["referenced_by"] = [{"type": "io.cozy.sharings", "id": doc.sharing}]
         if doc.type == "directory":
             return stored | {"path": self.path_of(doc)}
         stored |= {
@@ -1003,11 +1042,15 @@ class FakeDrive:
         return stored
 
     def _resource(self, doc: DriveDoc, *, with_path: bool = True) -> dict[str, Any]:
-        """The document in the stack's JSON:API: with the path of a file only when asked, and the
-        links to its thumbnails."""
+        """The document in the stack's JSON:API: with the path of a file only when asked, its
+        references as a relationship, which only a folder also keeps among its attributes, and
+        the links to its thumbnails."""
         attributes = {
             key: value for key, value in self._couch_doc(doc).items() if not key.startswith("_")
         }
+        references = attributes.get("referenced_by", [])
+        if doc.type == "file":
+            attributes.pop("referenced_by", None)
         if with_path:
             attributes["path"] = self.path_of(doc)
         return {
@@ -1015,11 +1058,83 @@ class FakeDrive:
             "id": doc.id,
             "attributes": attributes,
             "meta": {"rev": "1-6c3f2b"},
+            "relationships": {"referenced_by": {"data": references}},
             "links": {
                 "self": f"/files/{doc.id}",
                 "small": f"/files/{doc.id}/thumbnails/0f9cda56674282ac/small",
             },
         }
+
+    def _in_trash(self, doc: DriveDoc) -> bool:
+        path = self.path_of(doc)
+        return path == "/.cozy_trash" or path.startswith("/.cozy_trash/")
+
+    def _create(self, request: httpx.Request, dir_id: str) -> httpx.Response:
+        """A new file in the folder, as POST /files/:dir-id?Type=file&Name= makes it from the
+        request's content: with the mime of its Content-Type, which must not have changed on the
+        way when the request gives its Content-MD5."""
+        if self.read_only_token:
+            return httpx.Response(403)
+        parent = self.docs.get(dir_id)
+        if (
+            parent is None
+            or parent.type != "directory"
+            or self._in_trash(parent)
+            or dir_id in self.trashed_meanwhile
+        ):
+            return httpx.Response(404)
+        name = request.url.params.get("Name", "")
+        if (
+            request.url.params.get("Type") != "file"
+            or name in ("", ".", "..")
+            or any(character in name for character in "/\x00\n\r")
+        ):
+            return httpx.Response(422)
+        if self.child(dir_id, name) is not None:
+            return httpx.Response(409)
+        content = request.content
+        md5 = request.headers.get("content-md5")
+        if md5 is not None and md5 != base64.b64encode(hashlib.md5(content).digest()).decode():
+            return httpx.Response(412)
+        if self.free_space is not None and len(content) > self.free_space:
+            return httpx.Response(413)
+        mime = request.headers.get("content-type", "").partition(";")[0].strip()
+        doc = text_file(uuid.uuid4().hex, name, dir_id, content=content, mime=mime)
+        self.add(doc)
+        return httpx.Response(201, json={"data": self._resource(doc, with_path=False)})
+
+    def _links_page(self, request: httpx.Request) -> httpx.Response:
+        """A page of the share-by-link permissions on files, 30 by default and 100 at most, with
+        their codes, and a cursor to the next page, as the stack gives them."""
+        limit = min(int(request.url.params.get("page[limit]", "30")), 100)
+        cursor = request.url.params.get("page[cursor]")
+        ids = [link.id for link in self.links]
+        start = ids.index(json.loads(cursor)[1]) if cursor else 0
+        page = self.links[start : start + limit]
+        links = {}
+        if start + limit < len(self.links):
+            next_cursor = json.dumps([["io.cozy.files", "share"], ids[start + limit]])
+            query = httpx.QueryParams({"page[limit]": limit, "page[cursor]": next_cursor})
+            links["next"] = f"/permissions/doctype/io.cozy.files/shared-by-link?{query}"
+        data = [
+            {
+                "type": "io.cozy.permissions",
+                "id": link.id,
+                "attributes": {
+                    "type": "share",
+                    "permissions": {
+                        "files": {"type": "io.cozy.files", "verbs": ["GET"], "values": link.values}
+                    },
+                    "codes": {"email": "a-secret-code"},
+                    "shortcodes": {"email": "abcdeFGHIJ01"},
+                }
+                | ({"expires_at": link.expires_at} if link.expires_at else {}),
+                "meta": {"rev": "1-d46b63"},
+                "links": {"self": f"/permissions/{link.id}"},
+            }
+            for link in page
+        ]
+        return httpx.Response(200, json={"data": data, "links": links})
 
     def _read(self, request: httpx.Request, doc_id: str) -> httpx.Response:
         doc = self.docs.get(doc_id)
