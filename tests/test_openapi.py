@@ -242,6 +242,10 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "list_my_tasks": ["tasks.task.read.v1"],
         "search_tasks": ["tasks.task.read.v1"],
         "read_task": ["tasks.task.read.v1"],
+        "open_boards": ["tasks.board.open.v1"],
+        "create_task": ["tasks.task.create.v1"],
+        "update_task": ["tasks.task.update.v1"],
+        "complete_task": ["tasks.task.complete.v1"],
         "create_reply_draft": ["mail.draft.create.v1"],
         "create_file": ["drive.file.create.v1"],
         "move_email": ["mail.email.move.v1"],
@@ -401,6 +405,58 @@ async def test_moving_an_email_is_a_low_risk_write(client: AsyncClient) -> None:
 
     moves = ("move_email", "archive_email", "trash_email")
     assert {name: risks.get(name) for name in moves} == dict.fromkeys(moves, "low")
+
+
+async def test_opening_tasks_is_a_low_risk_write(client: AsyncClient) -> None:
+    # Opening Tasks sets up the user's own Inbox and accepts the invitations made to them: once
+    # the owner allowed writing in Tasks, it runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    opening = document["paths"]["/contracts/v1/tasks/boards/open"]["post"]
+
+    assert opening["x-twake-risk"] == "low"
+
+
+async def test_creating_changing_and_completing_a_task_are_low_risk_writes(
+    client: AsyncClient,
+) -> None:
+    # The user's own work on boards they edit: once the owner allowed writing in Tasks, each runs
+    # without asking, though Tasks emails those who follow the task
+    document = (await client.get("/openapi.json")).json()
+
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, _, operation in operations_of(document)
+        if operation["operationId"] in ("create_task", "update_task", "complete_task")
+    }
+
+    assert risks == {"create_task": "low", "update_task": "low", "complete_task": "low"}
+
+
+async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: AsyncClient) -> None:
+    # The model gets each body as the document writes it: whole, taking these fields and no other
+    document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
+
+    schemas = {
+        name: operations[name]["requestBody"]["content"]["application/json"]["schema"]
+        for name in ("create_task", "update_task")
+    }
+
+    assert "requestBody" not in operations["open_boards"]
+    assert "requestBody" not in operations["complete_task"]
+    assert "$ref" not in json.dumps(schemas)
+    assert {name: sorted(schema["properties"]) for name, schema in schemas.items()} == {
+        "create_task": sorted(
+            ["title", "section_id", "parent_id", "priority", "due_date", "due_time", "due_zone"]
+        ),
+        "update_task": sorted(
+            ["title", "priority", "due_date", "due_time", "due_zone", "deadline"]
+        ),
+    }
+    assert [schema["additionalProperties"] for schema in schemas.values()] == [False, False]
 
 
 async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(

@@ -14,7 +14,15 @@ from twake_space_agent_contracts.settings import Settings
 PERIOD = {"start": "2026-10-13T17:00:00+02:00", "end": "2026-10-13T18:00:00+02:00"}
 CHAT_SETTINGS = {"CHAT_URL": "https://gateway.test/synapse/", "MATRIX_SERVER_NAME": "twake.test"}
 DRIVE_SETTINGS = ("DRIVE_INSTANCE_DOMAIN", "DRIVE_SCHEME", "DRIVE_PORT")
-TASKS_OPERATIONS = {"list_my_tasks", "search_tasks", "read_task"}
+TASKS_OPERATIONS = {
+    "open_boards",
+    "list_my_tasks",
+    "search_tasks",
+    "read_task",
+    "create_task",
+    "update_task",
+    "complete_task",
+}
 
 
 async def document_of(client: AsyncClient) -> dict[str, Any]:

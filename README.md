@@ -310,7 +310,20 @@ Creates a text file in the user's own Drive, in a folder that nobody else sees.
 The Tasks contracts call the REST API of Twake Tasks 0.1.1 with the user's token. Tasks accepts it once the token broker's client has the audience `twaketasks` and LemonLDAP-NG gives Tasks the user's `uuid`, `org_id` and `sid`: Tasks then acts for the user's `uuid` in their `org_id`, and shows them the boards of the projects they are a member of. Tasks also refuses the token unless the `sub` LemonLDAP-NG gives its own client, `twaketasks-backend`, which introspects the token, is the one userinfo gives for the token broker's client: both clients must take the same identifier attribute. The service publishes the Tasks contracts once `PUBLISHED_APPS` names `tasks`, and then needs `TASKS_URL`: without it, it refuses to start.
 
 - A user whose token gives Tasks no `org_id` is a personal account for Tasks, which then shows them only what lies outside any organization: an organization's boards answer like unknown ones. Nothing in Tasks' answers tells the contracts which of the two the user is.
-- No contract lists the user's boards. Tasks 0.1.1 lists them only with `GET /api/boards`, which, as opening its web app does, creates the user's Inbox if they have none and accepts their pending invitations to projects, and a read must never act for the user. Until Tasks lists boards without side effects, an agent finds a board through the tasks it lists or searches.
+- Tasks 0.1.1 lists the user's boards only with `GET /api/boards`, which, as opening its web app does, creates the user's Inbox if they have none and accepts their pending invitations to projects. Listing boards is therefore an act, which a read never does: `open_boards` does it, as a write.
+
+### `tasks.board.open.v1`
+
+Opens Twake Tasks as the user, as its web app does when they open it, then lists their boards.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `open_boards` | `POST /contracts/v1/tasks/boards/open?include_archived=…` | `{"boards": [...], "truncated"}`, the user's Inbox first, then their favorite boards, then by name |
+
+- The first time, Tasks sets up the user's Inbox; each time, it makes them a member of the projects they were invited to. It notifies nobody.
+- It is a low-risk write (`x-twake-risk: low`): the user's own Inbox and the invitations made to them, which the owner's consent to write in Tasks covers without a confirmation each time. It takes no body.
+- Archived boards are left out unless `include_archived=true`. The list holds 100 boards at most.
+- Each board gives the user's `role` (`viewer`, `editor` or `admin`), whether it is their Inbox, its project's `project_id`, whether that project is a Twake Space's (`space`), and how many of its tasks are open. The names of boards and projects come under `untrusted`.
 
 ### `tasks.task.read.v1`
 
@@ -333,6 +346,27 @@ Reads the user's tasks, on the boards of the projects they are a member of.
 - Ids are the UUIDs that reads give; a key, such as `WEB-12`, names a task for people only.
 - Titles, descriptions, comments, and the names of boards, projects, sections and labels are written by members: they come under `untrusted`, apart from what the contract computed.
 
+### `tasks.task.create.v1`, `tasks.task.update.v1` and `tasks.task.complete.v1`
+
+Create, change and complete tasks as the user, on the boards they may edit.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `create_task` | `POST /contracts/v1/tasks/boards/{board_id}/tasks` `{"title", "section_id", "parent_id", "priority", "due_date", "due_time", "due_zone"}` | 201, the new task |
+| `update_task` | `PATCH /contracts/v1/tasks/boards/{board_id}/tasks/{task_id}` `{"title", "priority", "due_date", "due_time", "due_zone", "deadline"}` | the task |
+| `complete_task` | `POST /contracts/v1/tasks/boards/{board_id}/tasks/{task_id}/complete` | the task, with its `next_due_date` |
+
+- A board's `board_id` comes from `open_boards`, where the user's Inbox has `inbox: true`, or from a task the reads give.
+- Each write reads the board first (`GET /api/boards/{board_id}`), and writes nothing on a board the user is not a member of, which answers like an unknown one, nor on one where no member, or more than one, joined with their email, the rule `read_task` follows (`owner_not_member`), that they only view (`forbidden_role`) or that is archived (`board_archived`). A task the board does not show, archived or in the trash, is not found.
+- The answer is the task as Tasks then shows it, read again from the board: what `read_task` gives but its description and comments.
+- `create_task` puts the task at the end of the section given, else of the board's first `unstarted` section, or outside sections on a board without any, such as the Inbox. On a board with sections but none `unstarted`, `section_required` lists them, each with its `section_id`, its `category` and its name under `untrusted`. Every task the reads give comes with its `section_id` too. `parent_id` makes the task a subtask, outside sections, of a task the board shows.
+- Tasks creates a task from its title alone (`POST /api/boards/{board_id}/tasks`): the contract then sets its priority and due date (`PATCH`), and answers `task_created_partially`, with the task's `board_id`, `task_id` and `key`, when that fails. A task created in full that cannot be read again answers `tasks_unavailable`. Tasks takes no idempotency key, so no write is ever replayed.
+- `update_task` changes the fields given and no other, `null` clearing one but the title, with `PATCH /api/boards/{board_id}/tasks/{task_id}`: the last write wins. Clearing `due_date` clears its time, zone and recurrence too. No contract replaces a description, which could not be undone.
+- `complete_task` completes a task outside sections with `POST …/complete` `{"state": "completed"}`, and one in a section by its move to the board's first `completed` section (`POST …/move`), as the Tasks web app does: without one, `no_completed_section`. The open subtasks complete with their parent. A recurring task is completed for its due date and stays open, moved to the next one, which `next_due_date` gives, null for any other task. A completed task is answered as it is, and nothing is written.
+- A title takes 500 characters at most, and a priority goes from 1 to 4. Due dates and deadlines are days (`2026-10-09`); a due time, `HH:MM`, needs a due date, and its zone a due time. The zone must be in the IANA time zone database, as Tasks requires, which the `tzdata` package completes: an unknown one is an invalid request, before anything is written.
+- Tasks notifies nobody of a new task, which the user follows. It notifies the other people who follow a task of each change and of its completion, in Tasks and by email: by default its creator, its assignees and those who commented on it.
+- Each is a low-risk write (`x-twake-risk: low`): the user's own work, which the owner's consent to write in Tasks covers without a confirmation each time.
+
 ## Errors
 
 Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`application/problem+json`) with a stable `code`:
@@ -343,6 +377,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 401 | `missing_token` | no bearer token |
 | 401 | `invalid_token` | the token is not one the broker got for this service: another type, issuer, audience, client or key, or expired |
 | 401 | `missing_drive_token` | a Drive contract without the user's Drive token |
+| 403 | `forbidden_role` | the user is a viewer of the board: they only read it |
 | 404 | `event_not_found` | no event with this id concerns the user |
 | 404 | `invitation_not_found` | no invitation with this id was sent to the user |
 | 404 | `invitation_not_in_calendar` | the user's calendars no longer have the invitation, which may have been deleted |
@@ -367,7 +402,10 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `folder_shared` | the folder is shared with other people, or lies in a shared folder |
 | 409 | `name_taken` | a file or folder of that name is already in the folder |
 | 409 | `quota_exceeded` | the user's Drive has no room left for the file |
-| 409 | `owner_not_member` | the task has assignees, and no member of its board, or more than one, has the user's email |
+| 409 | `owner_not_member` | no member of the board, or more than one, has the user's email, when a contract writes on it or reads a task with assignees |
+| 409 | `board_archived` | the board is archived |
+| 409 | `section_required` | a new task names no section, and the board has none `unstarted` to put it in: `sections` lists them |
+| 409 | `no_completed_section` | the task is in a section, and the board has no `completed` section to move it to |
 | 409 | `mailbox_ambiguous` | several of the user's mailboxes have the name given, or the role archive: the user says which one, and `move_email` takes its id |
 | 409 | `trash_ambiguous` | several of the user's mailboxes have the role trash, which no contract chooses among: the user keeps a single one in Twake Mail |
 | 409 | `mailbox_forbidden` | `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam |
@@ -385,6 +423,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 502 | `drive_unavailable` | the user's Drive instance did not answer, or answered in an unexpected form |
 | 502 | `tasks_refused_token` | Tasks refused the user's token |
 | 502 | `tasks_unavailable` | Tasks did not answer, or answered in an unexpected form |
+| 502 | `task_created_partially` | Tasks created the task, then failed to set its priority or due date: `board_id`, `task_id` and `key` name it |
 | 503 | `keys_unavailable` | the signing keys of LemonLDAP-NG could not be fetched, and none are held |
 
 Routing errors, such as an unknown path, use the same format, with a `code` named after their HTTP status (`not_found`, `method_not_allowed`).

@@ -78,6 +78,7 @@ async def test_reading_a_task_gives_what_members_wrote_apart(
         "task_id": task.id,
         "key": "WEB-1",
         "parent_id": None,
+        "section_id": tasks_id("doing"),
         "state": "open",
         "priority": 2,
         "due_date": TASKS_TODAY,

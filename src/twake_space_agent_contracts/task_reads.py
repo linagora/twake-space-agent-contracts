@@ -7,22 +7,23 @@ from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.problems import Problem, invalid_request
+from twake_space_agent_contracts.problems import invalid_request
 from twake_space_agent_contracts.tasks import (
     DATA_NOT_INSTRUCTIONS,
     SEARCH_LIMIT,
+    TASKS_ID,
+    ZONE,
     TaskList,
     Tasks,
     TaskSummary,
     TaskText,
+    board_not_found,
+    owner_not_member,
+    task_not_found,
 )
 
 LONGEST_DESCRIPTION = 10_000
 LONGEST_COMMENT = 2_000
-# An IANA time zone name, such as Europe/Paris or Etc/GMT+1: Tasks tells whether it knows it
-ZONE = r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"
-# The ids of boards and tasks, as Tasks writes them: a pattern any OpenAPI validator checks
-TASKS_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
 Due = Literal["overdue", "today", "upcoming", "all"]
 
@@ -190,40 +191,23 @@ def router(tasks: Tasks, caller: CallerDependency) -> APIRouter:
     ) -> TaskDetail:
         board = await tasks.board(user, board_id)
         if board is None:
-            raise Problem(
-                status=404,
-                code="board_not_found",
-                title="Board not found",
-                detail=f"No board {board_id} belongs to a project this user is a member of.",
-            )
-        not_found = Problem(
-            status=404,
-            code="task_not_found",
-            title="Task not found",
-            detail=f"Board {board_id} shows no task {task_id}: it may be archived or in the trash.",
-        )
+            raise board_not_found(board_id)
         task = board.task(task_id)
         if task is None:
-            raise not_found
+            raise task_not_found(board_id, task_id)
         assigned_to_me = False
         if task.assignee_ids:
             # Tasks does not say who the user is: the member who joined with their email alone
             # tells, and no guess stands in for them
             me = board.member_named(user.email)
             if me is None:
-                raise Problem(
-                    status=409,
-                    code="owner_not_member",
-                    title="Owner not a member",
-                    detail="No member of the board, or more than one, has the email of the user"
-                    " you act for: whether the task is theirs cannot be told.",
-                )
+                raise owner_not_member("whether the task is theirs cannot be told")
             assigned_to_me = me in task.assignee_ids
         description = await tasks.description(user, board.board_id, task.summary.task_id)
         found = await tasks.comments(user, board.board_id, task.summary.task_id) if comments else []
         # Gone from the board since it was read, to another board or purged from the trash
         if description is None or found is None:
-            raise not_found
+            raise task_not_found(board_id, task_id)
         return TaskDetail(
             **task.summary.model_dump(exclude={"untrusted", "assigned_to_me"}),
             assigned_to_me=assigned_to_me,

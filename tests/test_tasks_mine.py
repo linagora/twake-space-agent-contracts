@@ -121,6 +121,7 @@ async def test_a_task_comes_with_what_members_wrote_apart(
                 "task_id": task.id,
                 "key": "WEB-1",
                 "parent_id": None,
+                "section_id": None,
                 "state": "open",
                 "priority": 1,
                 "due_date": TASKS_TODAY,

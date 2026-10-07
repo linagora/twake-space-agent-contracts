@@ -1036,6 +1036,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
     { name = "pyjwt", extra = ["crypto"] },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1056,6 +1057,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "psycopg-pool", specifier = ">=3.3.3" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10" },
+    { name = "tzdata", specifier = ">=2026.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
 

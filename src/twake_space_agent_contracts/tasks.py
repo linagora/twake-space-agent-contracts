@@ -19,6 +19,10 @@ DATA_NOT_INSTRUCTIONS = (
 
 SEARCH_LIMIT = 50
 """The most tasks a search of Tasks gives: there may be more."""
+# An IANA time zone name, such as Europe/Paris or Etc/GMT+1
+ZONE = r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"
+# The ids of boards and tasks, as Tasks writes them: a pattern any OpenAPI validator checks
+TASKS_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
 
 def _tasks_problem(code: str, title: str, detail: str) -> Problem:
@@ -27,6 +31,87 @@ def _tasks_problem(code: str, title: str, detail: str) -> Problem:
 
 def _unavailable(detail: str) -> Problem:
     return _tasks_problem("tasks_unavailable", "Tasks unavailable", detail)
+
+
+def board_not_found(board_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="board_not_found",
+        title="Board not found",
+        detail=f"No board {board_id} belongs to a project this user is a member of.",
+    )
+
+
+def task_not_found(board_id: str, task_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="task_not_found",
+        title="Task not found",
+        detail=f"Board {board_id} shows no task {task_id}: it may be archived or in the trash.",
+    )
+
+
+def owner_not_member(consequence: str) -> Problem:
+    """No member of the board, or more than one, joined with the user's email: what follows."""
+    return Problem(
+        status=409,
+        code="owner_not_member",
+        title="Owner not a member",
+        detail="No member of the board, or more than one, has the email of the user you act for:"
+        f" {consequence}.",
+    )
+
+
+def forbidden_role(board_id: str) -> Problem:
+    return Problem(
+        status=403,
+        code="forbidden_role",
+        title="Role forbids writing",
+        detail=f"The user is a viewer of board {board_id}: they only read it.",
+    )
+
+
+def board_archived(board_id: str) -> Problem:
+    return Problem(
+        status=409,
+        code="board_archived",
+        title="Board archived",
+        detail=f"Board {board_id} is archived: nothing changes on it until it is restored.",
+    )
+
+
+def _error_of(response: httpx.Response) -> str | None:
+    """The code Tasks names its refusal with, in {"error": code}."""
+    try:
+        found = response.json()
+    except ValueError:
+        return None
+    return str(found.get("error")) if isinstance(found, dict) else None
+
+
+class BoardText(BaseModel):
+    """What members wrote: the names of the board and of its project."""
+
+    name: str
+    project_name: str
+
+
+class Board(BaseModel):
+    """A board of a project the user is a member of."""
+
+    board_id: str
+    key_prefix: str
+    project_id: str
+    role: str = Field(
+        description="The user's role in the project: viewer, editor or admin. A viewer only reads."
+    )
+    inbox: bool = Field(description="Whether this is the user's Inbox, their personal board.")
+    space: bool = Field(
+        description="Whether the project is a Twake Space's, whose members are the space's."
+    )
+    archived: bool
+    open_tasks: int
+    untrusted: BoardText
 
 
 class TaskText(BaseModel):
@@ -44,6 +129,7 @@ class TaskSummary(BaseModel):
     task_id: str
     key: str = Field(description="How people call the task, such as WEB-12: not an id to pass.")
     parent_id: str | None = Field(description="The task this one is a subtask of.")
+    section_id: str | None = Field(description="Its section on the board; null outside sections.")
     state: Literal["open", "completed", "canceled"]
     priority: int | None = Field(description="From 1, the most urgent, to 4.")
     due_date: date | None
@@ -77,6 +163,7 @@ def task_summary(item: Any, *, board_id: str, board_name: str, mine: bool | None
         task_id=item["id"],
         key=item["key"],
         parent_id=item["parentId"],
+        section_id=item["sectionId"],
         state="canceled" if item["canceledAt"] else "completed" if item["completedAt"] else "open",
         priority=item["priority"],
         due_date=item["dueDate"],
@@ -119,9 +206,14 @@ class BoardContent:
 
     board_id: str
     name: str
+    role: str
+    """The user's: viewer, editor or admin."""
+    inbox: bool
+    archived: bool
     members: list[tuple[str, str]]
     """The members of its project: their user id, and the email they joined with, lowercased."""
     sections: dict[str, Section]
+    """In their order on the board."""
     tasks: dict[str, Any]
     """Its tasks as Tasks gives them, by id."""
 
@@ -162,6 +254,37 @@ class Tasks:
         self._url = url
         self._http = http
 
+    async def _call(
+        self, user: User, method: str, path: str, *, params: Any = None, body: Any = None
+    ) -> httpx.Response:
+        """Tasks' answer, once Tasks answered and took the user's token."""
+        try:
+            response = await self._http.request(
+                method,
+                self._url + path,
+                params=params,
+                json=body,
+                headers={"Authorization": f"Bearer {user.token}", "Accept": "application/json"},
+            )
+        except httpx.HTTPError as error:
+            raise _unavailable(f"Tasks did not answer {method} {path}.") from error
+        if response.status_code == 401:
+            raise _tasks_problem(
+                "tasks_refused_token",
+                "Tasks refused the user's token",
+                f"Tasks answered 401 to {method} {path}.",
+            )
+        return response
+
+    def _json(self, response: httpx.Response, method: str, path: str) -> Any:
+        """Tasks' JSON answer, if it says yes."""
+        if not response.is_success:
+            raise _unavailable(f"Tasks answered {response.status_code} to {method} {path}.")
+        try:
+            return response.json()
+        except ValueError as error:
+            raise _unavailable(f"Tasks did not answer {method} {path}.") from error
+
     async def _get(
         self,
         user: User,
@@ -174,30 +297,57 @@ class Tasks:
         """Tasks' JSON answer; None when what is asked for is missing and missing_ok is set.
         A refused request raises `invalid` when given: Tasks checks a parameter the contract
         cannot."""
-        try:
-            response = await self._http.get(
-                self._url + path,
-                params=params,
-                headers={"Authorization": f"Bearer {user.token}", "Accept": "application/json"},
-            )
-        except httpx.HTTPError as error:
-            raise _unavailable(f"Tasks did not answer GET {path}.") from error
+        response = await self._call(user, "GET", path, params=params)
         if missing_ok and response.status_code == 404:
             return None
         if invalid is not None and response.status_code == 400:
             raise invalid
-        if response.status_code == 401:
-            raise _tasks_problem(
-                "tasks_refused_token",
-                "Tasks refused the user's token",
-                f"Tasks answered 401 to GET {path}.",
-            )
-        if not response.is_success:
-            raise _unavailable(f"Tasks answered {response.status_code} to GET {path}.")
+        return self._json(response, "GET", path)
+
+    async def _write(
+        self, user: User, method: str, board_id: str, task_id: str | None, body: Any, then: str = ""
+    ) -> Any:
+        """Tasks' JSON answer to a write on the board's tasks, or on one task and what `then`
+        names of it; None for an answer without content."""
+        path = f"/api/boards/{board_id}/tasks" + (f"/{task_id}{then}" if task_id else "")
+        response = await self._call(user, method, path, body=body)
+        # Gone, or no longer the user's, since the contract read the board
+        if response.status_code == 404:
+            raise task_not_found(board_id, task_id) if task_id else board_not_found(board_id)
+        if response.status_code == 403:
+            raise forbidden_role(board_id)
+        error = _error_of(response)
+        if response.status_code == 409 and error == "archived":
+            raise board_archived(board_id)
+        # Tasks checks what the contract cannot, such as how deep subtasks nest
+        if response.status_code == 400:
+            raise invalid_request(f"Tasks refused {method} {path}: {error}.")
+        return None if response.status_code == 204 else self._json(response, method, path)
+
+    async def boards(self, user: User) -> list[Board]:
+        """The boards of the projects the user is a member of: their Inbox, their favorite
+        boards, then the others by name.
+
+        As opening the Tasks web app does, this sets up the user's Inbox if they have none, and
+        makes them a member of the projects they were invited to: never a read."""
+        found = await self._get(user, "/api/boards")
         try:
-            return response.json()
-        except ValueError as error:
-            raise _unavailable(f"Tasks did not answer GET {path}.") from error
+            return [
+                Board(
+                    board_id=board["id"],
+                    key_prefix=board["keyPrefix"],
+                    project_id=board["project"]["id"],
+                    role=board["role"],
+                    inbox=board["inbox"],
+                    space=board["project"]["managed"],
+                    archived=board["archived"],
+                    open_tasks=board["openTasks"],
+                    untrusted=BoardText(name=board["name"], project_name=board["project"]["name"]),
+                )
+                for board in found["boards"]
+            ]
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Tasks gave the boards in an unexpected form.") from error
 
     def _tasks(self, found: Any, whose: Whose) -> list[TaskSummary]:
         try:
@@ -248,6 +398,9 @@ class Tasks:
             return BoardContent(
                 board_id=str(found["id"]),
                 name=str(found["name"]),
+                role=str(found["role"]),
+                inbox=found["inbox"] is True,
+                archived=found["archived"] is True,
                 members=[
                     (str(member["userId"]), str(member["email"]).lower())
                     for member in found["members"]
@@ -271,6 +424,40 @@ class Tasks:
         if not isinstance(markdown, str):
             raise _unavailable("Tasks gave the description in an unexpected form.")
         return markdown
+
+    async def create_task(
+        self,
+        user: User,
+        board_id: str,
+        title: str,
+        *,
+        section_id: str | None,
+        parent_id: str | None,
+    ) -> tuple[str, str]:
+        """Creates a task at the end of the section, outside sections when section_id is None,
+        or at the end of the parent's subtasks: its id and key."""
+        where = {"sectionId": section_id} if parent_id is None else {"parentId": parent_id}
+        created = await self._write(user, "POST", board_id, None, where | {"title": title})
+        try:
+            return str(created["id"]), str(created["key"])
+        except (KeyError, TypeError) as error:
+            raise _unavailable("Tasks gave the new task in an unexpected form.") from error
+
+    async def edit_task(
+        self, user: User, board_id: str, task_id: str, changes: dict[str, Any]
+    ) -> None:
+        """Changes the task's fields, named as Tasks names them."""
+        await self._write(user, "PATCH", board_id, task_id, changes)
+
+    async def complete_task(self, user: User, board_id: str, task_id: str) -> None:
+        """Completes a task outside sections, which moves a recurring one to its next due date
+        instead."""
+        await self._write(user, "POST", board_id, task_id, {"state": "completed"}, "/complete")
+
+    async def move_task(self, user: User, board_id: str, task_id: str, section_id: str) -> None:
+        """Moves a task to the end of a section: to a completed one, this completes it, or moves
+        a recurring one to its next due date instead."""
+        await self._write(user, "POST", board_id, task_id, {"sectionId": section_id}, "/move")
 
     async def comments(self, user: User, board_id: str, task_id: str) -> list[Comment] | None:
         """The task's comments, oldest first; None if the board has no such task."""
