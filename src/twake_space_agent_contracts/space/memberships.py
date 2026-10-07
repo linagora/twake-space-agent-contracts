@@ -225,6 +225,28 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     return routes
 
 
+class RemovedMember(SpaceMember):
+    """A member once removed, as they were."""
+
+    still_member: bool = Field(
+        description="Whether the space still lists them once removed: as a member through a "
+        "linked group, who stays one while the group is linked and they are in it, which the "
+        "user changes in Twake Space."
+    )
+
+
+async def _still_listed(space: TwakeSpace, user: User, space_id: str, user_id: str) -> bool:
+    """Whether the space lists the member still, read again; False once the user no longer reads
+    it, as when they removed themselves."""
+    try:
+        detail = await space.space(user, space_id)
+    except Problem as problem:
+        if problem.code != "space_not_found":
+            raise
+        return False
+    return detail.member(user_id) is not None
+
+
 def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/space", tags=["space.member.remove.v1"])
 
@@ -234,12 +256,14 @@ def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         summary="Remove a member from one of the user's spaces in Twake Space",
         description=(
             "Removes a member from a space where the user you act for is an admin, by the user_id "
-            "read_space gives: they no longer see the space, nor what its apps hold. A member "
-            "through a linked group only stays one while the group is linked. Call it only once "
-            "the user asked to remove this very member; they confirm each call. It answers the "
-            f"member as they were. {UNTRUSTED} Example: {EXAMPLE_MEMBER}."
+            "read_space gives: they no longer see the space, nor what its apps hold. Someone the "
+            "space lists through a linked group stays a member while the group is linked and they "
+            "are in it, which the user changes in Twake Space. Call it only once the user asked to "
+            "remove this very member; they confirm each call. It answers the member as they were, "
+            "and still_member, whether the space lists them still once removed. "
+            f"{UNTRUSTED} Example: {EXAMPLE_MEMBER}."
         ),
-        response_model=SpaceMember,
+        response_model=RemovedMember,
         # The member loses what the space holds: the owner confirms each removal, shown whom it
         # would remove
         openapi_extra={"x-twake-risk": "high", "x-twake-preview": True},
@@ -249,18 +273,22 @@ def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         user_id: UserId,
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
-    ) -> SpaceMember | JSONResponse:
+    ) -> RemovedMember | JSONResponse:
         detail = await _administered(space, user, space_id)
         member = _member(detail, user_id)
         removed = space_member(member, detail.user_id_of(user.email))
         # What the owner allows: the member as they are
         digest = digest_of(space_id, user_id, member.email, member.role)
         if preview.asked:
-            summary = removing(member, removed.you, detail.name, preview.language)
+            groups = bool(detail.groups)
+            summary = removing(member, removed.you, detail.name, groups, preview.language)
             return preview.answer(summary, digest)
         preview.check(digest)
         await space.remove_member(user, space_id, user_id)
-        return removed
+        # Space takes the removal of someone ldap-rest has through a group alone for done, while
+        # the group keeps them in: what it lists then tells
+        still = await _still_listed(space, user, space_id, user_id)
+        return RemovedMember(**removed.model_dump(), still_member=still)
 
     return routes
 

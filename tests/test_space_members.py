@@ -489,3 +489,57 @@ async def test_a_member_another_admin_removed_meanwhile_is_not_found_whatever_gr
 
     assert response.status_code == 404
     assert response.json()["code"] == "member_not_found"
+
+
+async def test_a_member_the_space_still_lists_after_their_removal_is_said_to_stay(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Space takes the removal of someone ldap-rest has through a group alone for done, but the
+    # group keeps them in
+    room = with_designers(boundary)
+
+    through_group = await remove(client, room, CAROL.user_id)
+    direct = await remove(client, room, BOB.user_id)
+
+    assert through_group.status_code == direct.status_code == 200
+    assert (through_group.json()["user_id"], through_group.json()["still_member"]) == (
+        CAROL.user_id,
+        True,
+    )
+    assert (direct.json()["user_id"], direct.json()["still_member"]) == (BOB.user_id, False)
+    assert [method for method, _, _ in boundary.space.writes] == ["DELETE", "DELETE"]
+
+
+async def test_the_user_who_removes_themselves_is_answered_as_they_were(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # They no longer read the space, which still lists nobody to them
+    room = with_designers(boundary)
+
+    response = await remove(client, room, MMAUDET.user_id)
+
+    assert response.status_code == 200, response.text
+    assert (response.json()["you"], response.json()["still_member"]) == (True, False)
+    assert MMAUDET.user_id not in room.listed()
+
+
+async def test_the_preview_of_a_removal_warns_that_a_linked_group_keeps_its_people_in(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    room = with_designers(boundary)
+
+    english = await remove(client, room, CAROL.user_id, asking_preview("en"))
+    french = await remove(client, room, CAROL.user_id, asking_preview("fr"))
+
+    assert preview_of(english)[0] == (
+        "Remove “Carol King” <carol@twake.test> from the space “Design”: they no longer see what"
+        " it holds.\n"
+        "Unless they are a member through a linked group, who stays one while the group is linked"
+        " and they are in it."
+    )
+    assert preview_of(french)[0] == (
+        "Retirer « Carol King » <carol@twake.test> de l'espace « Design » : cette personne n'en"
+        " voit plus le contenu.\n"
+        "Sauf si elle en est membre par un groupe lié, et le reste tant que le groupe est lié et"
+        " qu'elle en fait partie."
+    )

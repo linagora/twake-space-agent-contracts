@@ -46,6 +46,8 @@ class _Words:
     same_role: str
     remove: str
     remove_yourself: str
+    through_group: str
+    through_group_yourself: str
     seen_by: tuple[str, str]
     """Who sees what the user posts: the one member, and more members."""
     react: str
@@ -77,6 +79,10 @@ _WORDS: dict[Language, _Words] = {
         same_role="{person} est déjà {role} de {space} : rien ne change.",
         remove="Retirer {person} de {space} : cette personne n'en voit plus le contenu.",
         remove_yourself="Te retirer de {space} : tu n'en vois plus le contenu.",
+        through_group="Sauf si elle en est membre par un groupe lié, et le reste tant que le groupe"
+        " est lié et qu'elle en fait partie.",
+        through_group_yourself="Sauf si tu en es membre par un groupe lié, et le restes tant que"
+        " le groupe est lié et que tu en fais partie.",
         seen_by=("que son seul membre voit", "que ses {count} membres voient"),
         react="Réagir avec {key} {item} dans {space}, que ses membres voient",
         reacted="Tu as déjà réagi avec {key} {item} dans {space} : rien ne change.",
@@ -116,6 +122,10 @@ _WORDS: dict[Language, _Words] = {
         same_role="{person} is {article} {role} of {space} already: nothing changes.",
         remove="Remove {person} from {space}: they no longer see what it holds.",
         remove_yourself="Remove yourself from {space}: you no longer see what it holds.",
+        through_group="Unless they are a member through a linked group, who stays one while the"
+        " group is linked and they are in it.",
+        through_group_yourself="Unless you are a member through a linked group, and stay one"
+        " while the group is linked and you are in it.",
         seen_by=("which its only member sees", "which its {count} members see"),
         react="React with {key} {item} in {space}, which its members see",
         reacted="You reacted with {key} {item} in {space} already: nothing changes.",
@@ -343,11 +353,15 @@ def changing_role(member: Member, role: str, space: str | None, language: Langua
     return line + (words.admin_powers if role == "admin" else "") + "."
 
 
-def removing(member: Member, you: bool, space: str | None, language: Language) -> str:
+def removing(member: Member, you: bool, space: str | None, groups: bool, language: Language) -> str:
     """What removing a member does, as the owner reads it: who leaves the space, maybe the user
-    themselves."""
+    themselves, and, when the space links groups, that a member through one stays."""
     words = _WORDS[language]
     space_name = space_named(space, language)
     if you:
-        return words.remove_yourself.format(space=space_name)
-    return words.remove.format(person=member_named(member, language), space=space_name)
+        line = words.remove_yourself.format(space=space_name)
+    else:
+        line = words.remove.format(person=member_named(member, language), space=space_name)
+    if not groups:
+        return line
+    return line + "\n" + (words.through_group_yourself if you else words.through_group)
