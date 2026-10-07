@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.previews import Previewing, digest_of
+from twake_space_agent_contracts.previews import Preview, Previewing, digest_of
 from twake_space_agent_contracts.space import EXAMPLE_ITEM, UNTRUSTED, ItemId, SpaceId
 from twake_space_agent_contracts.space.backend import FeedItem, TwakeSpace, feed_item_not_found
 from twake_space_agent_contracts.space.feed import SpaceFeedItem, feed_item
@@ -26,6 +26,16 @@ Key = Literal[
 
 
 class NewReaction(BaseModel):
+    """The reaction to add."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: Key = Field(description="The reaction, one of those Twake Space offers.")
+
+
+class OwnReaction(BaseModel):
+    """A reaction of the user's, to take back."""
+
     model_config = ConfigDict(extra="forbid")
 
     key: Key = Field(description="The reaction, one of those Twake Space offers.")
@@ -41,6 +51,43 @@ def _acted_on(item: FeedItem) -> dict[str, str | None]:
         "author": item.by.user_id if item.by else None,
         "text": item.body,
     }
+
+
+async def _react(
+    space: TwakeSpace,
+    user: User,
+    space_id: str,
+    item_id: str,
+    key: str,
+    preview: Preview,
+    *,
+    adding: bool,
+) -> SpaceFeedItem | JSONResponse:
+    """Adds the user's reaction to the item, or takes it back, as they would see the item once
+    read again."""
+    detail = await space.space(user, space_id)
+    me = detail.user_id_of(user.email)
+    item = await space.item(user, space_id, item_id)
+    if item is None:
+        raise feed_item_not_found(space_id, item_id)
+    reacted = item.reacted(me, key)
+    # What the owner allows: the item as they were shown it, and whether the user reacted so
+    digest = digest_of(space_id, _acted_on(item), key, reacted)
+    if preview.asked:
+        told = reacting if adding else unreacting
+        return preview.answer(told(item, me, detail.name, key, preview.language), digest)
+    preview.check(digest)
+    # Space keeps a reaction once, and takes back the user's own only: nothing else to write
+    if reacted == adding:
+        return feed_item(item, me)
+    if adding:
+        await space.react(user, space_id, item_id, key)
+    else:
+        await space.unreact(user, space_id, item_id, key)
+    now = await space.item(user, space_id, item_id)
+    if now is None:
+        raise feed_item_not_found(space_id, item_id)
+    return feed_item(now, me)
 
 
 def _add(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
@@ -70,27 +117,7 @@ def _add(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
     ) -> SpaceFeedItem | JSONResponse:
-        detail = await space.space(user, space_id)
-        me = detail.user_id_of(user.email)
-        item = await space.item(user, space_id, item_id)
-        if item is None:
-            raise feed_item_not_found(space_id, item_id)
-        already = item.reacted(me, reaction.key)
-        # What the owner allows: the item as they were shown it, and whether the user reacted
-        # so already
-        digest = digest_of(space_id, _acted_on(item), reaction.key, already)
-        if preview.asked:
-            summary = reacting(item, me, detail.name, reaction.key, preview.language)
-            return preview.answer(summary, digest)
-        preview.check(digest)
-        # Space keeps a reaction once: one the user made already changes nothing
-        if already:
-            return feed_item(item, me)
-        await space.react(user, space_id, item_id, reaction.key)
-        now = await space.item(user, space_id, item_id)
-        if now is None:
-            raise feed_item_not_found(space_id, item_id)
-        return feed_item(now, me)
+        return await _react(space, user, space_id, item_id, reaction.key, preview, adding=True)
 
     return routes
 
@@ -105,7 +132,7 @@ def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         description=(
             "Takes back a reaction of the user you act for to a card or a post of the feed of a "
             "space they are a member of, by the item_id list_feed_items gives: only their own, "
-            "which me tells. It answers the item, with its reactions. "
+            "which mine tells. It answers the item, with its reactions. "
             f"{UNTRUSTED} Example, to take a thumbs up back: {EXAMPLE_ITEM}, "
             'body={"key": "\N{THUMBS UP SIGN}"}.'
         ),
@@ -118,30 +145,11 @@ def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     async def remove_feed_reaction(
         space_id: SpaceId,
         item_id: ItemId,
-        reaction: NewReaction,
+        reaction: OwnReaction,
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
     ) -> SpaceFeedItem | JSONResponse:
-        detail = await space.space(user, space_id)
-        me = detail.user_id_of(user.email)
-        item = await space.item(user, space_id, item_id)
-        if item is None:
-            raise feed_item_not_found(space_id, item_id)
-        made = item.reacted(me, reaction.key)
-        # What the owner allows: the item as they were shown it, and whether the user reacted so
-        digest = digest_of(space_id, _acted_on(item), reaction.key, made)
-        if preview.asked:
-            summary = unreacting(item, me, detail.name, reaction.key, preview.language)
-            return preview.answer(summary, digest)
-        preview.check(digest)
-        # Only the user's own reaction is taken back: there is nothing else to take
-        if not made:
-            return feed_item(item, me)
-        await space.unreact(user, space_id, item_id, reaction.key)
-        now = await space.item(user, space_id, item_id)
-        if now is None:
-            raise feed_item_not_found(space_id, item_id)
-        return feed_item(now, me)
+        return await _react(space, user, space_id, item_id, reaction.key, preview, adding=False)
 
     return routes
 
