@@ -261,6 +261,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "read_contact": ["contacts.contacts.read.v1"],
         "create_contact": ["contacts.contact.create.v1"],
         "update_contact": ["contacts.contact.update.v1"],
+        "delete_contact": ["contacts.contact.delete.v1"],
     }
 
 
@@ -364,6 +365,7 @@ WRITES_NAMED = {
     "contacts": {
         "create_contact": ("create", "créer"),
         "update_contact": ("change", "modifier"),
+        "delete_contact": ("delete", "supprimer"),
     },
 }
 
@@ -463,6 +465,7 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "create_file": ("post", True),
         "create_contact": ("post", True),
         "update_contact": ("patch", True),
+        "delete_contact": ("delete", True),
     }
 
 
@@ -526,6 +529,17 @@ async def test_creating_and_changing_a_contact_are_low_risk_writes(client: Async
     }
 
     assert risks == {"create_contact": "low", "update_contact": "low"}
+
+
+async def test_deleting_a_contact_is_a_high_risk_write(client: AsyncClient) -> None:
+    # Contacts keeps no trash: the owner confirms each contact deleted
+    document = (await client.get("/openapi.json")).json()
+
+    path = "/contracts/v1/contacts/address-books/{book_id}/contacts/{contact_id}"
+    deleting = document["paths"][path]["delete"]
+
+    assert deleting["x-twake-risk"] == "high"
+    assert "requestBody" not in deleting
 
 
 @pytest.mark.parametrize("operation_id", ["create_contact", "update_contact"])

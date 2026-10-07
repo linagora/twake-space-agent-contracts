@@ -24,7 +24,7 @@ from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
 from twake_space_agent_contracts.chat import members, messages, rooms
 from twake_space_agent_contracts.chat.synapse import Synapse
-from twake_space_agent_contracts.contacts import address_books, create, reads, update
+from twake_space_agent_contracts.contacts import address_books, create, delete, reads, update
 from twake_space_agent_contracts.contacts.carddav import Contacts
 from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
@@ -150,6 +150,7 @@ def _contacts(context: Context) -> list[APIRouter]:
         reads.router(contacts, context.caller),
         create.router(contacts, context.caller),
         update.router(contacts, context.caller),
+        delete.router(contacts, context.caller),
     ]
 
 
@@ -252,8 +253,8 @@ APPLICATIONS = (
             fr="lister, chercher et lire tes contacts",
         ),
         write=Words(
-            en="create and change contacts in your own address books",
-            fr="créer et modifier des contacts dans tes propres carnets d'adresses",
+            en="create, change and delete contacts in your own address books",
+            fr="créer, modifier et supprimer des contacts dans tes propres carnets d'adresses",
         ),
         routers=_contacts,
     ),

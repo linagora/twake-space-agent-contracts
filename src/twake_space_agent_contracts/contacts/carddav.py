@@ -460,6 +460,16 @@ class Contacts:
         if response.status_code == 413:
             raise too_large()
 
+    async def delete(self, user: User, card: Card) -> bool:
+        """Deletes the card, for good: esn-sabre keeps no trash. The proxy forwards no If-Match:
+        the delete cannot be conditional, so it follows the read at once. False when the book no
+        longer holds the card."""
+        path = _card_path(card.book, card.contact_id)
+        response = await self._request(user, "DELETE", path, passing=frozenset({403, 404}))
+        if response.status_code == 403:
+            raise read_only(card.book)
+        return response.status_code != 404
+
     async def add(self, user: User, card: Card) -> Card:
         """Writes a new card, then reads it back as Contacts keeps it. The side service waits for
         esn-sabre longer than the service waits for it: a write it did not confirm may have been

@@ -44,6 +44,7 @@ class _Words:
 
     add: str
     added: str
+    delete: str
     change: str
     unchanged: str
     contact: str
@@ -70,6 +71,8 @@ _WORDS: dict[Language, _Words] = {
     "fr": _Words(
         add="Ajouter {contact} à ton carnet d'adresses",
         added="{contact} est déjà dans ton carnet d'adresses : rien n'est ajouté.",
+        delete="Supprimer {contact} de {book}, définitivement : Twake Contacts n'a pas de"
+        " corbeille.",
         change="Modifier {contact} dans {book} :",
         unchanged="Rien ne change dans {contact}, dans {book}.",
         contact="le contact {name}",
@@ -112,6 +115,7 @@ _WORDS: dict[Language, _Words] = {
     "en": _Words(
         add="Add {contact} to your address book",
         added="{contact} is in your address book already: nothing is added.",
+        delete="Delete {contact} from {book}, for good: Twake Contacts keeps no trash.",
         change="Change {contact} in {book}:",
         unchanged="Nothing changes in {contact}, in {book}.",
         contact="the contact {name}",
@@ -266,20 +270,35 @@ def _with_note(lines: list[str], note: str | None, language: Language) -> str:
     return head + excerpt(note, room, language) + "\n" + tail
 
 
-def adding(text: ContactText, language: Language) -> str:
-    """What adding a contact does, as the owner reads it: each field it holds, its note whole when
-    it fits. The given and family names come apart from the name only when it is not made of
-    them."""
+def _held(text: ContactText, language: Language) -> list[str]:
+    """Each field a contact holds, on a line of its own, but its name and its note. The given and
+    family names come apart from the name only when it is not made of them."""
     words = _WORDS[language]
-    lines = [words.add.format(contact=contact_named(text, language))]
     names = " ".join(part for part in (text.given_name, text.family_name) if part)
+    lines = []
     for field in FIELDS:
         if field in ("given_name", "family_name") and text.name == names:
             continue
         shown = value(text, field, LIST if field in LISTS else VALUE, language)
         if shown is not None:
             lines.append(words.field.format(label=words.labels[field], value=shown))
-    return _with_note(lines, text.note, language)
+    return lines
+
+
+def adding(text: ContactText, language: Language) -> str:
+    """What adding a contact does, as the owner reads it: each field it holds, its note whole when
+    it fits."""
+    head = _WORDS[language].add.format(contact=contact_named(text, language))
+    return _with_note([head, *_held(text, language)], text.note, language)
+
+
+def deleting(book: Book, text: ContactText, language: Language) -> str:
+    """What deleting a contact does, as the owner reads it: that it goes for good, and each field
+    it holds, its note whole when it fits."""
+    head = _WORDS[language].delete.format(
+        contact=contact_named(text, language), book=book_named(book, language)
+    )
+    return _with_note([head, *_held(text, language)], text.note, language)
 
 
 def added(text: ContactText, language: Language) -> str:
