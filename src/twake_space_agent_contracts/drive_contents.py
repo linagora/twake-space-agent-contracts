@@ -11,6 +11,7 @@ from twake_space_agent_contracts.documents import (
     MOST_COLUMNS,
     MOST_PAGES,
     MOST_ROWS,
+    Busy,
     Kind,
     Reader,
     Reason,
@@ -103,6 +104,16 @@ def refusal(reason: Reason) -> Problem:
             )
 
 
+def reading_busy() -> Problem:
+    return Problem(
+        status=503,
+        code="reading_busy",
+        title="Reading busy",
+        detail="The service is reading as many documents as it may at once, or one of the "
+        "user's: try again in a few seconds.",
+    )
+
+
 def document_too_large() -> Problem:
     return too_large(
         f"The document takes more than the {LARGEST_DOCUMENT // 1_048_576} MiB the service "
@@ -139,16 +150,19 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
         """The first max_bytes bytes of a document's text, the document downloaded whole."""
         if file.size is not None and file.size > LARGEST_DOCUMENT:
             raise document_too_large()
-        async with reader.turn:
-            content = await drive.content(owner, file.id, LARGEST_DOCUMENT + 1)
-            if content is None:
-                raise file_not_found(file.id)
-            if len(content) > LARGEST_DOCUMENT:
-                raise document_too_large()
-            try:
-                read = await reader.read(kind, content, max_bytes)
-            except Refused as refused:
-                raise refusal(refused.reason) from None
+        try:
+            async with reader.turn(owner.user.email):
+                content = await drive.content(owner, file.id, LARGEST_DOCUMENT + 1)
+                if content is None:
+                    raise file_not_found(file.id)
+                if len(content) > LARGEST_DOCUMENT:
+                    raise document_too_large()
+                try:
+                    read = await reader.read(kind, content, max_bytes)
+                except Refused as refused:
+                    raise refusal(refused.reason) from None
+        except Busy:
+            raise reading_busy() from None
         # Text others wrote, without what a reader does not see, nor control characters: no more
         # of it is cleaned than the max_bytes characters that hold max_bytes bytes, at most
         text = plain_text(seen(read.text[:max_bytes])).encode()

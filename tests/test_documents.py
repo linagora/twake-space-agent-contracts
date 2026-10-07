@@ -1,5 +1,6 @@
 """What every reader of documents shares, whatever the document's kind."""
 
+import asyncio
 import subprocess
 import sys
 import time
@@ -9,27 +10,13 @@ from collections.abc import Callable
 import pytest
 from openpyxl import Workbook
 
-from tests.documents import pdf, rezipped, word, workbook
+from tests.documents import empty_paragraphs, pdf, word, workbook
 from twake_space_agent_contracts import documents
-from twake_space_agent_contracts.documents import Kind, Reader, Refused
+from twake_space_agent_contracts.documents import Busy, Kind, Reader, Refused
 from twake_space_agent_contracts.documents import word as word_reader
 from twake_space_agent_contracts.documents.reading import Output
 
-WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 MIB = 1_048_576
-
-
-def empty_paragraphs(count: int) -> bytes:
-    """A Word document of that many empty paragraphs, then one of text, End: each paragraph
-    different enough that the zip compresses them only some four times."""
-    paragraphs = "".join(
-        f'<w:p w:rsidR="{number * 2_654_435_761 % 2**32:08X}"/>' for number in range(count)
-    )
-    document = (
-        f'<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>{paragraphs}'
-        "<w:p><w:r><w:t>End</w:t></w:r></w:p></w:body></w:document>"
-    )
-    return rezipped(word(lambda _: None), {"word/document.xml": document.encode()})
 
 
 def test_reading_keeps_only_what_is_open_and_what_is_being_read() -> None:
@@ -132,3 +119,46 @@ def test_the_processes_the_service_starts_cannot_inspect_it() -> None:
     )
 
     assert started.stdout.strip() == "0"
+
+
+async def test_two_documents_at_most_are_read_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two owners hold their turns: a third waits, then is told the service is busy
+    monkeypatch.setattr(documents, "WAITING_SECONDS", 0.2)
+    reader = Reader()
+    held = asyncio.Event()
+    inside: list[str] = []
+
+    async def reading(owner: str) -> None:
+        async with reader.turn(owner):
+            inside.append(owner)
+            await held.wait()
+
+    readings = [asyncio.create_task(reading(f"user{number}@twake.test")) for number in (1, 2)]
+    await asyncio.sleep(0.05)
+
+    with pytest.raises(Busy):
+        await reading("user3@twake.test")
+
+    held.set()
+    await asyncio.gather(*readings)
+    assert inside == ["user1@twake.test", "user2@twake.test"]
+
+
+async def test_an_owner_has_one_document_read_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    # So that one owner's requests never hold every turn
+    monkeypatch.setattr(documents, "WAITING_SECONDS", 0.2)
+    reader = Reader()
+    held = asyncio.Event()
+
+    async def reading() -> None:
+        async with reader.turn("mmaudet@twake.test"):
+            await held.wait()
+
+    first = asyncio.create_task(reading())
+    await asyncio.sleep(0.05)
+
+    with pytest.raises(Busy):
+        await reading()
+
+    held.set()
+    await first

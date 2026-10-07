@@ -49,6 +49,19 @@ async def read_content(client: AsyncClient, file_id: str, **params: Any) -> Resp
     )
 
 
+def empty_paragraphs(count: int) -> bytes:
+    """A Word document of that many empty paragraphs, then one of text, End: each paragraph
+    different enough that the zip compresses them only some four times."""
+    paragraphs = "".join(
+        f'<w:p w:rsidR="{number * 2_654_435_761 % 2**32:08X}"/>' for number in range(count)
+    )
+    document = (
+        f'<w:document xmlns:w="{WORD_NAMESPACES["w"]}"><w:body>{paragraphs}'
+        "<w:p><w:r><w:t>End</w:t></w:r></w:p></w:body></w:document>"
+    )
+    return rezipped(word(lambda _: None), {"word/document.xml": document.encode()})
+
+
 def word(build: Callable[[WordDocument], object]) -> bytes:
     """A Word document as python-docx writes it, from its default template, which Word made."""
     document = new_word_document()

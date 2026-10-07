@@ -11,6 +11,8 @@ import json
 import signal
 import sys
 from asyncio.subprocess import DEVNULL, PIPE
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal, get_args
 
@@ -47,7 +49,9 @@ _SET_DUMPABLE = 4
 
 AT_ONCE = 2
 """The documents read at the same time, each in its own process, the others waiting their turn:
-what they take in memory adds up."""
+what they take in memory adds up. An owner has one read at a time."""
+WAITING_SECONDS = 10.0
+"""The time a request waits for its turn at most, past which the service says it is busy."""
 READING_SECONDS = 10.0
 """The time a process reads a document for: then it stops, and gives the text it read."""
 LONGEST_SECONDS = 15.0
@@ -95,12 +99,51 @@ class Refused(Exception):
         self.reason = reason
 
 
+class Busy(Exception):
+    """No turn to read a document came in the time a request waits for one."""
+
+
 class Reader:
     """Reads documents, each in a process of its own, a few at a time."""
 
     def __init__(self, at_once: int = AT_ONCE) -> None:
-        self.turn = asyncio.Semaphore(at_once)
-        """Held while a document is downloaded and read."""
+        self._turns = asyncio.Semaphore(at_once)
+        self._owners: dict[str, asyncio.Lock] = {}
+        """The turn of each owner who has a document read, or waits to."""
+        self._waiting: dict[str, int] = {}
+        """How many requests of each owner hold their turn, or wait for it."""
+
+    @asynccontextmanager
+    async def turn(self, owner: str) -> AsyncIterator[None]:
+        """A turn to download a document and read it, which an owner takes one at a time, and all
+        owners AT_ONCE at a time; Busy when none came in WAITING_SECONDS."""
+        own = self._owners.setdefault(owner, asyncio.Lock())
+        self._waiting[owner] = self._waiting.get(owner, 0) + 1
+        try:
+            await self._take(own)
+            try:
+                yield
+            finally:
+                self._turns.release()
+                own.release()
+        finally:
+            self._waiting[owner] -= 1
+            if not self._waiting[owner]:
+                del self._waiting[owner], self._owners[owner]
+
+    async def _take(self, own: asyncio.Lock) -> None:
+        """The owner's turn, then one of the turns of all owners, waited for WAITING_SECONDS in
+        all."""
+        try:
+            async with asyncio.timeout(WAITING_SECONDS):
+                await own.acquire()
+                try:
+                    await self._turns.acquire()
+                except BaseException:
+                    own.release()
+                    raise
+        except TimeoutError:
+            raise Busy from None
 
     async def read(self, kind: Kind, content: bytes, budget: int) -> Text:
         """The text of the document, up to budget characters, past which the process stops."""

@@ -1,6 +1,7 @@
 """What keeps reading documents safe, whatever their kind: files other people may have written,
 some of them crafted to take down whatever reads them."""
 
+import asyncio
 import json
 import zipfile
 from collections.abc import Callable
@@ -22,6 +23,7 @@ from tests.documents import (
     XLSX,
     compound_file,
     declaring,
+    empty_paragraphs,
     encrypted_office_document,
     encrypting,
     opendocument,
@@ -397,3 +399,19 @@ async def test_a_zip_of_the_zip64_format_is_not_read(
 
     assert response.status_code == 415, response.text
     assert response.json()["code"] == "content_not_extractable"
+
+
+async def test_a_request_that_waits_too_long_for_its_turn_is_told_the_service_is_busy(
+    client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two readings of the owner at once, of a document that takes seconds to read: one waits for
+    # the other, past which it gives up
+    monkeypatch.setattr(documents, "WAITING_SECONDS", 0.2)
+    content = empty_paragraphs(200_000)
+    boundary.drive.add(text_file("slow", "Slow.docx", content=content, mime=DOCX))
+
+    responses = await asyncio.gather(read_content(client, "slow"), read_content(client, "slow"))
+
+    assert sorted(response.status_code for response in responses) == [200, 503]
+    busy = next(response for response in responses if response.status_code == 503)
+    assert busy.json()["code"] == "reading_busy"
