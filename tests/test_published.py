@@ -278,6 +278,20 @@ async def test_drive_published_with_the_domain_of_its_instances_is_served(
     assert items.status_code == 200, items.text
 
 
+async def test_contacts_is_published_once_the_setting_names_it_with_no_setting_of_its_own(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    # Contacts goes through the Calendar side service, at CALENDAR_URL
+    environment.setenv("PUBLISHED_APPS", "events,contacts")
+
+    async with serving(create_app_from_env()) as client:
+        document = await document_of(client)
+
+    domains = {operation["tags"][0].split(".")[0] for _, _, operation in operations_of(document)}
+    assert domains == {"events", "contacts"}
+    assert set(document["x-twake-domains"]) == {"events", "contacts"}
+
+
 async def test_tasks_left_unpublished_needs_no_url(environment: pytest.MonkeyPatch) -> None:
     # A deployment that does not publish Tasks starts as before, knowing nothing of it
     environment.setenv("PUBLISHED_APPS", "events,calendar")

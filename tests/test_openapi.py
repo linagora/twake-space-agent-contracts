@@ -256,6 +256,12 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "move_emails": ["mail.email.move.v1"],
         "archive_emails": ["mail.email.move.v1"],
         "trash_emails": ["mail.email.trash.v1"],
+        "list_address_books": ["contacts.addressbooks.read.v1"],
+        "search_contacts": ["contacts.contacts.read.v1"],
+        "read_contact": ["contacts.contacts.read.v1"],
+        "create_contact": ["contacts.contact.create.v1"],
+        "update_contact": ["contacts.contact.update.v1"],
+        "delete_contact": ["contacts.contact.delete.v1"],
     }
 
 
@@ -356,7 +362,39 @@ WRITES_NAMED = {
         "accept_invitation": ("accept", "accepter"),
         "create_event": ("add events", "ajouter des événements"),
     },
+    "contacts": {
+        "create_contact": ("create", "créer"),
+        "update_contact": ("change", "modifier"),
+        "delete_contact": ("delete", "supprimer"),
+    },
 }
+
+
+# What the words of an application for reading name beyond the user's own data, in English and in
+# French
+READS_NAMED = {
+    "contacts": [
+        ("your organization's directory", "l'annuaire de ton organisation"),
+        ("the address books shared with you", "les carnets partagés avec toi"),
+    ],
+}
+
+
+@pytest.mark.parametrize("domain", sorted(READS_NAMED))
+async def test_the_words_of_an_application_name_all_its_reads_cover(
+    client: AsyncClient, domain: str
+) -> None:
+    # The harness asks the owner once for all the reads of an application, in its words: those of
+    # Contacts name the directory of the user's organization and the books others share with them,
+    # which its reads cover too
+    document = (await client.get("/openapi.json")).json()
+    words = document["x-twake-domains"][domain]["read"]
+
+    unnamed = [
+        (en, fr) for en, fr in READS_NAMED[domain] if en not in words["en"] or fr not in words["fr"]
+    ]
+
+    assert unnamed == []
 
 
 @pytest.mark.parametrize("domain", sorted(WRITES_NAMED))
@@ -452,6 +490,9 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "update_task": ("patch", True),
         "complete_task": ("post", True),
         "create_file": ("post", True),
+        "create_contact": ("post", True),
+        "update_contact": ("patch", True),
+        "delete_contact": ("delete", True),
     }
 
 
@@ -501,6 +542,67 @@ async def test_the_body_of_a_new_event_is_whole_and_closed(client: AsyncClient) 
     )
     assert sorted(schema["required"]) == ["end", "start", "title"]
     assert schema["additionalProperties"] is False
+
+
+async def test_creating_and_changing_a_contact_are_low_risk_writes(client: AsyncClient) -> None:
+    # The user's own contacts, which nobody is told of: once the owner allowed writing in Contacts,
+    # each runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, _, operation in operations_of(document)
+        if operation["operationId"] in ("create_contact", "update_contact")
+    }
+
+    assert risks == {"create_contact": "low", "update_contact": "low"}
+
+
+async def test_deleting_a_contact_is_a_high_risk_write(client: AsyncClient) -> None:
+    # Contacts keeps no trash: the owner confirms each contact deleted
+    document = (await client.get("/openapi.json")).json()
+
+    path = "/contracts/v1/contacts/address-books/{book_id}/contacts/{contact_id}"
+    deleting = document["paths"][path]["delete"]
+
+    assert deleting["x-twake-risk"] == "high"
+    assert "requestBody" not in deleting
+
+
+@pytest.mark.parametrize("operation_id", ["create_contact", "update_contact"])
+async def test_the_bodies_of_the_contacts_writes_are_whole_and_closed(
+    client: AsyncClient, operation_id: str
+) -> None:
+    # The model gets the body as the document writes it: whole, taking these fields and no other
+    document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
+
+    schema = operations[operation_id]["requestBody"]["content"]["application/json"]["schema"]
+
+    assert "$ref" not in json.dumps(schema)
+    assert sorted(schema["properties"]) == sorted(
+        [
+            "name",
+            "given_name",
+            "family_name",
+            "nickname",
+            "emails",
+            "phones",
+            "organization",
+            "title",
+            "addresses",
+            "note",
+            "birthday",
+        ]
+    )
+    assert schema["additionalProperties"] is False
+    items = [
+        schema["properties"][name]["anyOf"][0]["items"]
+        for name in ("emails", "phones", "addresses")
+    ]
+    assert [item["additionalProperties"] for item in items] == [False, False, False]
 
 
 async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:
