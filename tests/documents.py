@@ -263,6 +263,20 @@ def rezipped(content: bytes, parts: dict[str, bytes]) -> bytes:
     return written.getvalue()
 
 
+def recompressed(content: bytes, name: str, method: int) -> bytes:
+    """The zip with the part of that name compressed by this method of the zip module, such as
+    zipfile.ZIP_BZIP2, the others as they were."""
+    written = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(content)) as original,
+        zipfile.ZipFile(written, "w", zipfile.ZIP_DEFLATED) as copy,
+    ):
+        for entry in original.infolist():
+            method_of = method if entry.filename == name else zipfile.ZIP_DEFLATED
+            copy.writestr(entry.filename, original.read(entry), compress_type=method_of)
+    return written.getvalue()
+
+
 def part_of(content: bytes, name: str) -> bytes:
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
         return archive.read(name)

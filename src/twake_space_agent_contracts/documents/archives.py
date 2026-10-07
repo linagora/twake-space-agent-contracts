@@ -30,6 +30,10 @@ HIGHEST_RATIO = 100
 than RATIO_FROM uncompressed: XML is some ten times smaller compressed, a zip bomb thousands of
 times."""
 RATIO_FROM = 1_048_576
+METHODS = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
+"""How the files of a zip may be compressed: stored as they are, or deflated, as Office and
+LibreOffice do; the zip module unpacks the others, such as bzip2 or LZMA, without bounding what
+they give."""
 
 Events = Iterator[tuple[str, Element]]
 
@@ -72,6 +76,8 @@ def open_zip(content: bytes) -> zipfile.ZipFile:
     if sum(file.file_size for file in files_listed) > LARGEST_UNPACKED:
         raise TooLarge("the zip unpacks into too much")
     for file in files_listed:
+        if file.compress_type not in METHODS:
+            raise Unreadable("a file of the zip is compressed as no office application does")
         if file.file_size > RATIO_FROM and file.file_size > HIGHEST_RATIO * file.compress_size:
             raise TooLarge("a file of the zip is compressed too many times")
         # Encrypted with a password, which the zip module asks for to unpack it

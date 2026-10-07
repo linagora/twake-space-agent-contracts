@@ -2,6 +2,7 @@
 some of them crafted to take down whatever reads them."""
 
 import json
+import zipfile
 from collections.abc import Callable
 
 import pytest
@@ -27,6 +28,7 @@ from tests.documents import (
     pdf,
     presentation,
     read_content,
+    recompressed,
     rezipped,
     word,
     workbook,
@@ -365,3 +367,18 @@ async def test_the_text_of_a_reading_is_cut_before_it_is_cleaned(
     assert answer["untrusted"]["content"] == "é" * 500
     assert answer["truncated"] is True
     assert cleaned == [1_000]
+
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA], ids=["bzip2", "lzma"])
+async def test_a_part_compressed_otherwise_than_office_compresses_is_not_unpacked(
+    client: AsyncClient, boundary: FakeBoundary, method: int
+) -> None:
+    # Office and LibreOffice store or deflate a document's parts, where the zip module unpacks
+    # bzip2 and LZMA without bounding what they give
+    content = recompressed(plans(), "word/document.xml", method)
+    boundary.drive.add(text_file("odd", "Odd.docx", content=content, mime=DOCX))
+
+    response = await read_content(client, "odd")
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"
