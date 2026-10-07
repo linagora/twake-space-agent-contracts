@@ -243,6 +243,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "search_tasks": ["tasks.task.read.v1"],
         "read_task": ["tasks.task.read.v1"],
         "open_boards": ["tasks.board.open.v1"],
+        "list_projects": ["tasks.project.read.v1"],
         "create_task": ["tasks.task.create.v1"],
         "update_task": ["tasks.task.update.v1"],
         "complete_task": ["tasks.task.complete.v1"],
@@ -375,6 +376,7 @@ READS_NAMED = {
         ("your organization's directory", "l'annuaire de ton organisation"),
         ("the address books shared with you", "les carnets partagés avec toi"),
     ],
+    "tasks": [("your projects", "tes projets")],
 }
 
 

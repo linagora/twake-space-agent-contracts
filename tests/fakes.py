@@ -1901,6 +1901,11 @@ class TasksBoard:
     """Its sections in order, each with its id, name and category."""
     labels: dict[str, str] = field(default_factory=dict)
     """The names of its labels, by id."""
+    project_id: str = ""
+    """The id of its project: by default, that of every project of that name."""
+
+    def __post_init__(self) -> None:
+        self.project_id = self.project_id or tasks_id(f"project {self.project}")
 
 
 @dataclass
@@ -2028,6 +2033,8 @@ class FakeTasks:
                 key=lambda board: (not board.inbox, board.name),
             )
             return httpx.Response(200, json={"boards": [self._listed(b, person) for b in listed]})
+        if request.url.path == "/api/projects":
+            return httpx.Response(200, json={"projects": self._projects(person)})
         if request.url.path == "/api/my-tasks":
             return httpx.Response(
                 200,
@@ -2308,11 +2315,20 @@ class FakeTasks:
 
     def _project(self, board: TasksBoard) -> dict[str, Any]:
         return {
-            "id": tasks_id(f"project {board.project}"),
+            "id": board.project_id,
             "name": board.project,
             "personal": board.inbox,
             "managed": board.managed,
         }
+
+    def _projects(self, person: TasksPerson) -> list[dict[str, Any]]:
+        """The projects the person is a member of, by name, as listing them reads them only."""
+        found: dict[str, dict[str, Any]] = {}
+        for board in self.boards.values():
+            role = self._role(board, person)
+            if role is not None:
+                found.setdefault(board.project_id, self._project(board) | {"role": role})
+        return sorted(found.values(), key=lambda project: str(project["name"]))
 
     def _listed(self, board: TasksBoard, person: TasksPerson) -> dict[str, Any]:
         return {

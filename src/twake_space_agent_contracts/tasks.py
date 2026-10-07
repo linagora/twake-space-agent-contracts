@@ -112,6 +112,29 @@ class Board(BaseModel):
     untrusted: BoardText
 
 
+class ProjectText(BaseModel):
+    """What members wrote: the project's name."""
+
+    name: str
+
+
+class Project(BaseModel):
+    """A project the user is a member of, which holds boards."""
+
+    project_id: str
+    role: str = Field(
+        description="The user's role in the project: viewer, editor or admin. A viewer only reads."
+    )
+    personal: bool = Field(
+        description="Whether this is the user's personal project, which holds their Inbox and is "
+        "never shared."
+    )
+    space: bool = Field(
+        description="Whether the project is a Twake Space's, whose members are the space's."
+    )
+    untrusted: ProjectText
+
+
 class TaskText(BaseModel):
     """What members wrote: the task's title, and the names of its board and labels."""
 
@@ -347,6 +370,24 @@ class Tasks:
             ]
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Tasks gave the boards in an unexpected form.") from error
+
+    async def projects(self, user: User) -> list[Project]:
+        """The projects the user is a member of, by name, a space's included: a read, which
+        neither sets up their Inbox nor accepts their invitations."""
+        found = await self._get(user, "/api/projects")
+        try:
+            return [
+                Project(
+                    project_id=project["id"],
+                    role=project["role"],
+                    personal=project["personal"],
+                    space=project["managed"],
+                    untrusted=ProjectText(name=project["name"]),
+                )
+                for project in found["projects"]
+            ]
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Tasks gave the projects in an unexpected form.") from error
 
     def _tasks(self, found: Any, whose: Whose) -> list[TaskSummary]:
         try:

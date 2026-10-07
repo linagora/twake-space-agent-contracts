@@ -15,6 +15,7 @@ from twake_space_agent_contracts import (
     event_create,
     freebusy,
     invitations,
+    projects,
     task_reads,
     task_writes,
 )
@@ -157,6 +158,7 @@ def _tasks(context: Context) -> list[APIRouter]:
     tasks = Tasks(context.settings.tasks_url, context.http)
     return [
         boards.router(tasks, context.caller),
+        *projects.routers(tasks, context.caller),
         task_reads.router(tasks, context.caller),
         *task_writes.routers(tasks, context.caller),
     ]
@@ -219,8 +221,8 @@ APPLICATIONS = (
         domain="tasks",
         name=Words(en="Twake Tasks", fr="Twake Tasks"),
         read=Words(
-            en="list, search and read your tasks",
-            fr="lister, chercher et lire tes tâches",
+            en="list your projects, and list, search and read your tasks",
+            fr="lister tes projets, et lister, chercher et lire tes tâches",
         ),
         write=Words(
             en="open your boards, create tasks in them, and edit and complete their tasks, which"

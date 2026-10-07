@@ -11,6 +11,7 @@ TASK = f"/contracts/v1/tasks/boards/{BOARD}/tasks/{tasks_id('WEB-1')}"
 # Each operation's method, path, query and body
 OPERATIONS = [
     pytest.param("POST", "/contracts/v1/tasks/boards/open", {}, None, id="open_boards"),
+    pytest.param("GET", "/contracts/v1/tasks/projects", {}, None, id="list_projects"),
     pytest.param(
         "GET", "/contracts/v1/tasks/mine", {"zone": "Europe/Paris"}, None, id="list_my_tasks"
     ),

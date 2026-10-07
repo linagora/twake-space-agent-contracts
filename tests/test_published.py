@@ -23,6 +23,7 @@ CHAT_SETTINGS = {
 DRIVE_SETTINGS = ("DRIVE_INSTANCE_DOMAIN", "DRIVE_SCHEME", "DRIVE_PORT")
 TASKS_OPERATIONS = {
     "open_boards",
+    "list_projects",
     "list_my_tasks",
     "search_tasks",
     "read_task",
