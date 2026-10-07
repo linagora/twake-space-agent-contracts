@@ -368,6 +368,36 @@ async def test_mail_words_name_each_of_its_writes(client: AsyncClient) -> None:
     assert unnamed == []
 
 
+async def test_each_move_of_one_email_sends_several_to_its_batch(client: AsyncClient) -> None:
+    # Asked to trash 35 emails, the model called trash_email once per email, and the harness
+    # stopped it at its limit of tool calls per message: each move of one email tells the model
+    # to move several in one call, and the batch to call it instead of one call per email
+    document = (await client.get("/openapi.json")).json()
+    descriptions = {
+        operation["operationId"]: operation["description"]
+        for _, _, operation in operations_of(document)
+    }
+    batches = {
+        "move_email": "move_emails",
+        "archive_email": "archive_emails",
+        "trash_email": "trash_emails",
+    }
+
+    unsent = [
+        single
+        for single, batch in batches.items()
+        if f"For several emails, call {batch} once with all their ids" not in descriptions[single]
+    ]
+    unnamed = [
+        batch
+        for single, batch in batches.items()
+        if f"rather than {single} once per email" not in descriptions[batch]
+    ]
+
+    assert unsent == []
+    assert unnamed == []
+
+
 async def test_each_write_declares_its_risk(client: AsyncClient) -> None:
     # The harness confirms a write without a risk it knows each time, as a high one
     document = (await client.get("/openapi.json")).json()

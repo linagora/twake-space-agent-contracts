@@ -17,6 +17,7 @@ from twake_space_agent_contracts.mail.batch import (
     EmailIds,
     Emails,
     MovedEmails,
+    for_several,
     in_one_call,
     moved_emails,
 )
@@ -204,9 +205,10 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         summary="Move an email of the user to another of their mailboxes",
         description=(
             "Moves an email of the user you act for to another of their own mailboxes, out of the "
-            "others it is in. Name the mailbox by mailbox_id, its id as list_mailboxes gives it, "
-            "or by mailbox_name, its name whatever its case: a name that several of their "
-            "mailboxes have is refused, and you ask the user which one they mean. An email is not "
+            f"others it is in. {for_several('move_emails', 'move_email')} Name the mailbox by "
+            "mailbox_id, its id as list_mailboxes gives it, or by mailbox_name, its name whatever "
+            "its case: a name that several of their mailboxes have is refused, and you ask the "
+            "user which one they mean. An email is not "
             "moved to drafts, sent, outbox, templates, trash or spam: trash_email puts it in the "
             "trash. An email in spam is not taken out of it. The email can be moved back. "
             f"Example, for an email that list_emails gave with the id {EXAMPLE_ID}, to the user's "
@@ -235,9 +237,10 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         summary="Archive an email of the user",
         description=(
             "Moves an email of the user you act for to their archive, their mailbox whose role is "
-            "archive, out of the others it is in. A user without an archive is answered "
-            "mailbox_not_found. An email in spam is not taken out of it. The email can be moved "
-            "back with move_email. Example, for an email that list_emails gave with the id "
+            "archive, out of the others it is in. "
+            f"{for_several('archive_emails', 'archive_email')} A user without an archive is "
+            "answered mailbox_not_found. An email in spam is not taken out of it. The email can be "
+            "moved back with move_email. Example, for an email that list_emails gave with the id "
             f"{EXAMPLE_ID}: email_id={EXAMPLE_ID}."
         ),
         response_model=Moved,

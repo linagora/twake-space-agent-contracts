@@ -13,6 +13,7 @@ from twake_space_agent_contracts.mail.batch import (
     OUTCOMES,
     Emails,
     MovedEmails,
+    for_several,
     in_one_call,
     moved_emails,
 )
@@ -30,7 +31,8 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         summary="Put an email of the user in their trash",
         description=(
             "Puts an email of the user you act for in their trash, their mailbox whose role is "
-            "trash, out of the others it is in, spam included. It is not deleted: move_email can "
+            "trash, out of the others it is in, spam included. "
+            f"{for_several('trash_emails', 'trash_email')} It is not deleted: move_email can "
             "move it back. A user without a trash is answered mailbox_not_found. Example, for an "
             f"email that list_emails gave with the id {EXAMPLE_ID}: email_id={EXAMPLE_ID}."
         ),

@@ -102,6 +102,15 @@ OUTCOMES = (
 """What a description tells the model of the answer of a call that moves several emails."""
 
 
+def for_several(batch: str, single: str) -> str:
+    """What the description of a move of one email tells the model to do to move several: one call
+    of the batch for all of them, rather than one call per email."""
+    return (
+        f"For several emails, call {batch} once with all their ids, up to {MOST_EMAILS}, rather "
+        f"than {single} once per email."
+    )
+
+
 def in_one_call(single: str) -> str:
     """What a description tells the model to do to move several emails: one call for all of them,
     rather than one call of the contract that moves a single email per email."""
