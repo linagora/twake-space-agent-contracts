@@ -21,6 +21,23 @@ def seen(text: str) -> str:
     )
 
 
+def line(text: str | None, longest: int) -> tuple[str | None, bool]:
+    """Words someone wrote, as the contracts give them back: on one line, without what a reader
+    does not see, cut after `longest` characters; None for none. Whether they were cut comes
+    with them."""
+    words = " ".join(seen(text or "").split())
+    return words[:longest] or None, len(words) > longest
+
+
+def paragraphs(text: str | None, longest: int) -> tuple[str | None, bool]:
+    """Text someone wrote on several lines, as the contracts give it back: without what a reader
+    does not see, the blanks at the end of its lines and its runs of blank lines, cut after
+    `longest` characters; None for none. Whether it was cut comes with it."""
+    lines = (" ".join(part.split()) for part in seen(text or "").splitlines())
+    kept = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return kept[:longest] or None, len(kept) > longest
+
+
 # An email address: its local part, dot-separated atoms of letters, digits and the signs RFC 5322
 # allows, then a domain of two labels at least, the last one letters, or the punycode of a top
 # level domain. Letters and digits of any script: an address may be internationalized.

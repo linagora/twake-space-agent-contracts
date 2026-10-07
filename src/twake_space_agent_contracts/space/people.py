@@ -8,11 +8,12 @@ from pydantic import BaseModel, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.problems import invalid_request
-from twake_space_agent_contracts.space import UNTRUSTED, line
+from twake_space_agent_contracts.space import UNTRUSTED
 from twake_space_agent_contracts.space.backend import TwakeSpace
-from twake_space_agent_contracts.text import seen
+from twake_space_agent_contracts.text import line
 
 LONGEST_NAME = 255
+LONGEST_WORDS = 100
 
 
 class PersonText(BaseModel):
@@ -54,7 +55,7 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
             str | None,
             Query(
                 min_length=2,
-                max_length=100,
+                max_length=LONGEST_WORDS,
                 description="The words to find, 2 to 100 characters, such as a name, a username "
                 "or part of an email.",
             ),
@@ -64,7 +65,7 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         ] = 1,
     ) -> People:
         # Space trims the words, and ldap-rest needs two characters to search
-        words = None if q is None else " ".join(seen(q).split())
+        words = None if q is None else line(q, LONGEST_WORDS)[0] or ""
         if words is not None and len(words) < 2:
             raise invalid_request("q: Give 2 to 100 characters to find.")
         found, more = await space.people(user, words, page)
@@ -73,7 +74,7 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
                 Person(
                     username=person.username,
                     email=person.email,
-                    untrusted=PersonText(display_name=line(person.display_name, LONGEST_NAME)),
+                    untrusted=PersonText(display_name=line(person.display_name, LONGEST_NAME)[0]),
                 )
                 for person in found
             ],

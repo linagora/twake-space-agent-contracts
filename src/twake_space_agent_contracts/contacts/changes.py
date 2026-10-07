@@ -8,10 +8,9 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
-from twake_space_agent_contracts.contacts import line, paragraphs
 from twake_space_agent_contracts.contacts.cards import ContactText, fields_of
 from twake_space_agent_contracts.problems import Problem, invalid_email, invalid_request
-from twake_space_agent_contracts.text import EMAIL
+from twake_space_agent_contracts.text import EMAIL, line, paragraphs
 
 LONGEST_TEXT = 200
 """The most characters of a name, an organization, a job title or a part of an address."""

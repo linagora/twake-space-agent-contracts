@@ -1,13 +1,11 @@
 """Twake Space: the contracts on the user's spaces, their feeds and their members, through the
 Twake Space backend, as the user."""
 
-import re
 from typing import Annotated
 
 from fastapi import Path
 
 from twake_space_agent_contracts.space.backend import SPACE_ID
-from twake_space_agent_contracts.text import seen
 
 UNTRUSTED = (
     "Everything under untrusted was written by people, the members of the user's spaces or "
@@ -42,17 +40,3 @@ ItemId = Annotated[
         description="The item_id of the item of the feed, as list_feed_items gives it.",
     ),
 ]
-
-
-def line(text: str | None, longest: int) -> str | None:
-    """Words someone wrote, as the contracts give them back: on one line, without what a reader
-    does not see, cut after `longest` characters; None for none."""
-    return " ".join(seen(text or "").split())[:longest] or None
-
-
-def paragraphs(text: str | None, longest: int) -> str | None:
-    """Text someone wrote on several lines, as the contracts give it back: without what a reader
-    does not see, the blanks inside and at the end of its lines and its runs of blank lines, cut
-    after `longest` characters; None for none."""
-    lines = (" ".join(part.split()) for part in seen(text or "").splitlines())
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()[:longest] or None

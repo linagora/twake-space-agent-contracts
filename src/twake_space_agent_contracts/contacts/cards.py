@@ -5,8 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_serializer
 
-from twake_space_agent_contracts.contacts import line, paragraphs
 from twake_space_agent_contracts.contacts.carddav import Card, Kind
+from twake_space_agent_contracts.text import line, paragraphs
 
 LONGEST_LINE = 200
 """The most characters a read gives of a name, an organization, a job title or a part of an

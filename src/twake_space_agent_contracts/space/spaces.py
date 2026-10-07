@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.space import EXAMPLE_SPACE, UNTRUSTED, SpaceId, line
+from twake_space_agent_contracts.space import EXAMPLE_SPACE, UNTRUSTED, SpaceId
 from twake_space_agent_contracts.space.backend import Member, SpaceDetail, TwakeSpace
+from twake_space_agent_contracts.text import line
 
 LONGEST_NAME = 255
 LONGEST_DESCRIPTION = 1000
@@ -111,7 +112,7 @@ def space_member(member: Member, user: User) -> SpaceMember:
         email=member.email,
         role=member.role,
         you=member.email.lower() == user.email,
-        untrusted=MemberText(display_name=line(member.display_name, LONGEST_NAME)),
+        untrusted=MemberText(display_name=line(member.display_name, LONGEST_NAME)[0]),
     )
 
 
@@ -133,13 +134,13 @@ def space_of(detail: SpaceDetail, user: User) -> Space:
             SpaceGroup(
                 group_id=group.group_id,
                 role=group.role,
-                untrusted=GroupText(name=line(group.name, LONGEST_NAME)),
+                untrusted=GroupText(name=line(group.name, LONGEST_NAME)[0]),
             )
             for group in detail.groups
         ],
         untrusted=SpaceText(
-            name=line(detail.name, LONGEST_NAME),
-            description=line(detail.description, LONGEST_DESCRIPTION),
+            name=line(detail.name, LONGEST_NAME)[0],
+            description=line(detail.description, LONGEST_DESCRIPTION)[0],
         ),
     )
 
@@ -167,8 +168,8 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
                     role=summary.role,
                     member_count=summary.member_count,
                     untrusted=SpaceText(
-                        name=line(summary.name, LONGEST_NAME),
-                        description=line(summary.description, LONGEST_DESCRIPTION),
+                        name=line(summary.name, LONGEST_NAME)[0],
+                        description=line(summary.description, LONGEST_DESCRIPTION)[0],
                     ),
                 )
                 for summary in found[:MOST_SPACES]

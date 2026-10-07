@@ -15,8 +15,6 @@ from twake_space_agent_contracts.space import (
     UNTRUSTED,
     ItemId,
     SpaceId,
-    line,
-    paragraphs,
 )
 from twake_space_agent_contracts.space.backend import (
     Actor,
@@ -24,6 +22,7 @@ from twake_space_agent_contracts.space.backend import (
     TwakeSpace,
     feed_item_not_found,
 )
+from twake_space_agent_contracts.text import line, paragraphs
 
 LONGEST_NAME = 255
 LONGEST_TITLE = 500
@@ -137,7 +136,7 @@ def _cleaned(value: Any, depth: int = 0) -> Any:
     MOST_STATE_ENTRIES entries of each list or object, DEEPEST_STATE levels deep, deeper ones
     null."""
     if isinstance(value, str):
-        return line(value, LONGEST_STATE_TEXT)
+        return line(value, LONGEST_STATE_TEXT)[0]
     if value is None or isinstance(value, bool | int | float):
         return value
     if depth >= DEEPEST_STATE:
@@ -149,7 +148,7 @@ def _cleaned(value: Any, depth: int = 0) -> Any:
         return {
             name: _cleaned(item, depth + 1)
             for key, item in entries
-            if (name := line(str(key), LONGEST_NAME))
+            if (name := line(str(key), LONGEST_NAME)[0])
         }
     return None
 
@@ -161,7 +160,7 @@ def _by(actor: Actor | None, me: str | None) -> By | None:
         kind=actor.kind,
         user_id=actor.user_id,
         you=actor.user_id is not None and actor.user_id == me,
-        untrusted=ByText(name=line(actor.name, LONGEST_NAME)),
+        untrusted=ByText(name=line(actor.name, LONGEST_NAME)[0]),
     )
 
 
@@ -189,15 +188,15 @@ def feed_item(item: FeedItem, me: str | None) -> SpaceFeedItem:
             FeedReaction(
                 count=len(reaction.user_ids),
                 mine=me is not None and me in reaction.user_ids,
-                untrusted=ReactionText(key=line(reaction.key, LONGEST_KEY) or ""),
+                untrusted=ReactionText(key=line(reaction.key, LONGEST_KEY)[0] or ""),
             )
             for reaction in item.reactions
         ],
         untrusted=ItemText(
-            text=paragraphs(item.body, LONGEST_TEXT),
-            title=line(item.title, LONGEST_TITLE),
-            preview=line(item.preview, LONGEST_PREVIEW),
-            object_id=line(item.object_id, LONGEST_TITLE),
+            text=paragraphs(item.body, LONGEST_TEXT)[0],
+            title=line(item.title, LONGEST_TITLE)[0],
+            preview=line(item.preview, LONGEST_PREVIEW)[0],
+            object_id=line(item.object_id, LONGEST_TITLE)[0],
             state=_cleaned(item.state) if card else None,
         ),
     )
