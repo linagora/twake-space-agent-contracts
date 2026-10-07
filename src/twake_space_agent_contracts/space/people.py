@@ -8,11 +8,10 @@ from pydantic import BaseModel, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.problems import invalid_request
-from twake_space_agent_contracts.space import UNTRUSTED
+from twake_space_agent_contracts.space import LONGEST_NAME, UNTRUSTED
 from twake_space_agent_contracts.space.backend import TwakeSpace
 from twake_space_agent_contracts.text import line
 
-LONGEST_NAME = 255
 LONGEST_WORDS = 100
 
 

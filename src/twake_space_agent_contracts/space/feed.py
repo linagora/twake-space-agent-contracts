@@ -12,6 +12,7 @@ from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.space import (
     EXAMPLE_ITEM,
     EXAMPLE_SPACE,
+    LONGEST_NAME,
     UNTRUSTED,
     ItemId,
     SpaceId,
@@ -24,7 +25,6 @@ from twake_space_agent_contracts.space.backend import (
 )
 from twake_space_agent_contracts.text import line, paragraphs
 
-LONGEST_NAME = 255
 LONGEST_TITLE = 500
 LONGEST_PREVIEW = 1000
 LONGEST_TEXT = 4000

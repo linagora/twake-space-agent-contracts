@@ -3,7 +3,7 @@ user's spaces in Twake Space adds people of their organization to it, changes th
 members and removes them."""
 
 from dataclasses import replace
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -14,7 +14,9 @@ from twake_space_agent_contracts.previews import Previewing, digest_of
 from twake_space_agent_contracts.space import (
     EXAMPLE_MEMBER,
     EXAMPLE_SPACE,
+    ROLES,
     UNTRUSTED,
+    Role,
     SpaceId,
     UserId,
 )
@@ -36,12 +38,6 @@ MOST_PEOPLE = 20
 MOST_PAGES = 5
 """How many pages of what the directory finds for a username are read to find its person: the
 first 100 people it finds."""
-
-Role = Literal["viewer", "editor", "admin"]
-ROLES = (
-    "viewer, who reads the space and reacts; editor, who posts too; admin, who also adds, changes "
-    "and removes members."
-)
 
 
 class NewMembers(BaseModel):

@@ -8,17 +8,18 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.space import EXAMPLE_SPACE, UNTRUSTED, SpaceId
+from twake_space_agent_contracts.space import (
+    EXAMPLE_SPACE,
+    LONGEST_NAME,
+    ROLES,
+    UNTRUSTED,
+    SpaceId,
+)
 from twake_space_agent_contracts.space.backend import Member, SpaceDetail, TwakeSpace
 from twake_space_agent_contracts.text import line
 
-LONGEST_NAME = 255
 LONGEST_DESCRIPTION = 1000
 MOST_SPACES = 100
-ROLE = (
-    "viewer, editor or admin. A viewer reads and reacts; an editor posts too; an admin also adds, "
-    "changes and removes members."
-)
 
 
 class SpaceText(BaseModel):
@@ -30,7 +31,7 @@ class SpaceText(BaseModel):
 
 class ListedSpace(BaseModel):
     space_id: str
-    role: str = Field(description=f"The user's role in the space: {ROLE}")
+    role: str = Field(description=f"The user's role in the space: {ROLES}")
     member_count: int
     untrusted: SpaceText
 
@@ -55,7 +56,7 @@ class SpaceMember(BaseModel):
     )
     username: str
     email: str
-    role: str = Field(description=f"Their role in the space: {ROLE}")
+    role: str = Field(description=f"Their role in the space: {ROLES}")
     you: bool = Field(description="Whether the member is the user you act for.")
     untrusted: MemberText
 
@@ -76,7 +77,7 @@ class Space(BaseModel):
     """A space the user is a member of, with its members and what its apps linked to it."""
 
     space_id: str
-    role: str = Field(description=f"The user's role in the space: {ROLE}")
+    role: str = Field(description=f"The user's role in the space: {ROLES}")
     created_at: datetime
     apps: list[str] = Field(
         description="The tabs the space shows, among chat, tasks, drive, mail and calendar."
