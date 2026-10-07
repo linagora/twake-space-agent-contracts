@@ -22,6 +22,9 @@ DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 PDF = "application/pdf"
+ODT = "application/vnd.oasis.opendocument.text"
+ODS = "application/vnd.oasis.opendocument.spreadsheet"
+ODP = "application/vnd.oasis.opendocument.presentation"
 
 # The prefixes the WordprocessingML a test adds may use
 WORD_NAMESPACES = {
@@ -172,6 +175,63 @@ def encrypted_pdf(content: bytes, *, user_password: str, owner_password: str) ->
     writer.encrypt(user_password=user_password, owner_password=owner_password, algorithm="AES-256")
     written = io.BytesIO()
     writer.write(written)
+    return written.getvalue()
+
+
+# The namespaces of OpenDocument, by the prefixes LibreOffice gives them
+OPENDOCUMENT_NAMESPACES = {
+    "office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
+    "style": "urn:oasis:names:tc:opendocument:xmlns:style:1.0",
+    "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+    "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+    "draw": "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0",
+    "presentation": "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0",
+    "fo": "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0",
+    "svg": "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0",
+    "dc": "http://purl.org/dc/elements/1.1/",
+    "calcext": "urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0",
+}
+_MANIFEST = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"
+# What LibreOffice writes of a document it encrypts with a password, in its manifest
+_ENCRYPTION_DATA = (
+    f'<manifest:encryption-data manifest:checksum-type="{_MANIFEST}#sha256-1k" '
+    'manifest:checksum="b3Bhc3NlZA=="><manifest:algorithm '
+    'manifest:algorithm-name="http://www.w3.org/2001/04/xmlenc#aes256-cbc" '
+    'manifest:initialisation-vector="aXYtb2YtMTYtYnl0ZXM="/><manifest:start-key-generation '
+    'manifest:start-key-generation-name="http://www.w3.org/2000/09/xmldsig#sha256" '
+    'manifest:key-size="32"/><manifest:key-derivation manifest:key-derivation-name="PBKDF2" '
+    'manifest:key-size="32" manifest:iteration-count="100000" manifest:salt="c2FsdA=="/>'
+    "</manifest:encryption-data>"
+)
+
+
+def opendocument(mime: str, body: str, *, styles: str = "", encrypted: bool = False) -> bytes:
+    """An OpenDocument of that type, as LibreOffice writes one: first its type, stored, then its
+    manifest, then its content, with these automatic styles and this body. Encrypted, its manifest
+    says how its content was encrypted, which is then bytes no XML parser reads."""
+    kind = {ODT: "text", ODS: "spreadsheet", ODP: "presentation"}[mime]
+    declarations = " ".join(
+        f'xmlns:{prefix}="{uri}"' for prefix, uri in OPENDOCUMENT_NAMESPACES.items()
+    )
+    content = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<office:document-content {declarations} office:version="1.3">'
+        f"<office:automatic-styles>{styles}</office:automatic-styles>"
+        f"<office:body><office:{kind}>{body}</office:{kind}></office:body>"
+        "</office:document-content>"
+    ).encode()
+    manifest = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<manifest:manifest xmlns:manifest="{_MANIFEST}" manifest:version="1.3">'
+        f'<manifest:file-entry manifest:full-path="/" manifest:media-type="{mime}"/>'
+        '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml">'
+        f"{_ENCRYPTION_DATA if encrypted else ''}</manifest:file-entry></manifest:manifest>"
+    )
+    written = io.BytesIO()
+    with zipfile.ZipFile(written, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(zipfile.ZipInfo("mimetype"), mime)
+        archive.writestr("META-INF/manifest.xml", manifest)
+        archive.writestr("content.xml", bytes(range(256)) * 4 if encrypted else content)
     return written.getvalue()
 
 

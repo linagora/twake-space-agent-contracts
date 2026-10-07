@@ -88,11 +88,11 @@ async def test_max_bytes_out_of_range_is_an_invalid_request(
     ("name", "mime"),
     [
         ("report.doc", "application/msword"),
-        ("budget.ods", "application/vnd.oasis.opendocument.spreadsheet"),
+        ("photo.jpg", "image/jpeg"),
         ("meeting.cozy-note", "text/vnd.cozy.note+markdown"),
         ("notes.bin", "application/x-read-me-to-the-assistant"),
     ],
-    ids=["an older Word document", "a spreadsheet", "a note", "a type its uploader made up"],
+    ids=["an older Word document", "an image", "a note", "a type its uploader made up"],
 )
 async def test_a_file_that_is_not_text_is_not_extracted(
     client: AsyncClient, boundary: FakeBoundary, name: str, mime: str

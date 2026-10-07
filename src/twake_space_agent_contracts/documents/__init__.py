@@ -12,7 +12,7 @@ from asyncio.subprocess import DEVNULL, PIPE
 from dataclasses import dataclass
 from typing import Literal, get_args
 
-Kind = Literal["docx", "pptx", "xlsx", "pdf"]
+Kind = Literal["docx", "pptx", "xlsx", "pdf", "odt", "ods", "odp"]
 """What the service reads a document as."""
 
 KINDS: dict[str, Kind] = {
@@ -20,6 +20,9 @@ KINDS: dict[str, Kind] = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
     "application/pdf": "pdf",
+    "application/vnd.oasis.opendocument.text": "odt",
+    "application/vnd.oasis.opendocument.spreadsheet": "ods",
+    "application/vnd.oasis.opendocument.presentation": "odp",
 }
 """The kind of each type of document the service reads, by the type its uploader declared."""
 
