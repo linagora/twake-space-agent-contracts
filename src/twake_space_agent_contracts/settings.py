@@ -50,6 +50,9 @@ class Settings:
     """How the service reaches the users' cozy-stack instances, whose hosts the gateway gives."""
     drive_port: int | None = None
     """The port of those instances, when it is not the scheme's, such as a local stack's."""
+    space_url: str | None = None
+    """The Twake Space backend, whose REST API the space contracts call with the user's token:
+    needed once Space is published, and only then."""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -78,4 +81,5 @@ class Settings:
             drive_instance_domain=os.environ.get("DRIVE_INSTANCE_DOMAIN") or None,
             drive_scheme=os.environ.get("DRIVE_SCHEME", "https"),
             drive_port=int(drive_port) if drive_port else None,
+            space_url=os.environ.get("SPACE_URL", "").rstrip("/") or None,
         )

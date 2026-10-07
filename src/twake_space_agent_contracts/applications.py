@@ -28,6 +28,8 @@ from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
+from twake_space_agent_contracts.space import spaces
+from twake_space_agent_contracts.space.backend import TwakeSpace
 from twake_space_agent_contracts.tasks import Tasks
 
 # An application's entry in x-twake-domains: by level, name included, its words in each language
@@ -162,6 +164,14 @@ def _tasks(context: Context) -> list[APIRouter]:
     ]
 
 
+def _space(context: Context) -> list[APIRouter]:
+    # A deployment that does not publish Space has no need to know where it is
+    if context.settings.space_url is None:
+        raise ValueError("PUBLISHED_APPS names space, which needs SPACE_URL")
+    space = TwakeSpace(context.settings.space_url, context.http)
+    return [spaces.router(space, context.caller)]
+
+
 APPLICATIONS = (
     Application(
         domain="calendar",
@@ -244,6 +254,16 @@ APPLICATIONS = (
             fr="créer, modifier et supprimer des contacts dans tes propres carnets d'adresses",
         ),
         routers=_contacts,
+    ),
+    Application(
+        domain="space",
+        name=Words(en="Twake Space", fr="Twake Space"),
+        read=Words(
+            en="list your spaces and their members",
+            fr="lister tes espaces et leurs membres",
+        ),
+        write=None,
+        routers=_space,
     ),
 )
 

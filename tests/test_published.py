@@ -54,7 +54,7 @@ def operations_in(document: dict[str, Any], domain: str) -> set[tuple[str, str]]
 @pytest.fixture
 def environment(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     """The environment the image reads, without a database, which nothing it serves reads, nor
-    PUBLISHED_APPS, nor any setting of Chat, Mail, Drive or Tasks."""
+    PUBLISHED_APPS, nor any setting of Chat, Mail, Drive, Tasks or Space."""
     monkeypatch.setenv("OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("CALENDAR_URL", SETTINGS.calendar_url)
     for name in (
@@ -65,6 +65,7 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
         "MAIL_URL",
         *DRIVE_SETTINGS,
         "TASKS_URL",
+        "SPACE_URL",
     ):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
@@ -351,3 +352,40 @@ def test_tasks_published_without_its_url_stops_the_service_from_starting(
 
     with pytest.raises(ValueError, match="TASKS_URL"):
         create_app_from_env()
+
+
+def test_space_published_without_its_url_stops_the_service_from_starting(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    # Its tools would otherwise reach the agents, every call of them failing
+    environment.setenv("PUBLISHED_APPS", "calendar,space")
+
+    with pytest.raises(ValueError, match=r"space, which needs SPACE_URL$"):
+        create_app_from_env()
+
+
+async def test_space_left_unpublished_needs_no_url(environment: pytest.MonkeyPatch) -> None:
+    # A deployment that does not publish Space starts as before, knowing nothing of it
+    environment.setenv("PUBLISHED_APPS", "calendar")
+
+    async with serving(create_app_from_env()) as client:
+        document = await document_of(client)
+
+    assert "space" not in document["x-twake-domains"]
+    assert not {path for path in document["paths"] if path.startswith("/contracts/v1/space/")}
+
+
+async def test_space_published_with_its_url_is_served(
+    environment: pytest.MonkeyPatch, serve: Serve, boundary: FakeBoundary
+) -> None:
+    # Its backend is reached at SPACE_URL, a slash at its end or not
+    environment.setenv("PUBLISHED_APPS", "space")
+    environment.setenv("SPACE_URL", "https://space.test/")
+
+    async with serve(Settings.from_env()) as client:
+        document = await document_of(client)
+        spaces = await client.get("/contracts/v1/space/spaces", headers=AS_MMAUDET)
+
+    assert set(document["x-twake-domains"]) == {"space"}
+    assert spaces.status_code == 200, spaces.text
+    assert boundary.space.requests == [("GET", "/spaces")]

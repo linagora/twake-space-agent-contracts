@@ -260,6 +260,8 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "create_contact": ["contacts.contact.create.v1"],
         "update_contact": ["contacts.contact.update.v1"],
         "delete_contact": ["contacts.contact.delete.v1"],
+        "list_spaces": ["space.spaces.read.v1"],
+        "read_space": ["space.spaces.read.v1"],
     }
 
 

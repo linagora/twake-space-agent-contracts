@@ -44,6 +44,7 @@ SETTINGS = Settings(
     mail_url="https://tmail.test",
     # Where the users' cozy-stack instances are, one name each under it
     drive_instance_domain="twake.test",
+    space_url="https://space.test",
 )
 SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 KEY_ID = "sig-1"
@@ -2378,6 +2379,184 @@ _CHANGES: dict[str, Callable[[Any], bool]] = {
 }
 
 
+SPACE_ORGANIZATION = "linagora"
+SPACE_APPS = ("chat", "tasks", "drive", "mail", "calendar")
+"""The apps the deployment provides, by the tab each gives a space."""
+SPACE_KINDS = ("drive", "mailbox", "calendar", "matrix_space", "project")
+"""The kind of what each app links to a space, in Space's order."""
+"""The org_id LemonLDAP-NG gives Twake Space for the users of the tests, unless one sets another."""
+
+
+def space_id(name: str) -> str:
+    """The UUID Twake Space gives a person, a space or an item of a feed, the same for the same
+    name."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"space:{name}"))
+
+
+@dataclass(frozen=True)
+class SpacePerson:
+    """A person of the organization, as its directory gives them: their user id, the LDAP
+    entryUUID that LemonLDAP-NG gives as uuid, their username, email and display name."""
+
+    user_id: str
+    username: str
+    email: str
+    display_name: str | None = None
+
+
+def space_person(uid: str, display_name: str | None = None) -> SpacePerson:
+    """The person of that uid, by the email of their token."""
+    return SpacePerson(space_id(email_of(uid)), uid, email_of(uid), display_name)
+
+
+@dataclass
+class SpaceRoom:
+    """A space, as Twake Space copies it from the directory, with what its creator picked."""
+
+    id: str
+    name: str
+    members: dict[str, tuple[SpacePerson, str]]
+    """Its members by user id, each with their role: viewer, editor or admin."""
+    organization: str = SPACE_ORGANIZATION
+    description: str = ""
+    created_at: str = "2026-10-01T08:00:00.000Z"
+    apps: list[str] = field(default_factory=lambda: list(SPACE_APPS))
+    """The tabs its creator picked."""
+    resources: dict[str, str | None] = field(default_factory=dict)
+    """The id of what each app linked to it, by kind: project, matrix_space, mailbox, calendar
+    and drive; None while the app still prepares it."""
+    groups: list[tuple[str, str, str]] = field(default_factory=list)
+    """The groups linked to it: their id, name and role."""
+
+
+class FakeSpace:
+    """The Twake Space backend 0.1.9, as the contracts call its REST API with the bearer's token.
+
+    Twake Space acts for the person of the token, by the uuid and org_id LemonLDAP-NG gives it in
+    userinfo, here derived from the token's subject: a space shows only to its members, in their
+    organization, and any other answers 404 {"error": "not_found"}, as an unknown one does."""
+
+    def __init__(self) -> None:
+        self.spaces: dict[str, SpaceRoom] = {}
+        self.requests: list[tuple[str, str]] = []
+        """The method and path of each request taken."""
+        self.refused_tokens = False
+        """Whether Space refuses every token, as when it cannot introspect them."""
+        self.down = False
+        """Whether Space answers 503, as while its identity provider fails."""
+        self.unreachable = False
+        self.unexpected: object = None
+        """What Space answers every call with, in a form the contracts do not know, if set: JSON
+        of another form, or text."""
+        self.organizations: dict[str, str | None] = {}
+        """The org_id LemonLDAP-NG gives Space for each person, by email: SPACE_ORGANIZATION
+        unless set, and None for a person it gives none, whom Space refuses."""
+
+    def space(self, name: str, members: dict[SpacePerson, str], **more: Any) -> SpaceRoom:
+        """Arranges a space of that name, with its members and their roles."""
+        room = SpaceRoom(
+            space_id(name),
+            name,
+            {person.user_id: (person, role) for person, role in members.items()},
+            **more,
+        )
+        self.spaces[room.id] = room
+        return room
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if self.unreachable:
+            raise httpx.ConnectError("Space is unreachable", request=request)
+        if self.down:
+            return httpx.Response(503, json={"error": "unavailable"})
+        bearer = request.headers.get("authorization", "").removeprefix("Bearer ")
+        try:
+            subject = jwt.decode(bearer, options={"verify_signature": False})["sub"]
+        except jwt.InvalidTokenError:
+            return httpx.Response(401, json={"error": "unauthorized"})
+        if self.refused_tokens:
+            return httpx.Response(
+                401,
+                json={"error": "unauthorized"},
+                headers={"www-authenticate": 'Bearer error="invalid_token"'},
+            )
+        # Every route wants a caller of an organization
+        if self.organizations.get(subject, SPACE_ORGANIZATION) is None:
+            return httpx.Response(403, json={"error": "forbidden"})
+        if isinstance(self.unexpected, str):
+            return httpx.Response(200, text=self.unexpected)
+        if self.unexpected is not None:
+            return httpx.Response(200, json=self.unexpected)
+        self.requests.append((request.method, request.url.path))
+        user_id = space_id(subject)
+        if request.method == "GET" and request.url.path == "/spaces":
+            return httpx.Response(200, json={"spaces": self._listed(user_id)})
+        found = re.fullmatch(r"/spaces/([^/]+)", request.url.path)
+        room = self.spaces.get(found[1]) if found else None
+        if room is None or user_id not in room.members:
+            return httpx.Response(404, json={"error": "not_found"})
+        return httpx.Response(200, json=self._space(room, user_id))
+
+    def _listed(self, user_id: str) -> list[dict[str, Any]]:
+        """The spaces of the person, by name, as GET /spaces gives them."""
+        return [
+            {
+                "id": room.id,
+                "name": room.name,
+                "role": room.members[user_id][1],
+                "color": None,
+                "description": room.description,
+                "members": [
+                    {
+                        "id": person.user_id,
+                        "username": person.username,
+                        "displayName": person.display_name,
+                    }
+                    for person, _ in _by_username(room)
+                ],
+            }
+            for room in sorted(self.spaces.values(), key=lambda room: room.name)
+            if user_id in room.members
+        ]
+
+    def _space(self, room: SpaceRoom, user_id: str) -> dict[str, Any]:
+        """A space of the person, as GET /spaces/:id gives it."""
+        return {
+            "id": room.id,
+            "name": room.name,
+            "createdAt": room.created_at,
+            "color": None,
+            "description": room.description,
+            "apps": room.apps,
+            "role": room.members[user_id][1],
+            "chat": True,
+            "mail": True,
+            "homeserverUrl": "https://matrix.twake.test",
+            "members": [_member(person, role) for person, role in _by_username(room)],
+            "groups": [
+                {"id": group_id, "name": name, "role": role}
+                for group_id, name, role in sorted(room.groups, key=lambda group: group[1])
+            ],
+            # Each kind the deployment provides, with its id once its app linked one
+            "resources": [{"kind": kind, "id": room.resources.get(kind)} for kind in SPACE_KINDS],
+        }
+
+
+def _member(person: SpacePerson, role: str) -> dict[str, Any]:
+    """A member of a space, as GET /spaces/:id gives them."""
+    return {
+        "id": person.user_id,
+        "username": person.username,
+        "email": person.email,
+        "displayName": person.display_name,
+        "role": role,
+    }
+
+
+def _by_username(room: SpaceRoom) -> list[tuple[SpacePerson, str]]:
+    """The members of a space and their roles, by username, as Twake Space sorts them."""
+    return sorted(room.members.values(), key=lambda member: member[0].username)
+
+
 class FakeBoundary:
     """Routes the service's HTTP calls to the fakes."""
 
@@ -2391,6 +2570,7 @@ class FakeBoundary:
         """Every request the service sent, wherever to."""
         self.tasks = FakeTasks()
         self.contacts = self.calendar.contacts
+        self.space = FakeSpace()
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -2406,4 +2586,6 @@ class FakeBoundary:
             return self.drive.handle(request)
         if request.url.host == "tasks.test":
             return self.tasks.handle(request)
+        if request.url.host == "space.test":
+            return self.space.handle(request)
         return httpx.Response(404)
