@@ -1,11 +1,18 @@
 """Twake Mail: the contracts on the user's mail, through TMail's JMAP API, as the user."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Path
 
-from twake_space_agent_contracts.mail.tmail import JMAP_ID, Address
-from twake_space_agent_contracts.previews import BUDGET, Language, person, shown_size
+from twake_space_agent_contracts.mail.tmail import JMAP_ID, Address, Placement
+from twake_space_agent_contracts.previews import (
+    BUDGET,
+    Language,
+    one_line,
+    person,
+    quoted,
+    shown_size,
+)
 
 UNTRUSTED = (
     "Everything under untrusted was written by other people, such as the sender's name, the "
@@ -23,6 +30,10 @@ EmailId = Annotated[
     ),
 ]
 """The email a contract reads or changes, in its path."""
+
+Move = Literal["move", "archive", "trash"]
+"""How emails leave their mailboxes: moved to the one a call names, archived, or put in the
+trash."""
 
 MOST_PEOPLE = 10
 """How many of the people of a header a preview names, at most."""
@@ -55,3 +66,21 @@ def people(addresses: list[Address], total: int, language: Language) -> str:
         return f"{', '.join(named)} et {rest}"
     rest = "1 other" if others == 1 else f"{others} others"
     return f"{', '.join(named)} and {rest}"
+
+
+# How a preview names an email, in each language: by its subject, or as having none, then whom it
+# is from
+_EMAIL: dict[Language, tuple[str, str, str]] = {
+    "fr": ("le mail {subject}", "le mail sans objet", "{email} de {senders}"),
+    "en": ("the email {subject}", "the email with no subject", "{email} from {senders}"),
+}
+
+
+def email_named(placement: Placement, language: Language) -> str:
+    """An email of the user, as a preview names it: by its subject and its senders, who wrote
+    them."""
+    titled, untitled, sent = _EMAIL[language]
+    subject = one_line(placement.subject)
+    email = titled.format(subject=quoted(subject, language)) if subject else untitled
+    senders = people(placement.senders, len(placement.senders), language)
+    return sent.format(email=email, senders=senders) if senders else email

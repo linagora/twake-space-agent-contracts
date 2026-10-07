@@ -1,7 +1,7 @@
 """mail.email.move.v1: emails of the user moved to another of their own mailboxes, or archived,
 one at a time or several at once."""
 
-from typing import Annotated, Literal, Self
+from typing import Annotated, Self
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -10,7 +10,7 @@ from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import PydanticCustomError
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.mail import EXAMPLE_ID, EmailId, people
+from twake_space_agent_contracts.mail import EXAMPLE_ID, EmailId, Move, email_named
 from twake_space_agent_contracts.mail.batch import (
     OTHER_ID,
     OUTCOMES,
@@ -129,8 +129,6 @@ class EmailsTo(Destination):
     email_ids: EmailIds
 
 
-Move = Literal["move", "archive", "trash"]
-
 # What a preview of each move tells the owner, in each language
 _MOVES: dict[Move, dict[Language, str]] = {
     "move": {
@@ -147,23 +145,13 @@ _MOVES: dict[Move, dict[Language, str]] = {
         "en": "Trash {email}: it goes to the folder {mailbox}, from which it can be moved back",
     },
 }
-_EMAIL: dict[Language, tuple[str, str, str]] = {
-    "fr": ("le mail {subject}", "le mail sans objet", "{email} de {senders}"),
-    "en": ("the email {subject}", "the email with no subject", "{email} from {senders}"),
-}
 
 
 def _summary(move: Move, placement: Placement, mailbox: Mailbox, language: Language) -> str:
     """What the move does, as the owner reads it: which email, by its subject and its senders,
     who wrote them, goes to which of their mailboxes."""
-    titled, untitled, sent = _EMAIL[language]
-    subject = one_line(placement.subject)
-    email = titled.format(subject=quoted(subject, language)) if subject else untitled
-    senders = people(placement.senders, len(placement.senders), language)
-    if senders:
-        email = sent.format(email=email, senders=senders)
     folder = quoted(one_line(mailbox.name), language)
-    return _MOVES[move][language].format(email=email, mailbox=folder)
+    return _MOVES[move][language].format(email=email_named(placement, language), mailbox=folder)
 
 
 async def moved(
