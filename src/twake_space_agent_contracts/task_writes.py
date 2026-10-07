@@ -13,12 +13,15 @@ from pydantic.json_schema import SkipJsonSchema
 
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.previews import (
+    BUDGET,
     Language,
     Previewing,
     day,
     digest_of,
     one_line,
+    person,
     quoted,
+    shown_size,
     time_of_day,
 )
 from twake_space_agent_contracts.problems import Problem, invalid_request
@@ -55,6 +58,12 @@ IN_TASKS = {
 EXAMPLE_IDS = (
     "board_id=0199b0c2-5f1e-7a3b-9c4d-2e8f6a1b3c5d, task_id=0199b0c3-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
 )
+MOST_PEOPLE = 10
+"""How many members a preview names in a list, at most."""
+PEOPLE_SIZE = BUDGET // 6
+"""What the members a preview names in a list take of its summary at most, as the harness counts
+it: so that members of a board, however many and however long their emails, leave room for the
+rest."""
 
 
 Title = Annotated[
@@ -381,6 +390,31 @@ def _due(on: date | str | None, at: str | None, zone: str | None, language: Lang
     return f"{shown} ({one_line(zone)})" if zone else shown
 
 
+def members_named(emails: list[str], language: Language) -> str:
+    """Members by the email they joined with, as a preview names them: the first ones, ten at most
+    and as many as fit in what a list takes of the summary, then how many others."""
+    named: list[str] = []
+    for email in emails[:MOST_PEOPLE]:
+        found = person(None, email, language)
+        if found is None:
+            continue
+        if shown_size(", ".join([*named, found])) > PEOPLE_SIZE:
+            break
+        named.append(found)
+    others = len(emails) - len(named)
+    if not others:
+        return ", ".join(named)
+    if not named:
+        if language == "fr":
+            return "1 membre" if others == 1 else f"{others} membres"
+        return "1 member" if others == 1 else f"{others} members"
+    if language == "fr":
+        rest = "1 autre" if others == 1 else f"{others} autres"
+        return f"{', '.join(named)} et {rest}"
+    rest = "1 other" if others == 1 else f"{others} others"
+    return f"{', '.join(named)} and {rest}"
+
+
 def _change(label: str, value: str | None, before: str | None, words: _Words) -> str:
     """A field as a change leaves it, and as it was."""
     shown = words.none if value is None else value
@@ -389,7 +423,7 @@ def _change(label: str, value: str | None, before: str | None, words: _Words) ->
     return words.instead.format(label=label, value=shown, before=before)
 
 
-def _names(board: BoardContent, task: BoardTask, language: Language) -> dict[str, str]:
+def task_names(board: BoardContent, task: BoardTask, language: Language) -> dict[str, str]:
     """How a preview names a task: by its key and title, on its board."""
     return {
         "key": one_line(task.summary.key),
@@ -455,7 +489,7 @@ def _changed(
     """What changing the task does, as the owner reads it: each field it changes, as it was."""
     words = _WORDS[language]
     now = task.summary
-    lines = [words.change.format(**_names(board, task, language))]
+    lines = [words.change.format(**task_names(board, task, language))]
     if "title" in fields:
         title = _named(fields["title"], language, LONGEST_TITLE)
         lines.append(_change(words.title, title, _named(now.untrusted.title, language), words))
@@ -513,7 +547,7 @@ def _completing(
     """What completing the task does, as the owner reads it: where it goes, or the due date it
     moves on from, and the subtasks it completes with it."""
     words = _WORDS[language]
-    names = _names(board, task, language)
+    names = task_names(board, task, language)
     summary = task.summary
     if summary.state == "completed":
         return words.completed.format(**names)
@@ -535,7 +569,7 @@ def _deleting(board: BoardContent, task: BoardTask, subtasks: int, language: Lan
     """What deleting the task does, as the owner reads it: where it goes, for how long, and the
     subtasks that go with it."""
     words = _WORDS[language]
-    lines = [words.delete.format(**_names(board, task, language))]
+    lines = [words.delete.format(**task_names(board, task, language))]
     if subtasks:
         many = words.deleted_subtasks.format(count=subtasks)
         lines.append(words.deleted_subtask if subtasks == 1 else many)

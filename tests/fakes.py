@@ -1936,11 +1936,13 @@ class TasksTask:
 
 @dataclass(frozen=True)
 class TasksPerson:
-    """Whom Tasks acts for: the uuid and the org_id LemonLDAP-NG gives it for the token."""
+    """Whom Tasks acts for: the uuid, the org_id and the email LemonLDAP-NG gives it for the
+    token."""
 
     user_id: str
     organization: str | None
     """None for a personal account, which Tasks takes a user without org_id for."""
+    email: str
 
 
 class FakeTasks:
@@ -2022,7 +2024,9 @@ class FakeTasks:
             return httpx.Response(status, json={"error": _ERRORS[status]})
         if self.unreadable_after_write and request.method == "GET" and self.writes:
             return httpx.Response(503, json={"error": "unavailable"})
-        person = TasksPerson(tasks_id(subject), self.organizations.get(subject, "linagora"))
+        person = TasksPerson(
+            tasks_id(subject), self.organizations.get(subject, "linagora"), subject
+        )
         params = request.url.params
         if request.method == "POST" and request.url.path == "/api/boards":
             return self._new_board(self.writes[-1][2], person, subject)
@@ -2168,11 +2172,16 @@ class FakeTasks:
         return httpx.Response(200, json={"comments": task.comments})
 
     def _write(self, method: str, path: str, body: Any, person: TasksPerson) -> httpx.Response:
-        found = re.fullmatch(r"/api/boards/([^/]+)/tasks(?:/([^/]+)(?:/(complete|move))?)?", path)
+        found = re.fullmatch(
+            r"/api/boards/([^/]+)/tasks(?:/([^/]+)(?:/(complete|move|comments|assignees))?)?", path
+        )
         board = self.boards.get(found[1]) if found else None
         role = self._role(board, person) if board else None
         if found is None or board is None or role is None:
             return httpx.Response(404, json={"error": "not_found"})
+        # Any member comments, a viewer too, and on an archived board too
+        if method == "POST" and found[3] == "comments":
+            return self._comment(board, found[2], body, person)
         if role == "viewer":
             return httpx.Response(403, json={"error": "forbidden"})
         if board.archived:
@@ -2195,6 +2204,29 @@ class FakeTasks:
             case "POST", "move":
                 return self._move(task, board, body)
         return httpx.Response(404)
+
+    def _comment(
+        self, board: TasksBoard, task_id: str | None, body: Any, person: TasksPerson
+    ) -> httpx.Response:
+        """Adds a comment, by the person, to a task of the board, archived or trashed too."""
+        task = self.tasks.get(task_id or "")
+        if task is None or task.board != board.id:
+            return httpx.Response(404, json={"error": "not_found"})
+        if not isinstance(body, dict) or set(body) != {"body"} or not isinstance(body["body"], str):
+            return _refused("invalid_request")
+        text = body["body"].strip()
+        if not 1 <= len(text) <= 10_000:
+            return _refused("invalid_request")
+        member = next((m for m in board.members if m.user_id == person.user_id), None)
+        created = {
+            "id": tasks_id(f"comment {len(task.comments)} on {task.id}"),
+            "author": (member or TasksMember(person.user_id, person.email)).person()
+            | {"email": person.email},
+            "body": text,
+            "createdAt": "2026-10-07T09:30:00.000Z",
+        }
+        task.comments.append(created)
+        return httpx.Response(201, json={"id": created["id"], "createdAt": created["createdAt"]})
 
     def _trash(
         self, board: TasksBoard, task_id: str | None, then: str | None, body: Any

@@ -249,6 +249,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "update_task": ["tasks.task.update.v1"],
         "complete_task": ["tasks.task.complete.v1"],
         "delete_task": ["tasks.task.delete.v1"],
+        "comment_on_task": ["tasks.comment.create.v1"],
         "create_reply_draft": ["mail.draft.create.v1"],
         "create_file": ["drive.file.create.v1"],
         "move_email": ["mail.email.move.v1"],
@@ -370,6 +371,7 @@ WRITES_NAMED = {
         "update_task": ("edit", "modifier"),
         "complete_task": ("complete", "terminer"),
         "delete_task": ("delete", "supprimer"),
+        "comment_on_task": ("comment", "commenter"),
     },
     "contacts": {
         "create_contact": ("create", "créer"),
@@ -501,6 +503,7 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "complete_task": ("post", True),
         "create_project": ("post", True),
         "delete_task": ("delete", True),
+        "comment_on_task": ("post", True),
         "create_file": ("post", True),
         "create_contact": ("post", True),
         "update_contact": ("patch", True),
@@ -713,6 +716,17 @@ async def test_deleting_a_task_is_a_high_risk_write(client: AsyncClient) -> None
     assert "requestBody" not in deleting
 
 
+async def test_commenting_on_a_task_is_a_high_risk_write(client: AsyncClient) -> None:
+    # A comment stays, and Tasks emails the people who follow the task of it: the owner confirms
+    # each comment
+    document = (await client.get("/openapi.json")).json()
+
+    path = "/contracts/v1/tasks/boards/{board_id}/tasks/{task_id}/comments"
+    commenting = document["paths"][path]["post"]
+
+    assert commenting["x-twake-risk"] == "high"
+
+
 async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: AsyncClient) -> None:
     # The model gets each body as the document writes it: whole, taking these fields and no other
     document = (await client.get("/openapi.json")).json()
@@ -722,7 +736,7 @@ async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: Async
 
     schemas = {
         name: operations[name]["requestBody"]["content"]["application/json"]["schema"]
-        for name in ("create_project", "create_task", "update_task")
+        for name in ("create_project", "create_task", "update_task", "comment_on_task")
     }
 
     assert "requestBody" not in operations["open_boards"]
@@ -736,8 +750,9 @@ async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: Async
         "update_task": sorted(
             ["title", "priority", "due_date", "due_time", "due_zone", "deadline"]
         ),
+        "comment_on_task": ["body"],
     }
-    assert [schema["additionalProperties"] for schema in schemas.values()] == [False] * 3
+    assert [schema["additionalProperties"] for schema in schemas.values()] == [False] * 4
 
 
 async def test_the_bodies_of_the_batched_mail_moves_are_whole_and_closed(

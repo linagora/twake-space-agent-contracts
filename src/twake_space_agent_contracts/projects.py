@@ -119,8 +119,8 @@ def _read(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         summary="List the user's projects in Twake Tasks",
         description=(
             "Lists the projects of Twake Tasks that the user you act for is a member of, by name, "
-            f"{MOST_PROJECTS} at most, with their role in each: a viewer only reads. Their "
-            "personal project, personal true, holds their Inbox and is never shared. space "
+            f"{MOST_PROJECTS} at most, with their role in each: a viewer only reads and comments. "
+            "Their personal project, personal true, holds their Inbox and is never shared. space "
             "marks the project of a Twake Space they are a member of, whose members are the "
             "space's. It only reads: a project the user was invited to comes once open_boards "
             "made them a member. The boards of a project are those open_boards gives with its "

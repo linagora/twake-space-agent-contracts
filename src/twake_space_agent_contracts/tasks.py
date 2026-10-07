@@ -101,7 +101,8 @@ class Board(BaseModel):
     key_prefix: str
     project_id: str
     role: str = Field(
-        description="The user's role in the project: viewer, editor or admin. A viewer only reads."
+        description="The user's role in the project: viewer, editor or admin. A viewer only reads "
+        "and comments."
     )
     inbox: bool = Field(description="Whether this is the user's Inbox, their personal board.")
     space: bool = Field(
@@ -123,7 +124,8 @@ class Project(BaseModel):
 
     project_id: str
     role: str = Field(
-        description="The user's role in the project: viewer, editor or admin. A viewer only reads."
+        description="The user's role in the project: viewer, editor or admin. A viewer only reads "
+        "and comments."
     )
     personal: bool = Field(
         description="Whether this is the user's personal project, which holds their Inbox and is "
@@ -540,6 +542,16 @@ class Tasks:
         """Moves a task to the end of a section: to a completed one, this completes it, or moves
         a recurring one to its next due date instead."""
         await self._write(user, "POST", board_id, task_id, {"sectionId": section_id}, "/move")
+
+    async def comment(
+        self, user: User, board_id: str, task_id: str, body: str
+    ) -> tuple[str, datetime]:
+        """Adds a comment of the user to the task: its id, and when Tasks took it."""
+        created = await self._write(user, "POST", board_id, task_id, {"body": body}, "/comments")
+        try:
+            return str(created["id"]), datetime.fromisoformat(created["createdAt"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Tasks gave the new comment in an unexpected form.") from error
 
     async def comments(self, user: User, board_id: str, task_id: str) -> list[Comment] | None:
         """The task's comments, oldest first; None if the board has no such task."""

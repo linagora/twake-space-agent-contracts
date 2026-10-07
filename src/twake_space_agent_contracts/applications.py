@@ -16,6 +16,7 @@ from twake_space_agent_contracts import (
     freebusy,
     invitations,
     projects,
+    task_comments,
     task_reads,
     task_writes,
 )
@@ -161,6 +162,7 @@ def _tasks(context: Context) -> list[APIRouter]:
         *projects.routers(tasks, context.caller),
         task_reads.router(tasks, context.caller),
         *task_writes.routers(tasks, context.caller),
+        task_comments.router(tasks, context.caller),
     ]
 
 
@@ -225,10 +227,11 @@ APPLICATIONS = (
             fr="lister tes projets, et lister, chercher et lire tes tâches",
         ),
         write=Words(
-            en="open your boards, create projects and tasks, edit and complete tasks, which emails"
-            " the people who follow them, and delete tasks",
-            fr="ouvrir tes tableaux, créer des projets et des tâches, modifier et terminer des"
-            " tâches, ce qui prévient par mail ceux qui les suivent, et supprimer des tâches",
+            en="open your boards, create projects and tasks, edit, complete and comment on tasks,"
+            " which emails the people who follow them, and delete tasks",
+            fr="ouvrir tes tableaux, créer des projets et des tâches, modifier, terminer et"
+            " commenter des tâches, ce qui prévient par mail ceux qui les suivent, et supprimer"
+            " des tâches",
         ),
         routers=_tasks,
     ),
