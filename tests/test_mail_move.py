@@ -584,3 +584,28 @@ async def test_an_email_moved_since_the_preview_stays_where_it_is(
     assert response.json()["code"] == "changed_since_preview"
     assert writes(boundary) == []
     assert mailboxes_of(boundary, "email-1") == {"mbx-later"}
+
+
+async def test_a_preview_of_an_email_from_many_fits_what_the_harness_shows(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    senders = [{"name": "🦊" * 300, "email": f"fox{n}@crafted.test"} for n in range(1, 51)]
+    boundary.tmail.deliver("email-1", INBOX, **{"from": senders})
+
+    told, _ = preview_of(await ask(client, "email-1", "archive", language="en"))
+
+    assert told == (
+        f"Archive the email “Budget Q4” from “{'🦊' * 200}” <fox1@crafted.test> and 49 others:"
+        " it goes to the folder “Archive”"
+    )
+
+
+async def test_a_preview_counts_a_sender_too_long_to_name(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    sender = {"name": "🦊" * 200, "email": "🦊" * 300 + "@crafted.test"}
+    boundary.tmail.deliver("email-1", INBOX, **{"from": [sender]})
+
+    told, _ = preview_of(await ask(client, "email-1", "archive", language="en"))
+
+    assert told == "Archive the email “Budget Q4” from 1 person: it goes to the folder “Archive”"

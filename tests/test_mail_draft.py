@@ -496,3 +496,24 @@ async def test_a_draft_whose_place_changed_since_the_preview_is_not_made(
     assert response.status_code == 409
     assert response.json()["code"] == "changed_since_preview"
     assert tmail.created == []
+
+
+async def test_a_preview_of_a_reply_to_all_of_a_crafted_email_fits_what_the_harness_shows(
+    client: AsyncClient, tmail: FakeTMail
+) -> None:
+    # Long names in many addresses would take more than the harness shows: the owner could not
+    # confirm the call at all
+    to = [{"name": "名" * 300, "email": f"p{n}@crafted.test"} for n in range(1, 100)]
+    cc = [{"name": "名" * 300, "email": f"c{n}@crafted.test"} for n in range(1, 100)]
+    tmail.deliver("email-1", INBOX, to=[MICHEL_MARIE, *to], cc=cc)
+
+    told, _ = preview_of(await reply(client, "email-1", asking_preview("fr"), reply_all=True))
+
+    # TMail gives the first 200 characters of a name
+    named = f"« {'名' * 200} »"
+    lines = told.splitlines()
+    assert lines[1] == (
+        f"À : « Paul Martin » <paul.martin@twake.test>, {named} <p1@crafted.test> et 98 autres"
+    )
+    assert lines[2] == f"Cc : {named} <c1@crafted.test> et 98 autres"
+    assert lines[-5:] == ["\tHello Paul,", "\t", "\tthe budget suits me.", "\t", "\tMichel-Marie"]

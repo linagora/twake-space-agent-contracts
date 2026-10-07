@@ -129,10 +129,13 @@ class Preview:
 
     def answer(self, summary: str, digest: str) -> JSONResponse:
         """What the call would do, told to the harness: a 200, whatever the call answers, since
-        the harness takes any other success for the call itself, done."""
-        return JSONResponse(
-            {"summary": _shown(summary), "digest": digest}, headers={PREVIEW_HEADER: "true"}
-        )
+        the harness takes any other success for the call itself, done. A summary that would take
+        more than its budget, which no contract writes, is cut, and says so: the harness would ask
+        the owner nothing about it."""
+        shown = _shown(summary)
+        if shown_size(shown) > BUDGET:
+            shown = _cut(shown, BUDGET, self.language)
+        return JSONResponse({"summary": shown, "digest": digest}, headers={PREVIEW_HEADER: "true"})
 
     def check(self, digest: str) -> None:
         """Refuses the call its owner allowed when what it acts on changed since they were shown
@@ -257,6 +260,25 @@ def _number(count: int, language: Language) -> str:
     return f"{count:,}".replace(",", " ") if language == "fr" else f"{count:,}"
 
 
+def _cut(text: str, budget: int, language: Language, indent: str = "") -> str:
+    """The beginning of the text that takes no more than `budget` of a summary, each of its lines
+    after `indent`, and a line of its own that says how many characters it leaves out."""
+    one, many = _CUT[language]
+    # Room for that line, however many it says
+    room = budget - shown_size("\n" + many.format(count=_number(len(text), language)))
+    spent, end = shown_size(indent), 0
+    for character in text:
+        # A line break takes the indent of the next line along
+        spent += shown_size(character) + (shown_size(indent) if character == "\n" else 0)
+        if spent > room:
+            break
+        end += 1
+    kept = text[:end].rstrip()
+    left = len(text) - len(kept)
+    said = one if left == 1 else many.format(count=_number(left, language))
+    return indent + kept.replace("\n", "\n" + indent) + "\n" + said
+
+
 def excerpt(text: str, budget: int, language: Language) -> str:
     """The text a write would put, as its summary shows it: line by line, each line after a tab,
     so that none passes for the summary's own, without what a reader does not see. Whole when it
@@ -268,22 +290,7 @@ def excerpt(text: str, budget: int, language: Language) -> str:
         if character in "\n\t" or unicodedata.category(character) not in _UNSHOWN
     ).rstrip()
     shown = "\t" + kept.replace("\n", "\n\t")
-    if shown_size(shown) <= budget:
-        return shown
-    one, many = _CUT[language]
-    # Room for the line that says how much is left out, however much that is
-    room = budget - shown_size("\n" + many.format(count=_number(len(kept), language)))
-    spent, end = shown_size("\t"), 0
-    for character in kept:
-        # A line break takes the tab of the next line along
-        spent += shown_size(character) + (shown_size("\t") if character == "\n" else 0)
-        if spent > room:
-            break
-        end += 1
-    prefix = kept[:end].rstrip()
-    left = len(kept) - len(prefix)
-    cut = one if left == 1 else many.format(count=_number(left, language))
-    return "\t" + prefix.replace("\n", "\n\t") + "\n" + cut
+    return shown if shown_size(shown) <= budget else _cut(kept, budget, language, "\t")
 
 
 def day(value: date, language: Language) -> str:
