@@ -23,6 +23,13 @@ WORD_NAMESPACES = {
     "wps": "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
     "v": "urn:schemas-microsoft-com:vml",
 }
+# The styles of a document that knows only Normal, where Word's template knows hundreds
+FEW_STYLES = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    f'<w:styles xmlns:w="{WORD_NAMESPACES["w"]}">'
+    '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/>'
+    "</w:style></w:styles>"
+).encode()
 
 
 async def read_content(client: AsyncClient, file_id: str, **params: Any) -> Response:

@@ -1,10 +1,13 @@
 """What keeps reading documents safe, whatever their kind: files other people may have written,
 some of them crafted to take down whatever reads them."""
 
+import pytest
+from docx.document import Document as WordDocument
 from httpx import AsyncClient
 
 from tests.documents import (
     DOCX,
+    FEW_STYLES,
     compound_file,
     declaring,
     encrypted_office_document,
@@ -14,6 +17,7 @@ from tests.documents import (
     word,
 )
 from tests.fakes import FakeBoundary, text_file
+from twake_space_agent_contracts import documents
 from twake_space_agent_contracts.drive_contents import LARGEST_DOCUMENT
 
 WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -186,3 +190,57 @@ async def test_an_older_office_document_under_a_newer_type_is_not_extractable(
 
     assert response.status_code == 415, response.text
     assert response.json()["code"] == "content_not_extractable"
+
+
+def three_paragraphs(document: WordDocument) -> None:
+    for words in ("First paragraph", "Second paragraph", "Third paragraph"):
+        document.add_paragraph(words)
+
+
+async def test_a_document_too_long_to_read_comes_as_far_as_it_was_read(
+    client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reading stops at its first line, its time already over: the time is checked as each
+    # line is written, and between the parts of the XML parsed at a time, which few styles take one
+    monkeypatch.setattr(documents, "READING_SECONDS", 0)
+    content = rezipped(word(three_paragraphs), {"word/styles.xml": FEW_STYLES})
+    boundary.drive.add(text_file("slow", "Slow.docx", content=content, mime=DOCX))
+
+    answer = (await read_content(client, "slow")).json()
+
+    assert answer["untrusted"]["content"] == (
+        "First paragraph\n[The rest of the document was not read: reading it took too long.]"
+    )
+    assert answer["truncated"] is True
+
+
+async def test_a_document_that_gives_no_text_in_time_is_not_extractable(
+    client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(documents, "READING_SECONDS", 0)
+    # A paragraph longer than the XML parsed at a time: the time is over before it ends
+    content = rezipped(
+        word(lambda document: document.add_paragraph("word " * 30_000)),
+        {"word/styles.xml": FEW_STYLES},
+    )
+    boundary.drive.add(text_file("slow", "Slow.docx", content=content, mime=DOCX))
+
+    response = await read_content(client, "slow")
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"
+    assert "too long" in response.json()["detail"]
+
+
+async def test_a_reading_that_does_not_stop_in_time_is_stopped(
+    client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Less time than the process takes to start
+    monkeypatch.setattr(documents, "LONGEST_SECONDS", 0.001)
+    boundary.drive.add(text_file("slow", "Slow.docx", content=word(three_paragraphs), mime=DOCX))
+
+    response = await read_content(client, "slow")
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"
+    assert "too long" in response.json()["detail"]

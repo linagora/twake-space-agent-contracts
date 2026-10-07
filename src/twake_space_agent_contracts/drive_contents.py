@@ -80,6 +80,8 @@ def refusal(reason: Reason) -> Problem:
             return not_extractable(
                 "The file cannot be read as the document its type says: it may be damaged."
             )
+        case "too_long":
+            return not_extractable("Reading the document took too long: no text came of it.")
 
 
 def document_too_large() -> Problem:

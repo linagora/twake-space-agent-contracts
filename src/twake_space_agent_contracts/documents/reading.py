@@ -1,6 +1,7 @@
 """What the readers of every kind of document share, in the reading process: the text they write,
-line by line, up to its budget, and the reasons they refuse a document for."""
+line by line, up to its budget and its deadline, and the reasons they refuse a document for."""
 
+import time
 from typing import ClassVar
 
 
@@ -32,14 +33,21 @@ class Full(Exception):
     """The text holds more than its budget: the rest of the document is not read."""
 
 
-class Output:
-    """The text a reader writes, line by line, up to a budget of characters: once the text goes
-    beyond it, the reader stops, and the text is cut."""
+class OutOfTime(Exception):
+    """The reading took all its time: the rest of the document is not read."""
 
-    def __init__(self, budget: int) -> None:
+
+class Output:
+    """The text a reader writes, line by line, up to a budget of characters and until a deadline:
+    once the text goes beyond its budget, or the deadline passes, the reader stops, and the text is
+    cut."""
+
+    def __init__(self, budget: int, deadline: float) -> None:
         self._lines: list[str] = []
         self._size = 0
         self._budget = budget
+        self._deadline = deadline
+        """When the reading stops, as time.monotonic counts it."""
         self.cut = False
         """Whether the text leaves out some of the document."""
 
@@ -50,11 +58,27 @@ class Output:
             self._size += len(line) + 1
             if self._size > self._budget:
                 raise Full
+        self.tick()
 
     def gap(self) -> None:
         """A blank line between blocks, such as before a heading: never first, nor twice."""
         if self._lines and self._lines[-1]:
             self.add("")
+
+    def tick(self) -> None:
+        """Stops the reading once its deadline passed."""
+        if time.monotonic() >= self._deadline:
+            raise OutOfTime
+
+    def stop(self, words: str) -> None:
+        """Ends the text with a note between brackets, which says why the rest of the document is
+        not read: whatever the budget and the time, which have run out."""
+        self.cut = True
+        self._lines.append(f"[{words}]")
+
+    @property
+    def empty(self) -> bool:
+        return not any(self._lines)
 
     def text(self) -> str:
         return "\n".join(self._lines).strip("\n")

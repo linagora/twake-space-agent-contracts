@@ -13,7 +13,7 @@ from urllib.parse import unquote
 from xml.etree.ElementTree import Element, TreeBuilder
 from xml.parsers import expat
 
-from twake_space_agent_contracts.documents.reading import Encrypted, TooLarge, Unreadable
+from twake_space_agent_contracts.documents.reading import Encrypted, Output, TooLarge, Unreadable
 
 CHUNK = 65_536
 """The bytes of a part parsed at a time."""
@@ -93,14 +93,6 @@ def _directory(content: bytes) -> tuple[int, int] | None:
     return files, size
 
 
-def has(archive: zipfile.ZipFile, name: str) -> bool:
-    try:
-        archive.getinfo(name)
-    except KeyError:
-        return False
-    return True
-
-
 def local(name: str) -> str:
     """An element's or an attribute's name without its namespace: Office writes the same names in
     the namespaces of its transitional and strict forms."""
@@ -127,40 +119,6 @@ def child(element: Element | None, name: str) -> Element | None:
     return None
 
 
-def parsed(archive: zipfile.ZipFile, name: str) -> Events:
-    """The start and the end of each element of an XML part, as the part unpacks: an element comes
-    whole at its end, until it is cleared. A part that declares a document type is refused: no
-    entity is ever declared, so none is expanded or fetched."""
-    builder = TreeBuilder()
-    parser = expat.ParserCreate(namespace_separator="}")
-    events: list[tuple[str, Element]] = []
-
-    def start(tag: str, attributes: dict[str, str]) -> None:
-        named = {_named(key): value for key, value in attributes.items()}
-        events.append(("start", builder.start(_named(tag), named)))
-
-    def end(tag: str) -> None:
-        events.append(("end", builder.end(_named(tag))))
-
-    def refuse(*_: object) -> None:
-        raise Unreadable("a part declares a document type")
-
-    parser.buffer_text = True
-    parser.StartElementHandler = start
-    parser.EndElementHandler = end
-    parser.CharacterDataHandler = builder.data
-    parser.StartDoctypeDeclHandler = refuse
-    parser.EntityDeclHandler = refuse
-    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
-    with archive.open(name) as part:
-        while chunk := part.read(CHUNK):
-            parser.Parse(chunk, False)
-            yield from events
-            events.clear()
-        parser.Parse(b"", True)
-        yield from events
-
-
 def _named(name: str) -> str:
     """A name as expat gives it, <namespace>}<name>, as ElementTree writes it."""
     return "{" + name if "}" in name else name
@@ -177,38 +135,87 @@ class Relationship:
     id: str
 
 
-def relationships(archive: zipfile.ZipFile, part: str) -> list[Relationship]:
-    """The links from the part, or from the package itself for "", to the other parts of the
-    document: those outside it, such as web addresses, left out."""
-    folder, name = posixpath.split(part)
-    links = posixpath.join(folder, "_rels", f"{name}.rels")
-    if not has(archive, links):
-        return []
-    found = []
-    for event, element in parsed(archive, links):
-        if event != "end" or local(element.tag) != "Relationship":
-            continue
-        if element.get("TargetMode") != "External":
-            target = unquote(element.get("Target", ""))
-            path = target[1:] if target.startswith("/") else posixpath.join(folder, target)
-            found.append(
-                Relationship(
-                    kind=element.get("Type", "").rpartition("/")[2],
-                    target=posixpath.normpath(path),
-                    id=element.get("Id", ""),
+class Package:
+    """The zip of a document, whose parts are read for an output, until its deadline."""
+
+    def __init__(self, archive: zipfile.ZipFile, output: Output) -> None:
+        self._archive = archive
+        self._output = output
+
+    def has(self, name: str) -> bool:
+        try:
+            self._archive.getinfo(name)
+        except KeyError:
+            return False
+        return True
+
+    def parsed(self, name: str) -> Events:
+        """The start and the end of each element of an XML part, as the part unpacks: an element
+        comes whole at its end, until it is cleared. A part that declares a document type is
+        refused: no entity is ever declared, so none is expanded or fetched. Between the parts of
+        the XML parsed at a time, the reading stops once its deadline passed."""
+        builder = TreeBuilder()
+        parser = expat.ParserCreate(namespace_separator="}")
+        events: list[tuple[str, Element]] = []
+
+        def start(tag: str, attributes: dict[str, str]) -> None:
+            named = {_named(key): value for key, value in attributes.items()}
+            events.append(("start", builder.start(_named(tag), named)))
+
+        def end(tag: str) -> None:
+            events.append(("end", builder.end(_named(tag))))
+
+        def refuse(*_: object) -> None:
+            raise Unreadable("a part declares a document type")
+
+        parser.buffer_text = True
+        parser.StartElementHandler = start
+        parser.EndElementHandler = end
+        parser.CharacterDataHandler = builder.data
+        parser.StartDoctypeDeclHandler = refuse
+        parser.EntityDeclHandler = refuse
+        parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+        with self._archive.open(name) as part:
+            while chunk := part.read(CHUNK):
+                parser.Parse(chunk, False)
+                yield from events
+                events.clear()
+                if len(chunk) == CHUNK:
+                    self._output.tick()
+            parser.Parse(b"", True)
+            yield from events
+
+    def relationships(self, part: str) -> list[Relationship]:
+        """The links from the part, or from the package itself for "", to the other parts of the
+        document: those outside it, such as web addresses, left out."""
+        folder, name = posixpath.split(part)
+        links = posixpath.join(folder, "_rels", f"{name}.rels")
+        if not self.has(links):
+            return []
+        found = []
+        for event, element in self.parsed(links):
+            if event != "end" or local(element.tag) != "Relationship":
+                continue
+            if element.get("TargetMode") != "External":
+                target = unquote(element.get("Target", ""))
+                path = target[1:] if target.startswith("/") else posixpath.join(folder, target)
+                found.append(
+                    Relationship(
+                        kind=element.get("Type", "").rpartition("/")[2],
+                        target=posixpath.normpath(path),
+                        id=element.get("Id", ""),
+                    )
                 )
-            )
-    return found
+        return found
 
-
-def main_part(archive: zipfile.ZipFile, usual: str) -> str:
-    """The document's main part, as its package names it, else where Office puts it."""
-    for relationship in relationships(archive, ""):
-        if relationship.kind == "officeDocument" and has(archive, relationship.target):
-            return relationship.target
-    if not has(archive, usual):
-        raise Unreadable("no main part")
-    return usual
+    def main_part(self, usual: str) -> str:
+        """The document's main part, as its package names it, else where Office puts it."""
+        for relationship in self.relationships(""):
+            if relationship.kind == "officeDocument" and self.has(relationship.target):
+                return relationship.target
+        if not self.has(usual):
+            raise Unreadable("no main part")
+        return usual
 
 
 def cell_text(text: str) -> str:

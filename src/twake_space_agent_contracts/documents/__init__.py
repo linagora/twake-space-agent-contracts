@@ -1,8 +1,9 @@
 """The text of the user's documents, such as Word documents, which the service reads in a process of
 its own, one per document: whatever a document crafted against its parser makes it do, such as
-take all the memory, or crash, happens in that process rather than in the service. The process
-reads the document from its standard input, and writes its text, or why it has none, as JSON
-(python -m twake_space_agent_contracts.documents <kind> <budget>)."""
+take all the memory, crash or never end, happens in that process rather than in the service, which
+stops it once it takes too long. The process reads the document from its standard input, and
+writes its text, or why it has none, as JSON
+(python -m twake_space_agent_contracts.documents <kind> <budget> <seconds>)."""
 
 import asyncio
 import json
@@ -19,15 +20,21 @@ KINDS: dict[str, Kind] = {
 }
 """The kind of each type of document the service reads, by the type its uploader declared."""
 
-Reason = Literal["encrypted", "too_large", "unreadable"]
+Reason = Literal["encrypted", "too_large", "unreadable", "too_long"]
 """Why a document's text cannot be read: it is protected by a password; it holds more than the
-service reads, once uncompressed; or it is not the document its type says, or damaged."""
+service reads, once uncompressed; it is not the document its type says, or damaged; or its reading
+gave no text in the time it has."""
 
 _REASONS: dict[str, Reason] = {reason: reason for reason in get_args(Reason)}
 
 AT_ONCE = 2
 """The documents read at the same time, each in its own process, the others waiting their turn:
 what they take in memory adds up."""
+READING_SECONDS = 10.0
+"""The time a process reads a document for: then it stops, and gives the text it read."""
+LONGEST_SECONDS = 15.0
+"""The time a process has to answer, past which the service stops it: the time it reads for, and
+the time to start and to stop, if what it was reading lets it."""
 
 
 @dataclass(frozen=True)
@@ -65,13 +72,17 @@ class Reader:
             __name__,
             kind,
             str(budget),
+            str(READING_SECONDS),
             stdin=PIPE,
             stdout=PIPE,
             stderr=DEVNULL,
             env={},
         )
         try:
-            output, _ = await process.communicate(content)
+            async with asyncio.timeout(LONGEST_SECONDS):
+                output, _ = await process.communicate(content)
+        except TimeoutError:
+            raise Refused("too_long") from None
         finally:
             if process.returncode is None:
                 process.kill()

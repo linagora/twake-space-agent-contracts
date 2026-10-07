@@ -2,20 +2,16 @@
 list items after a dash, and their tables as rows of tab-separated cells."""
 
 import re
-import zipfile
 from dataclasses import dataclass, field
 from xml.etree.ElementTree import Element
 
 from twake_space_agent_contracts.documents.archives import (
+    Package,
     attribute,
     cell_text,
     child,
-    has,
     local,
-    main_part,
     open_office,
-    parsed,
-    relationships,
 )
 from twake_space_agent_contracts.documents.reading import Output
 
@@ -48,13 +44,13 @@ class _Table:
 
 
 def read(content: bytes, output: Output) -> None:
-    archive = open_office(content)
-    document = main_part(archive, "word/document.xml")
-    styles = _styles(archive, document)
+    package = Package(open_office(content), output)
+    document = package.main_part("word/document.xml")
+    styles = _styles(package, document)
     tables: list[_Table] = []
     # Within the copy of a drawing for readers that do not know it, whose paragraphs come twice
     unseen = 0
-    for event, element in parsed(archive, document):
+    for event, element in package.parsed(document):
         name = local(element.tag)
         if name == "Fallback":
             unseen += 1 if event == "start" else -1
@@ -182,17 +178,17 @@ def _chain(styles: dict[str, _Style], style_id: str | None) -> list[_Style]:
     return chain
 
 
-def _styles(archive: zipfile.ZipFile, document: str) -> dict[str, _Style]:
+def _styles(package: Package, document: str) -> dict[str, _Style]:
     """The document's paragraph styles, by id."""
     parts = [
         link.target
-        for link in relationships(archive, document)
-        if link.kind == "styles" and has(archive, link.target)
+        for link in package.relationships(document)
+        if link.kind == "styles" and package.has(link.target)
     ]
     styles: dict[str, _Style] = {}
     if not parts:
         return styles
-    for event, element in parsed(archive, parts[0]):
+    for event, element in package.parsed(parts[0]):
         if event != "end" or local(element.tag) != "style":
             continue
         style_id = attribute(element, "styleId")
