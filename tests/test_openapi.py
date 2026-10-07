@@ -251,6 +251,9 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "move_email": ["mail.email.move.v1"],
         "archive_email": ["mail.email.move.v1"],
         "trash_email": ["mail.email.trash.v1"],
+        "move_emails": ["mail.email.move.v1"],
+        "archive_emails": ["mail.email.move.v1"],
+        "trash_emails": ["mail.email.trash.v1"],
     }
 
 
@@ -347,6 +350,9 @@ async def test_mail_words_name_each_of_its_writes(client: AsyncClient) -> None:
         "move_email": ("move", "déplacer"),
         "archive_email": ("archive", "archiver"),
         "trash_email": ("trash", "corbeille"),
+        "move_emails": ("move", "déplacer"),
+        "archive_emails": ("archive", "archiver"),
+        "trash_emails": ("trash", "corbeille"),
     }
 
     writes = {
@@ -433,7 +439,8 @@ async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:
 
 
 async def test_moving_an_email_is_a_low_risk_write(client: AsyncClient) -> None:
-    # The email can be moved back: once the owner allowed writing in Mail, it runs without asking
+    # The emails can be moved back, one or several at once: once the owner allowed writing in
+    # Mail, each move runs without asking
     document = (await client.get("/openapi.json")).json()
 
     risks = {
@@ -441,7 +448,14 @@ async def test_moving_an_email_is_a_low_risk_write(client: AsyncClient) -> None:
         for _, _, operation in operations_of(document)
     }
 
-    moves = ("move_email", "archive_email", "trash_email")
+    moves = (
+        "move_email",
+        "archive_email",
+        "trash_email",
+        "move_emails",
+        "archive_emails",
+        "trash_emails",
+    )
     assert {name: risks.get(name) for name in moves} == dict.fromkeys(moves, "low")
 
 

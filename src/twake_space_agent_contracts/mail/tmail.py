@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from pydantic import AliasGenerator, BaseModel, ConfigDict, Field, ValidationError
@@ -537,26 +537,15 @@ class Moved(BaseModel):
     mailbox_name: str
 
 
-@dataclass(frozen=True)
-class Placement:
-    """Where an email of the user is: in which of their own mailboxes."""
+class OwnMailboxes:
+    """The user's own mailboxes, where a contract moves one of their emails, or several at once.
+    One it cannot tell from another is refused rather than guessed, with a problem that tells the
+    agent how to go on, for one email or for several."""
 
-    email_id: str
     mailboxes: list[Mailbox]
     """All the user's own mailboxes."""
-    mailbox_ids: list[str]
-    """Those the email is in."""
-    subject: str
-    """What others wrote of the email that tells it apart: its subject, and whom it is from."""
-    senders: list[Address]
-
-    @property
-    def in_spam(self) -> bool:
-        return any(
-            mailbox.role in SPAM_ROLES
-            for mailbox in self.mailboxes
-            if mailbox.id in self.mailbox_ids
-        )
+    several: ClassVar[bool] = False
+    """Whether the contract moves several emails at once."""
 
     def with_id(self, mailbox_id: str) -> Mailbox:
         """The user's own mailbox of that id."""
@@ -576,7 +565,7 @@ class Placement:
         return _one(
             found,
             f"The user has no mailbox of their own named {name}.",
-            _ambiguous(f"Several of the user's mailboxes are named {name}", found),
+            self._ambiguous(f"Several of the user's mailboxes are named {name}", found),
         )
 
     def archive(self) -> Mailbox:
@@ -585,40 +574,80 @@ class Placement:
         return _one(
             found,
             "The user has no archive mailbox.",
-            _ambiguous("Several of the user's mailboxes have the role archive", found),
+            self._ambiguous("Several of the user's mailboxes have the role archive", found),
         )
 
     def trash(self) -> Mailbox:
         """The user's trash: their own mailbox whose role is trash."""
         found = self._with_role("trash")
-        # move_email moves no email to a trash: only the user can leave a single one
+        # No move takes an email to a trash: only the user can leave a single one
         several = Problem(
             status=409,
             code="trash_ambiguous",
             title="Several trash mailboxes",
             detail=f"Several of the user's mailboxes have the role trash: {_ids(found)}. No"
             " contract chooses among them: ask the user to keep a single trash folder in Twake"
-            " Mail, then put the email in the trash again.",
+            f" Mail, then put {self._emails} in the trash again.",
         )
         return _one(found, "The user has no trash mailbox.", several)
+
+    @property
+    def _emails(self) -> str:
+        """What the contract moves, as its problems name it."""
+        return "the emails" if self.several else "the email"
+
+    def _ambiguous(self, which: str, found: list[Mailbox]) -> Problem:
+        """Several of the user's mailboxes where they mean one: move_email takes the id of that
+        one, and move_emails for several emails."""
+        move = "move_emails" if self.several else "move_email"
+        return Problem(
+            status=409,
+            code="mailbox_ambiguous",
+            title="Ambiguous mailbox",
+            detail=f"{which}: {_ids(found)}. Ask the user which one they mean, then move"
+            f" {self._emails} there with {move} and its mailbox_id.",
+        )
 
     def _with_role(self, role: str) -> list[Mailbox]:
         return [mailbox for mailbox in self.mailboxes if mailbox.role == role]
 
 
+@dataclass(frozen=True)
+class Placement(OwnMailboxes):
+    """Where an email of the user is: in which of their own mailboxes."""
+
+    email_id: str
+    mailboxes: list[Mailbox]
+    """All the user's own mailboxes."""
+    mailbox_ids: list[str]
+    """Those the email is in."""
+    subject: str
+    """What others wrote of the email that tells it apart: its subject, and whom it is from."""
+    senders: list[Address]
+
+    @property
+    def in_spam(self) -> bool:
+        return any(
+            mailbox.role in SPAM_ROLES
+            for mailbox in self.mailboxes
+            if mailbox.id in self.mailbox_ids
+        )
+
+
+@dataclass(frozen=True)
+class Placements(OwnMailboxes):
+    """Where several emails of the user are, which a contract moves at once."""
+
+    several: ClassVar[bool] = True
+    mailboxes: list[Mailbox]
+    """All the user's own mailboxes."""
+    found: dict[str, Placement]
+    """Where each of the emails in the user's own mailboxes is, by id: an email TMail does not
+    know, or that is only in mailboxes shared with the user, is not found."""
+
+
 def _ids(mailboxes: list[Mailbox]) -> str:
     return ", ".join(mailbox.id for mailbox in mailboxes)
-
-
-def _ambiguous(several: str, found: list[Mailbox]) -> Problem:
-    """Several of the user's mailboxes where they mean one: move_email takes the id of that one."""
-    return Problem(
-        status=409,
-        code="mailbox_ambiguous",
-        title="Ambiguous mailbox",
-        detail=f"{several}: {_ids(found)}. Ask the user which one they mean, then move the email"
-        " there with move_email and its mailbox_id.",
-    )
 
 
 def _one(found: list[Mailbox], missing: str, several: Problem) -> Mailbox:
@@ -629,6 +658,19 @@ def _one(found: list[Mailbox], missing: str, several: Problem) -> Mailbox:
     if len(found) > 1:
         raise several
     return found[0]
+
+
+def _moving(placement: Placement, mailbox: Mailbox) -> dict[str, bool | None]:
+    """The patch that moves an email to one of the user's own mailboxes, out of their others: a
+    patch rather than the whole set, so that a mailbox of someone else, shared with the user,
+    keeps it."""
+    patch: dict[str, bool | None] = {
+        f"mailboxIds/{mailbox_id}": None
+        for mailbox_id in placement.mailbox_ids
+        if mailbox_id != mailbox.id
+    }
+    patch[f"mailboxIds/{mailbox.id}"] = True
+    return patch
 
 
 class TMail:
@@ -898,43 +940,53 @@ class TMail:
             untrusted=ReplyText(to=reply.to, cc=reply.cc, subject=reply.subject),
         )
 
-    async def placement(self, user: User, email_id: str) -> Placement:
-        """Where one of the user's emails is, if it is in one of their own mailboxes, with what
-        tells it apart."""
+    async def placements(self, user: User, email_ids: list[str]) -> Placements:
+        """Where these emails of the user are, those in their own mailboxes, with what tells each
+        apart, all read in one request: TMail takes 500 ids in one Email/get by default."""
         properties = ["id", "mailboxIds", "subject", "from"]
         results = await self._call(
-            user, _MAILBOXES, ("Email/get", {"ids": [email_id], "properties": properties})
+            user, _MAILBOXES, ("Email/get", {"ids": email_ids, "properties": properties})
         )
         mailboxes = _parsed(_Mailboxes, results["Mailbox/get"], "the mailboxes").found
         own = {mailbox.id for mailbox in mailboxes}
-        place = next(
-            (
-                place
-                for place in _parsed(_Placements, results["Email/get"], "the email").found
-                if place.id == email_id
-            ),
-            None,
-        )
-        # TMail gives the emails of mailboxes shared with the user too
-        mailbox_ids = [mailbox for mailbox in place.mailbox_ids if mailbox in own] if place else []
-        if place is None or not mailbox_ids:
+        wanted = set(email_ids)
+        found: dict[str, Placement] = {}
+        for place in _parsed(_Placements, results["Email/get"], "the emails").found:
+            # TMail gives the emails of mailboxes shared with the user too
+            mailbox_ids = [mailbox for mailbox in place.mailbox_ids if mailbox in own]
+            if place.id in wanted and mailbox_ids:
+                found[place.id] = Placement(
+                    place.id, mailboxes, mailbox_ids, _line(place.subject), _cleaned(place.sender)
+                )
+        return Placements(mailboxes, found)
+
+    async def placement(self, user: User, email_id: str) -> Placement:
+        """Where one of the user's emails is, if it is in one of their own mailboxes, with what
+        tells it apart."""
+        placement = (await self.placements(user, [email_id])).found.get(email_id)
+        if placement is None:
             raise _email_not_found(email_id)
-        return Placement(
-            email_id, mailboxes, mailbox_ids, _line(place.subject), _cleaned(place.sender)
-        )
+        return placement
+
+    async def move_all(
+        self, user: User, placements: list[Placement], mailbox: Mailbox
+    ) -> dict[str, str]:
+        """Moves the emails to one of the user's own mailboxes, each out of their others, all with
+        one Email/set, which TMail takes for 500 emails by default; answers, by id, the type of
+        the error TMail answered for each email it did not move."""
+        update = {placement.email_id: _moving(placement, mailbox) for placement in placements}
+        results = await self._call(user, ("Email/set", {"update": update}))
+        answer = _parsed(_EmailSet, results["Email/set"], "the update")
+        updated, refused = answer.updated or {}, answer.not_updated or {}
+        return {
+            email_id: str(refused.get(email_id, {}).get("type", "nothing"))
+            for email_id in update
+            if email_id not in updated
+        }
 
     async def move(self, user: User, placement: Placement, mailbox: Mailbox) -> Moved:
-        """Moves the email to one of the user's own mailboxes, out of their others. A patch rather
-        than the whole set, so that a mailbox of someone else, shared with the user, keeps it."""
-        patch: dict[str, bool | None] = {
-            f"mailboxIds/{mailbox_id}": None
-            for mailbox_id in placement.mailbox_ids
-            if mailbox_id != mailbox.id
-        }
-        patch[f"mailboxIds/{mailbox.id}"] = True
-        results = await self._call(user, ("Email/set", {"update": {placement.email_id: patch}}))
-        answer = _parsed(_EmailSet, results["Email/set"], "the update")
-        if placement.email_id not in (answer.updated or {}):
-            refusal = (answer.not_updated or {}).get(placement.email_id, {}).get("type", "nothing")
-            raise _unavailable(f"Mail answered {refusal} to Email/set.")
+        """Moves the email to one of the user's own mailboxes, out of their others."""
+        refused = (await self.move_all(user, [placement], mailbox)).get(placement.email_id)
+        if refused is not None:
+            raise _unavailable(f"Mail answered {refused} to Email/set.")
         return Moved(email_id=placement.email_id, mailbox_id=mailbox.id, mailbox_name=mailbox.name)

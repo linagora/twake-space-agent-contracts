@@ -586,6 +586,9 @@ class FakeTMail:
         capability, which James does not do: what the contracts' own check is for."""
         self.refused_update: str | None = None
         """The type of the error Email/set answers each update with, when a test says so."""
+        self.refused_updates: dict[str, str] = {}
+        """The type of the error Email/set answers the update of each of these emails with, by
+        id, when a test says so: of several emails, TMail may refuse some and move the others."""
         self.sessions = 0
         """How many times the session was read."""
         self.calls: list[MethodCall] = []
@@ -884,8 +887,8 @@ class FakeTMail:
             email = self.emails.get(email_id)
             if email is None or not self._readable(email, owner):
                 not_updated[email_id] = {"type": "notFound"}
-            elif self.refused_update is not None:
-                not_updated[email_id] = {"type": self.refused_update}
+            elif (refused := self.refused_update or self.refused_updates.get(email_id)) is not None:
+                not_updated[email_id] = {"type": refused}
             elif (mailbox_ids := self._patched(email["mailboxIds"], patch, owner)) is None:
                 not_updated[email_id] = {"type": "invalidPatch"}
             else:
