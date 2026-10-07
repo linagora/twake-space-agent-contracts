@@ -228,10 +228,11 @@ The Drive contracts act in the user's cozy-stack instance, which accepts only it
 - Drive is published once `PUBLISHED_APPS` names `drive`. The service then needs `DRIVE_INSTANCE_DOMAIN`, and does not start without it; while Drive is not published, it needs none of its settings.
 - An instance is one name under `DRIVE_INSTANCE_DOMAIN`, such as `alice.<domain>`. Without an instance, or with any other host, such as an address or a host of another domain, a Drive contract answers `drive_instance_unknown`, and the Drive token goes nowhere. Without a Drive token, it answers `missing_drive_token`.
 - The service calls the instance over HTTPS, with the Drive token as a bearer token: it must reach the users' instances. What is in the trash, or out of the token's reach, answers exactly like what does not exist.
+- The contracts need no more of the Drive token than `io.cozy.files:GET,POST`: `GET` on all the user's files, to read them, their index of recent files and their links, and `POST`, to create a file. A token without `POST` finds every folder out of its reach: `create_file` answers `folder_not_found`.
 - Names, paths, types and contents come in an `untrusted` object, apart from what the contract computed: the user wrote them, or anyone who shared a file with them, and the type of a file is the one its uploader declared. They come without control characters, but for the tabs and line breaks of a text.
 - `web_url` opens the item in the Drive web app, for the user: on `<name>-drive.<domain>` when the stack serves its apps on flat subdomains, as its capabilities say, else on `drive.<instance>`.
 - Lists hold 1 to 100 items, 20 by default. When `next_cursor` is not null, more follow: pass it as `cursor`.
-- Its words in `x-twake-domains` say what reading covers: the words of writing come with its first write contract.
+- Its words in `x-twake-domains` say what reading and writing cover there.
 
 ### `drive.file.read.v1`
 
@@ -262,6 +263,23 @@ Reads the text of one of the user's files.
 - At most `max_bytes` bytes are read from the stack, 65,536 by default and 262,144 at most, and `truncated` tells that the file is longer. A character cut at the end is left out, and bytes that are not UTF-8 are replaced.
 - A file encrypted on the user's devices answers `file_encrypted`; one the antivirus found infected, or whose download it blocks, `file_blocked`.
 - The service reads the file with `POST /files/_all_docs`, then its content with `GET /files/download/{file_id}`.
+
+### `drive.file.create.v1`
+
+Creates a text file in the user's own Drive, in a folder that nobody else sees.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `create_file` | `POST /contracts/v1/drive/files` with `{"folder_id", "name", "content", "mime"}` | 201, the new file, as `read_file` gives it |
+
+- `mime` is `text/markdown` or `text/plain`, and the name ends with its extension, in lower case: `.md` or `.markdown`, or `.txt`. A name takes at most 255 characters, is neither a path nor a hidden file, and holds no control, invisible or direction-changing character, such as U+202E or U+200B: none of Unicode's Cc, Cf and Cs, as in the text others wrote, nor a line or paragraph separator. The pattern of `name` in the OpenAPI document, which the gateway checks, holds its form, and its description says the rest. The content takes at most 1 MiB once encoded in UTF-8. A field the contract does not take is refused.
+- `folder_id` is `root` or a folder of the user's Drive, out of the trash, else `folder_not_found`, as for a folder out of the token's reach.
+- The file appears in the user's Drive, and nobody else is notified. A folder shared with other people answers `folder_shared`, whether it is shared itself or lies in a shared folder: by a sharing the user sent or received, as a shared drive, or by a link that has not expired, whose holders read what the folder holds.
+- The service tells a shared folder as the stack does: the stack references the sharing from the folder it shares, on the side of each member, until the sharing ends. The service reads the folder and each folder above it with `POST /files/_all_docs`, and the links with `GET /permissions/doctype/io.cozy.files/shared-by-link`, keeping only the ids each one shares.
+- Two cases escape that check. The stack references only the root of a sharing's first files rule, and only logs a failure to write that reference: a folder that a sharing shares by another rule, or whose reference the stack failed to write, is not seen as shared. And the check then the write are not atomic: a folder shared between them takes the file.
+- A name already in the folder, of a file or of a folder, answers `name_taken`: nothing is replaced, nor renamed. A Drive without room left for the file answers `quota_exceeded`.
+- The service reads the instance's capabilities, for `web_url`, before the write, so that a failure there leaves no file behind: the call made again creates it. It writes the file with `POST /files/{folder_id}?Type=file&Name=…`, with its `Content-MD5`, which the stack checks on arrival, and never executable.
+- It is a low-risk write (`x-twake-risk: low`): a new file in the user's own folders, never over another, which the owner's consent to write in Drive covers without a confirmation each time.
 
 ### Tasks, as the user
 
@@ -297,7 +315,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `invalid_request` | a parameter is invalid |
+| 400 | `invalid_request` | a parameter, or a field of the body, is invalid |
 | 401 | `missing_token` | no bearer token |
 | 401 | `invalid_token` | the token is not one the broker got for this service: another type, issuer, audience, client or key, or expired |
 | 401 | `missing_drive_token` | a Drive contract without the user's Drive token |
@@ -322,6 +340,9 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `room_encrypted` | the room is encrypted, so its messages cannot be read; `room` gives what it shows of itself |
 | 409 | `file_encrypted` | the file is encrypted on the user's devices |
 | 409 | `file_blocked` | the antivirus of the user's Drive blocks the file |
+| 409 | `folder_shared` | the folder is shared with other people, or lies in a shared folder |
+| 409 | `name_taken` | a file or folder of that name is already in the folder |
+| 409 | `quota_exceeded` | the user's Drive has no room left for the file |
 | 409 | `owner_not_member` | the task has assignees, and no member of its board, or more than one, has the user's email |
 | 415 | `content_not_extractable` | the file is not text |
 | 429 | `chat_rate_limited` | Chat limits the requests made as the user; `retry_after_ms` says when to try again, when Chat says it |
