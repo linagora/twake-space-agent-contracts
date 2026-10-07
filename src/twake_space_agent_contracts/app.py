@@ -12,16 +12,26 @@ from twake_space_agent_contracts import applications, problems
 from twake_space_agent_contracts.caller import TokenVerifier, caller_dependency
 from twake_space_agent_contracts.settings import Settings
 
+COMPONENTS = "#/components/schemas/"
 
-def _whole(schema: Any, components: dict[str, Any]) -> Any:
-    """The schema with the components it refers to written in place."""
+
+def _whole(schema: Any, components: dict[str, Any], within: frozenset[str] = frozenset()) -> Any:
+    """The schema with the components it refers to written in place, what it says beside a
+    reference kept over what the component says. A component found within itself, which no schema
+    holds whole, keeps its reference there, for the test of the document to find."""
     if isinstance(schema, list):
-        return [_whole(item, components) for item in schema]
+        return [_whole(item, components, within) for item in schema]
     if not isinstance(schema, dict):
         return schema
-    if "$ref" in schema:
-        return _whole(components[schema["$ref"].removeprefix("#/components/schemas/")], components)
-    return {key: _whole(value, components) for key, value in schema.items()}
+    beside = {
+        key: _whole(value, components, within) for key, value in schema.items() if key != "$ref"
+    }
+    if "$ref" not in schema:
+        return beside
+    name = schema["$ref"].removeprefix(COMPONENTS)
+    if name in within:
+        return {"$ref": schema["$ref"]} | beside
+    return _whole(components[name], components, within | {name}) | beside
 
 
 class Contracts(FastAPI):
