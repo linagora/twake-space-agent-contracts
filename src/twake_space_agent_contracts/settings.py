@@ -18,6 +18,9 @@ class Settings:
     """Where the issuer publishes its signing keys."""
     calendar_url: str
     """The Calendar side service, which free/busy goes through with the user's token."""
+    tasks_url: str | None
+    """Twake Tasks, whose REST API the tasks contracts call with the user's token: needed only
+    once tasks is published."""
     published_apps: frozenset[str]
     """The applications the service publishes, by domain: it serves and describes their contracts
     only. The operator keeps it equal to the applications APISIX routes."""
@@ -53,6 +56,7 @@ class Settings:
             # Where LemonLDAP-NG publishes them, unless told otherwise
             jwks_url=os.environ.get("OIDC_JWKS_URL", issuer.rstrip("/") + "/oauth2/jwks"),
             calendar_url=os.environ["CALENDAR_URL"].rstrip("/"),
+            tasks_url=os.environ.get("TASKS_URL", "").rstrip("/") or None,
             # Unset or empty, as a chart may render a value it lacks: what it published before
             published_apps=frozenset(
                 domain.strip().lower()

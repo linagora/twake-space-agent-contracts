@@ -236,6 +236,9 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "search_files": ["drive.file.read.v1"],
         "list_recent_files": ["drive.file.read.v1"],
         "read_file_content": ["drive.content.read.v1"],
+        "list_my_tasks": ["tasks.task.read.v1"],
+        "search_tasks": ["tasks.task.read.v1"],
+        "read_task": ["tasks.task.read.v1"],
     }
 
 

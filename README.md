@@ -248,6 +248,34 @@ Reads the text of one of the user's files.
 - A file encrypted on the user's devices answers `file_encrypted`; one the antivirus found infected, or whose download it blocks, `file_blocked`.
 - The service reads the file with `POST /files/_all_docs`, then its content with `GET /files/download/{file_id}`.
 
+### Tasks, as the user
+
+The Tasks contracts call the REST API of Twake Tasks 0.1.1 with the user's token. Tasks accepts it once the token broker's client has the audience `twaketasks` and LemonLDAP-NG gives Tasks the user's `uuid`, `org_id` and `sid`: Tasks then acts for the user's `uuid` in their `org_id`, and shows them the boards of the projects they are a member of. Tasks also refuses the token unless the `sub` LemonLDAP-NG gives its own client, `twaketasks-backend`, which introspects the token, is the one userinfo gives for the token broker's client: both clients must take the same identifier attribute. The service publishes the Tasks contracts once `PUBLISHED_APPS` names `tasks`, and then needs `TASKS_URL`: without it, it refuses to start.
+
+- A user whose token gives Tasks no `org_id` is a personal account for Tasks, which then shows them only what lies outside any organization: an organization's boards answer like unknown ones. Nothing in Tasks' answers tells the contracts which of the two the user is.
+- No contract lists the user's boards. Tasks 0.1.1 lists them only with `GET /api/boards`, which, as opening its web app does, creates the user's Inbox if they have none and accepts their pending invitations to projects, and a read must never act for the user. Until Tasks lists boards without side effects, an agent finds a board through the tasks it lists or searches.
+
+### `tasks.task.read.v1`
+
+Reads the user's tasks, on the boards of the projects they are a member of.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_my_tasks` | `GET /contracts/v1/tasks/mine?due=…&days=…&zone=…&limit=…` | `{"tasks": [...], "truncated"}`, by due date, undated ones last |
+| `search_tasks` | `GET /contracts/v1/tasks/search?q=…&include_closed=…&limit=…` | `{"tasks": [...], "truncated"}` |
+| `read_task` | `GET /contracts/v1/tasks/boards/{board_id}/tasks/{task_id}?comments=…` | the task, with its description and latest comments |
+
+- `due=all`, the default, lists the open tasks assigned to the user (`GET /api/my-tasks`). `overdue`, `today` and `upcoming` read their agenda (`GET /api/agenda?zone=&days=`), which also counts the unassigned tasks of their own projects outside spaces, as `assigned_to_me` tells: the contract keeps the tasks due before today, today, or from today within `days` (1 to 31, 7 by default).
+- `zone`, required, is the user's IANA time zone, such as `Europe/Paris`: due dates are days in it. A zone Tasks does not know is an invalid request.
+- `search_tasks` finds the tasks whose key starts with `q`, or whose title or description holds it (`GET /api/search?q=`, 1 to 200 characters), and keeps the closed ones only with `include_closed=true`.
+- `assigned_to_me` follows what Tasks says, never an email: every task of `due=all` is assigned to the user, and in the agenda a task with assignees is assigned to them while one without is one of their own unassigned tasks. A search holds anyone's tasks, and Tasks does not say which of their assignees is the user: it gives `false` for a task without assignees and `null` otherwise.
+- Lists hold 20 tasks by default, 100 at most, and 50 for a search, the most Tasks gives. Tasks gives no cursor: `truncated` says when a list holds less than all.
+- `read_task` reads the whole board (`GET /api/boards/{board_id}`), then the task's description and comments. The description is cut at 10,000 characters, and each of the latest `comments` comments (0 to 50, 10 by default) at 2,000.
+- A board the user is not a member of answers exactly like an unknown one, and an archived or trashed task like a missing one.
+- The user on a board is the member who joined with their email, whatever its case. `read_task` needs them only to tell whether a task with assignees is the user's, and is refused rather than guessing when no member has that email, or more than one, as when the user joined under an alias of their address.
+- Ids are the UUIDs that reads give; a key, such as `WEB-12`, names a task for people only.
+- Titles, descriptions, comments, and the names of boards, projects, sections and labels are written by members: they come under `untrusted`, apart from what the contract computed.
+
 ## Errors
 
 Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`application/problem+json`) with a stable `code`:
@@ -270,6 +298,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `drive_instance_unknown` | no Drive instance of the platform is known for the user: LemonLDAP-NG gives no `workplaceFqdn` for them, or one outside `DRIVE_INSTANCE_DOMAIN` |
 | 404 | `folder_not_found` | no folder with this id in the user's Drive, out of the trash |
 | 404 | `file_not_found` | no file with this id in the user's Drive, out of the trash |
+| 404 | `board_not_found` | the user is a member of no board with this id |
+| 404 | `task_not_found` | the board shows no task with this id: it may be archived or in the trash |
 | 409 | `not_an_attendee` | the invitation in the user's calendar does not list the user as an attendee |
 | 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series |
 | 409 | `invitation_cancelled` | the organizer cancelled the event |
@@ -277,6 +307,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `room_encrypted` | the room is encrypted, so its messages cannot be read; `room` gives what it shows of itself |
 | 409 | `file_encrypted` | the file is encrypted on the user's devices |
 | 409 | `file_blocked` | the antivirus of the user's Drive blocks the file |
+| 409 | `owner_not_member` | the task has assignees, and no member of its board, or more than one, has the user's email |
 | 415 | `content_not_extractable` | the file is not text |
 | 429 | `chat_rate_limited` | Chat limits the requests made as the user; `retry_after_ms` says when to try again, when Chat says it |
 | 502 | `calendar_refused` | Calendar refused the user's token |
@@ -288,6 +319,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 502 | `mail_unavailable` | TMail did not answer, answered an error, or in an unexpected form |
 | 502 | `drive_refused` | the user's Drive instance refused their Drive token |
 | 502 | `drive_unavailable` | the user's Drive instance did not answer, or answered in an unexpected form |
+| 502 | `tasks_refused_token` | Tasks refused the user's token |
+| 502 | `tasks_unavailable` | Tasks did not answer, or answered in an unexpected form |
 | 503 | `keys_unavailable` | the signing keys of LemonLDAP-NG could not be fetched, and none are held |
 
 Routing errors, such as an unknown path, use the same format, with a `code` named after their HTTP status (`not_found`, `method_not_allowed`).
@@ -320,12 +353,13 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `DRIVE_INSTANCE_DOMAIN` | the domain of the users' cozy-stack instances, each one name under it, such as `dev.twake.lin-saas.com` on dev; needed once `PUBLISHED_APPS` names `drive`, and only then |
 | `DRIVE_SCHEME` | how the service reaches the users' Drive instances, `https` by default; `http` for a local cozy-stack |
 | `DRIVE_PORT` | the port of those instances, when it is not the scheme's, such as `8080` for a local cozy-stack |
+| `TASKS_URL` | Twake Tasks, whose REST API is under `/api`; needed once `PUBLISHED_APPS` names `tasks`, and only then |
 
 The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user 10001 and reads the same variables. It is published as `latest` from `main` and with the version from `v*` tags.
 
 ## Test
 
-The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, TMail, Synapse, behind the gateway's outbound route, and the user's cozy-stack instance are faked at the HTTP boundary. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the words of every published application, and a worked call in every description.
+The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the words of every published application, and a worked call in every description.
 
 ```sh
 uv run pytest

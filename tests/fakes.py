@@ -1,15 +1,16 @@
 """What the service reaches over HTTP, faked at that boundary: the signing keys of LemonLDAP-NG,
-the Calendar side service, TMail, Synapse behind the gateway's outbound route, and the owner's
-cozy-stack instance. Also the clock the token checks read."""
+the Calendar side service, TMail, Synapse behind the gateway's outbound route, the owner's
+cozy-stack instance and Twake Tasks. Also the clock the token checks read."""
 
 import hashlib
 import json
 import posixpath
 import re
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -27,6 +28,7 @@ SETTINGS = Settings(
     audience=AUDIENCE,
     jwks_url="https://sign-up.test/oauth2/jwks",
     calendar_url="https://calendar.test",
+    tasks_url="https://tasks.test",
     # Every application the service has, so that the tests reach all their contracts
     published_apps=frozenset(application.domain for application in APPLICATIONS),
     chat_url="https://gateway.test/synapse",
@@ -995,6 +997,310 @@ class FakeDrive:
         return httpx.Response(200, content=doc.content, headers={"Content-Type": doc.mime})
 
 
+TASKS_TODAY = "2026-10-07"
+"""Today for Tasks, in every time zone it knows."""
+TASKS_ZONES = {"Europe/Paris", "UTC"}
+SEARCH_LIMIT = 50
+"""The most results a search of Tasks gives."""
+
+
+def tasks_id(name: str) -> str:
+    """The UUID Tasks gives a person, a board or a task, the same for the same name."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"tasks:{name}"))
+
+
+@dataclass(frozen=True)
+class TasksMember:
+    """A member of a project: their user id in Tasks, the email they joined with, their role."""
+
+    user_id: str
+    email: str
+    role: str = "editor"
+
+
+def tasks_member(uid: str, role: str = "editor") -> TasksMember:
+    """The person of that uid, a member of a project, by the email of their token."""
+    return TasksMember(tasks_id(email_of(uid)), email_of(uid), role)
+
+
+@dataclass
+class TasksBoard:
+    """A board, and the members of its project."""
+
+    id: str
+    name: str
+    key_prefix: str
+    members: list[TasksMember]
+    project: str = "Website"
+    inbox: bool = False
+    managed: bool = False
+    """Whether its project is a Twake Space's."""
+    organization: str | None = "linagora"
+    """The org_id of its project, None outside any organization, as for a personal account."""
+    archived: bool = False
+    sections: list[dict[str, str]] = field(default_factory=list)
+    """Its sections in order, each with its id, name and category."""
+    labels: dict[str, str] = field(default_factory=dict)
+    """The names of its labels, by id."""
+
+
+@dataclass
+class TasksTask:
+    id: str
+    board: str
+    number: int
+    title: str
+    description: str = ""
+    assignees: list[TasksMember] = field(default_factory=list)
+    priority: int | None = None
+    due_date: str | None = None
+    due_time: str | None = None
+    due_zone: str | None = None
+    deadline: str | None = None
+    section_id: str | None = None
+    parent_id: str | None = None
+    labels: list[str] = field(default_factory=list)
+    """The ids of its labels."""
+    recurrence: dict[str, Any] | None = None
+    state: str = "open"
+    """open, completed or canceled."""
+    hidden: bool = False
+    """Archived or in the trash: no board and no list shows it."""
+    comments: list[dict[str, Any]] = field(default_factory=list)
+    """As Tasks gives them, oldest first."""
+
+
+@dataclass(frozen=True)
+class TasksPerson:
+    """Whom Tasks acts for: the uuid and the org_id LemonLDAP-NG gives it for the token."""
+
+    user_id: str
+    organization: str | None
+    """None for a personal account, which Tasks takes a user without org_id for."""
+
+
+class FakeTasks:
+    """Twake Tasks 0.1.1, as the contracts call its REST API with the bearer's token.
+
+    Tasks acts for the person of the token, by the uuid and org_id LemonLDAP-NG gives it, here
+    derived from the token's subject. A board shows only to the members of its project, in their
+    organization or, for a personal account, outside any: any other answers 404
+    {"error": "not_found"}, as an unknown one does. The agenda, the tasks assigned to the
+    person and a search list tasks of every board they are a member of, archived and trashed
+    tasks left out; a description and comments are read by the task's id on its board.
+    """
+
+    def __init__(self) -> None:
+        self.boards: dict[str, TasksBoard] = {}
+        self.tasks: dict[str, TasksTask] = {}
+        self.organizations: dict[str, str | None] = {}
+        """The org_id of each person, by email: linagora unless set."""
+        self.down = False
+        """Whether Tasks answers 503, as while it cannot check tokens."""
+        self.unreachable = False
+        self.refused_tokens = False
+        self.unexpected = False
+        """Whether Tasks answers in a form the contracts do not know."""
+        self.requests: list[tuple[str, dict[str, str]]] = []
+        """The paths asked, with their query."""
+
+    def board(self, name: str, key_prefix: str, *members: TasksMember, **more: Any) -> TasksBoard:
+        """Arranges a board of that name, with the members of its project."""
+        board = TasksBoard(tasks_id(name), name, key_prefix, list(members), **more)
+        self.boards[board.id] = board
+        return board
+
+    def task(self, board: TasksBoard, title: str, **more: Any) -> TasksTask:
+        """Arranges a task on the board, numbered after the board's others."""
+        number = 1 + sum(1 for task in self.tasks.values() if task.board == board.id)
+        task = TasksTask(tasks_id(f"{board.key_prefix}-{number}"), board.id, number, title, **more)
+        self.tasks[task.id] = task
+        return task
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if self.unreachable:
+            raise httpx.ConnectError("Tasks is unreachable", request=request)
+        if self.down:
+            return httpx.Response(503, json={"error": "unavailable"})
+        bearer = request.headers.get("authorization", "").removeprefix("Bearer ")
+        try:
+            subject = jwt.decode(bearer, options={"verify_signature": False})["sub"]
+        except jwt.InvalidTokenError:
+            return httpx.Response(401, json={"error": "unauthorized"})
+        if self.refused_tokens:
+            return httpx.Response(401, json={"error": "unauthorized"})
+        if self.unexpected:
+            return httpx.Response(200, json={"items": []})
+        self.requests.append((request.url.path, dict(request.url.params)))
+        person = TasksPerson(tasks_id(subject), self.organizations.get(subject, "linagora"))
+        params = request.url.params
+        if request.method != "GET":
+            return httpx.Response(404)
+        if request.url.path == "/api/boards":
+            # Like opening the web app, it creates the person's Inbox and accepts their pending
+            # invitations to projects: a read never acts for the user
+            raise AssertionError("GET /api/boards acts for the user: no contract may call it")
+        if request.url.path == "/api/my-tasks":
+            return httpx.Response(
+                200,
+                json={
+                    "tasks": self._tasks_of(
+                        person, lambda t, b: self._open(t, b) and _assigned(t, person)
+                    )
+                },
+            )
+        if request.url.path == "/api/agenda":
+            return self._agenda(person, params.get("zone"), params.get("days", ""))
+        if request.url.path == "/api/search":
+            return self._search(person, params.get("q", "").strip())
+        return self._board_read(request.url.path, person)
+
+    def _role(self, board: TasksBoard, person: TasksPerson) -> str | None:
+        # Each row belongs to an organization, or to none, and shows within it only
+        if board.organization != person.organization:
+            return None
+        return next((m.role for m in board.members if m.user_id == person.user_id), None)
+
+    def _open(self, task: TasksTask, board: TasksBoard) -> bool:
+        return task.state == "open" and not board.archived
+
+    def _agenda(self, person: TasksPerson, zone: str | None, days: str) -> httpx.Response:
+        if zone not in TASKS_ZONES or not days.isdigit() or not 1 <= int(days) <= 60:
+            return httpx.Response(400, json={"error": "invalid_request"})
+        end = (date.fromisoformat(TASKS_TODAY) + timedelta(days=int(days))).isoformat()
+
+        # Overdue or due before the end, and the person's: assigned to them, or unassigned in a
+        # project that is not a space's
+        def due(task: TasksTask, board: TasksBoard) -> bool:
+            return (
+                self._open(task, board)
+                and task.due_date is not None
+                and task.due_date < end
+                and (_assigned(task, person) or (not task.assignees and not board.managed))
+            )
+
+        return httpx.Response(
+            200, json={"today": TASKS_TODAY, "tasks": self._tasks_of(person, due)}
+        )
+
+    def _search(self, person: TasksPerson, words: str) -> httpx.Response:
+        if not 1 <= len(words) <= 200:
+            return httpx.Response(400, json={"error": "invalid_request"})
+
+        def matches(task: TasksTask, board: TasksBoard) -> bool:
+            return f"{board.key_prefix}-{task.number}".lower().startswith(words.lower()) or any(
+                words.lower() in text.lower() for text in (task.title, task.description)
+            )
+
+        return httpx.Response(200, json={"tasks": self._tasks_of(person, matches)[:SEARCH_LIMIT]})
+
+    def _board_read(self, path: str, person: TasksPerson) -> httpx.Response:
+        found = re.fullmatch(r"/api/boards/([^/]+)(?:/tasks/([^/]+)/(description|comments))?", path)
+        board = self.boards.get(found[1]) if found else None
+        if found is None or board is None or self._role(board, person) is None:
+            return httpx.Response(404, json={"error": "not_found"})
+        if found[2] is None:
+            return httpx.Response(200, json=self._board(board, person))
+        # Unlike the board, these read an archived or trashed task too
+        task = self.tasks.get(found[2])
+        if task is None or task.board != board.id:
+            return httpx.Response(404, json={"error": "not_found"})
+        if found[3] == "description":
+            return httpx.Response(200, json={"markdown": task.description, "version": 0})
+        return httpx.Response(200, json={"comments": task.comments})
+
+    def _tasks_of(
+        self, person: TasksPerson, which: Callable[[TasksTask, TasksBoard], bool]
+    ) -> list[dict[str, Any]]:
+        """The tasks shown to the person that are `which`, dated ones first, as lists give them."""
+        found = [
+            (task, board)
+            for task in self.tasks.values()
+            if not task.hidden
+            and self._role(board := self.boards[task.board], person)
+            and which(task, board)
+        ]
+        found.sort(
+            key=lambda pair: (
+                pair[0].due_date is None,
+                pair[0].due_date or "",
+                pair[0].due_time or "",
+                pair[0].priority is None,
+                pair[0].priority or 0,
+                pair[1].name,
+                pair[0].number,
+            )
+        )
+        return [
+            self._task(task, board) | {"boardId": board.id, "boardName": board.name}
+            for task, board in found
+        ]
+
+    def _task(self, task: TasksTask, board: TasksBoard) -> dict[str, Any]:
+        assigned = {member.user_id for member in task.assignees}
+        return {
+            "id": task.id,
+            "key": f"{board.key_prefix}-{task.number}",
+            "sectionId": task.section_id,
+            "parentId": task.parent_id,
+            "title": task.title,
+            "priority": task.priority,
+            "dueDate": task.due_date,
+            "dueTime": task.due_time,
+            "dueZone": task.due_zone,
+            "deadline": task.deadline,
+            "duration": None,
+            "recurrence": task.recurrence,
+            "completedAt": "2026-10-06T16:00:00.000Z" if task.state == "completed" else None,
+            "canceledAt": "2026-10-06T16:00:00.000Z" if task.state == "canceled" else None,
+            # Someone who left the board stays assigned, but is not shown
+            "assignees": [
+                {"userId": member.user_id, "email": member.email}
+                for member in sorted(board.members, key=lambda member: member.email)
+                if member.user_id in assigned
+            ],
+            "labels": [{"id": label, "name": board.labels[label]} for label in task.labels],
+            "commentCount": len(task.comments),
+        }
+
+    def _project(self, board: TasksBoard) -> dict[str, Any]:
+        return {
+            "id": tasks_id(f"project {board.project}"),
+            "name": board.project,
+            "personal": board.inbox,
+            "managed": board.managed,
+        }
+
+    def _board(self, board: TasksBoard, person: TasksPerson) -> dict[str, Any]:
+        return {
+            "layout": "board",
+            "defaultLayout": "board",
+            "id": board.id,
+            "name": board.name,
+            "keyPrefix": board.key_prefix,
+            "project": self._project(board),
+            "inbox": board.inbox,
+            "archived": board.archived,
+            "version": 1,
+            "role": self._role(board, person),
+            "members": [
+                {"userId": member.user_id, "email": member.email}
+                for member in sorted(board.members, key=lambda member: member.email)
+            ],
+            "labels": [{"id": label, "name": name} for label, name in board.labels.items()],
+            "sections": board.sections,
+            "tasks": [
+                self._task(task, board)
+                for task in self.tasks.values()
+                if task.board == board.id and not task.hidden
+            ],
+        }
+
+
+def _assigned(task: TasksTask, person: TasksPerson) -> bool:
+    return any(member.user_id == person.user_id for member in task.assignees)
+
+
 class FakeBoundary:
     """Routes the service's HTTP calls to the fakes."""
 
@@ -1006,6 +1312,7 @@ class FakeBoundary:
         self.drive = FakeDrive()
         self.requests: list[httpx.Request] = []
         """Every request the service sent, wherever to."""
+        self.tasks = FakeTasks()
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -1019,4 +1326,6 @@ class FakeBoundary:
             return self.tmail.handle(request)
         if request.url.host == MMAUDET_INSTANCE:
             return self.drive.handle(request)
+        if request.url.host == "tasks.test":
+            return self.tasks.handle(request)
         return httpx.Response(404)
