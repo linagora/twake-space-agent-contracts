@@ -478,6 +478,102 @@ Create, change and delete contacts in the user's own address books, as the user.
 - `create_contact` and `update_contact` are low-risk writes (`x-twake-risk: low`): the user's own contacts, which nobody is told of, and which the owner's consent to write in Contacts covers without a confirmation each time. `delete_contact` is a high-risk write (`x-twake-risk: high`), which the owner confirms call by call: a contact deleted is lost.
 - Each tells what it would do ([Previews](#previews)). `create_contact` tells each field the contact holds, its note whole when it fits, or that the contact is in the address book already; `update_contact`, each field it changes, the name Contacts shows too, as it would be and as it was, what it clears and the entries a list loses named as removed; `delete_contact`, that the contact goes for good, and each field it holds. The digest covers the contact as the address book holds it, for `create_contact` by its UID, if at all: a call made once it changed answers `changed_since_preview`, and writes nothing.
 
+### Space, as the user
+
+The Space contracts call the REST API of the Twake Space backend 0.1.9 with the user's token, at `SPACE_URL`, under which it serves `/spaces` and `/organization/members`. Space introspects the token with its own client, `twakespace-backend` by default, and reads userinfo with the token itself. It accepts the token once the token broker's client has the audience `twakespace` and userinfo gives the user's `sub`, `uuid`, `email` and `sid`: LemonLDAP-NG gives `sub` and, from 2.22, `sid` by itself, and its client exports the others. Space then acts for the user's `uuid`, which must be a UUID, in their `org_id`, and shows them the spaces they are a member of. As Tasks does, it also refuses the token unless the `sub` of its introspection, which LemonLDAP-NG gives for its own client, is the one userinfo gives for the token broker's client: both clients must take the same identifier attribute. The service publishes the Space contracts once `PUBLISHED_APPS` names `space`, and then needs `SPACE_URL`: without it, it refuses to start.
+
+- A token Space refuses, for any of those reasons, answers `space_refused`. So does a user whose token gives Space no `org_id`, whom it refuses on every route, as it serves the members of an organization only.
+- A space the user is not a member of answers exactly like an unknown one, and an item outside the feed of the space like a missing one.
+- Space does not say which member the user is: the contracts take the member who has the user's email, whatever its case, as the user, to tell their own posts and reactions, which `you` and `mine` mark, and to check a post is theirs before it is changed. With no such member, or several, none is marked, and Space alone refuses to change someone else's post.
+- What people wrote comes under `untrusted`, on one line but a post, which keeps its lines, all without what a reader does not see: the names of spaces, groups, people and tokens, descriptions, posts, reactions, and the titles, previews and ids of the objects of the cards. What an app tells of an object, such as an event's times or where it takes place, comes under `untrusted` too, each of its texts so cleaned and cut at 500 characters, 20 entries of each list or object and three levels at most.
+- `role` is the user's in a space, or a member's: `viewer`, who reads and reacts, `editor`, who posts too, or `admin`, who also adds, changes and removes members.
+- Its words in `x-twake-domains` say what reading and writing cover there: reactions and posts, which the members of a space see, and its members, where the user is an admin.
+
+### `space.spaces.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_spaces` | `GET /contracts/v1/space/spaces` | `{"spaces": [{"space_id", "role", "member_count", "untrusted": {"name", "description"}}], "truncated"}`, by name |
+| `read_space` | `GET /contracts/v1/space/spaces/{space_id}` | `{"space_id", "role", "created_at", "apps", "tasks_project_id", "chat_room_id", "mailbox_id", "calendar_id", "drive_id", "members": [{"user_id", "username", "email", "role", "you", "untrusted": {"display_name"}}], "groups": [{"group_id", "role", "untrusted": {"name"}}], "untrusted": {"name", "description"}}` |
+
+- The list holds 100 spaces at most, `truncated` telling that the user has more.
+- `read_space` gives the members by username, the groups linked to the space, whose people are members with their role, and the tabs the space shows (`apps`). Each of its apps links one of its own to the space: its project in Tasks, which `open_boards` gives as `project_id`, its room in Chat, as the chat contracts take it, its shared mailbox, its calendar and its files; null while the app prepares it, or when the deployment has no such app.
+- `GET /spaces`, then `GET /spaces/{id}`.
+
+### `space.people.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `search_organization_people` | `GET /contracts/v1/space/people?q=…&page=…` | `{"people": [{"username", "email", "untrusted": {"display_name"}}], "next_page"}` |
+
+- The active people of the user's organization, as Space's directory, ldap-rest, finds them: those whose username, email or name holds `q`, 2 to 100 characters once the blanks and what a reader does not see are left out, or all of them without `q`. 20 a page, `next_page` the `page` of those who follow, null after the last.
+- `username` is what `add_space_members` takes. `GET /organization/members?search=&page=`.
+
+### `space.feed.read.v1`
+
+The feed of a space, its Fil, shows a card per object of the space's apps, such as a file, an event, a task or an email, and the posts its members write, each with the reactions of its members.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_feed_items` | `GET /contracts/v1/space/spaces/{space_id}/feed?category=…&limit=…&before=…` | `{"items": [...], "next"}`, newest first |
+| `read_feed_item` | `GET /contracts/v1/space/spaces/{space_id}/feed/items/{item_id}` | the item |
+
+- An item is `{"item_id", "kind", "category", "time", "updated_at", "edited_at", "event_type", "object", "by", "reactions", "untrusted": {"text", "title", "preview", "object_id", "state"}}`. A card shows the latest activity of an app on one object, and keeps the place of its first: `event_type` is the type of its latest event, such as `com.twake.drive.file.updated.v1`, `object` `{"type", "container_kind", "container_id"}` what it is and what of the space's apps it lies in, and its title, preview, id and what its app tells of it come under `untrusted`. A post gives its `text` under `untrusted`, and when it was last edited.
+- `by` is `{"kind", "user_id", "you", "untrusted": {"name"}}`: a `user`, with their `user_id` as `read_space` gives it, null for someone outside the space, a `token` of Space an application acts with, or a `deleted_user`; null for an activity no one in particular made. `reactions` are `{"count", "mine", "untrusted": {"key"}}`, in the order they were first added.
+- `category` keeps `messages`, the posts and the mail, `files`, `activities`, such as tasks, or `events`, of the calendar. `limit` goes from 1 to 50 and is 20 by default; `next` is the `before` of the older items, null after the last, and a cursor Space did not write is an invalid request.
+- Each reads the space first (`GET /spaces/{id}`), for the member who is the user, then `GET /spaces/{id}/feed` or `GET /spaces/{id}/feed/items/{item_id}`.
+
+### `space.reaction.add.v1` and `space.reaction.remove.v1`
+
+React to an item of the feed of one of the user's spaces, and take a reaction back.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `add_feed_reaction` | `POST /contracts/v1/space/spaces/{space_id}/feed/items/{item_id}/reactions` `{"key"}` | the item, as `read_feed_item` gives it, read again |
+| `remove_feed_reaction` | `POST /contracts/v1/space/spaces/{space_id}/feed/items/{item_id}/reactions/remove` `{"key"}` | the same |
+
+- `key` is one of the six reactions the Space web app offers, 👍, ❤️, 😂, 🎉, 👀 and 🙏: an enum of the body, which the gateway checks, so that the model never writes words that members would read. The body takes no other field.
+- Any member reacts, viewers too, and the members of the space see it. Only the user's own reaction is taken back. A reaction the user made already writes nothing, and so does taking back one they did not make.
+- `PUT` and `DELETE /spaces/{id}/feed/items/{item_id}/reactions/{key}`, the key encoded in the path. The contracts take it in the body, where the gateway checks it whole.
+- Both are low-risk writes (`x-twake-risk: low`): the user's own reactions, which they take back at will, and which the owner's consent to write in Space covers without a confirmation each time.
+- Each tells what it would do ([Previews](#previews)): which item gets or loses which reaction, in which space, with the text of a post, or that nothing changes. The digest covers the item as shown, a card by its title, a post by its author and its text, and whether the user reacted so: a call made once the post was rewritten answers `changed_since_preview`.
+
+### `space.post.create.v1`, `space.post.update.v1` and `space.post.delete.v1`
+
+Post in the feed of one of the user's spaces, and edit and delete the user's own posts.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `create_feed_post` | `POST /contracts/v1/space/spaces/{space_id}/feed/posts` `{"text"}` | 201, the post, as `read_feed_item` gives it |
+| `update_feed_post` | `PATCH /contracts/v1/space/spaces/{space_id}/feed/posts/{item_id}` `{"text"}` | the post |
+| `delete_feed_post` | `DELETE /contracts/v1/space/spaces/{space_id}/feed/posts/{item_id}` | the post as it was |
+
+- `text` is plain text of 1 to 4000 characters once the blanks around it are left out, as Space keeps it; the body takes no other field. The same text as the post's writes nothing.
+- Every member of the space sees a post in its feed, and its changes, as they happen: Space sends no notification of them.
+- Editors and admins post: a viewer's post answers `forbidden_role`. Only its author edits or deletes a post, whatever their role now: someone else's answers `not_author`, and a card, which shows what an app did, `not_a_post`. All three are refused before anything is written, and Space refusing the same once the user's role changed answers them too.
+- Each call to `create_feed_post` posts anew: Space takes no idempotency key. `delete_feed_post` deletes the post for good, with its reactions: Space keeps no trash.
+- `POST /spaces/{id}/feed/posts`, `PATCH` and `DELETE /spaces/{id}/feed/posts/{item_id}`, each after `GET /spaces/{id}`, and a change or a deletion after `GET /spaces/{id}/feed/items/{item_id}`.
+- All three are high-risk writes (`x-twake-risk: high`), which the owner confirms call by call: every member reads a post.
+- Each tells what it would do ([Previews](#previews)): where a post goes and how many members see it, the new text and the former one, or the post that goes for good, each text whole when it fits. The digest covers the space and its members for a new post, the post as it is and who reads it for a change, and the post as it is for a deletion: a call made once a member joined, or the post was rewritten, answers `changed_since_preview`, and writes nothing.
+
+### `space.member.add.v1`, `space.member.update.v1` and `space.member.remove.v1`
+
+Add people of the user's organization to one of their spaces, change the role of its members, and remove them, where the user is an admin.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `add_space_members` | `POST /contracts/v1/space/spaces/{space_id}/members` `{"usernames", "role"}` | the space, as `read_space` gives it, read again |
+| `update_space_member` | `PATCH /contracts/v1/space/spaces/{space_id}/members/{user_id}` `{"role"}` | the member, as `read_space` gives them |
+| `remove_space_member` | `DELETE /contracts/v1/space/spaces/{space_id}/members/{user_id}` | the member as they were |
+
+- Only the admins of a space change its members: anyone else is refused with `not_space_admin`, before anything is written, and when Space refuses it once the user's role changed.
+- `usernames` lists 1 to 20 usernames, as `search_organization_people` gives them, all added with one `role`. Each is looked for in the directory first (`GET /organization/members?search=`), among the first 100 people it finds, whatever its case: those the user's organization does not have answer `person_not_found`, which names them, and nobody is added. A member of another role answers `member_exists`, as ldap-rest would: `update_space_member` changes it. Members of that role already are left as they are, and nothing is written when all are.
+- The people added see the space, its feed and what its apps hold, such as its room, its tasks and its files: Space writes the change in its directory, ldap-rest, which tells the apps.
+- `user_id` is a member's, as `read_space` gives it: one the space does not have answers `member_not_found`. A member given the role they have is left as is. A change or a removal that would leave the space without an admin, as ldap-rest refuses it, answers `last_admin`. A member through a linked group only stays one while the group is linked.
+- `POST /spaces/{id}/members` `{"usernames", "role"}`, `PATCH` `{"role"}` and `DELETE /spaces/{id}/members/{user_id}`, each after `GET /spaces/{id}`.
+- All three are high-risk writes (`x-twake-risk: high`), which the owner confirms call by call: they change who sees what a space holds, and who manages it.
+- Each tells what it would do ([Previews](#previews)): whom the space takes in and as what, each by their name and their email, and who is a member already; a member's new role and their former one, and what an admin does; or who leaves the space, the user maybe. The digest covers the people and their membership: a call made once one of them joined, changed role or left answers `changed_since_preview`, and writes nothing.
+
 ## Previews
 
 When the harness asks an owner about a write, for a first use, a high-risk write or a write that a turn an event started prepared, it shows them what the call would do rather than the call as the model wrote it, if the write's operation declares `x-twake-preview: true`. It first calls the contract as the call would go, same method, path, query and body, in the owner's name, with `x-twake-preview: true` and the owner's language in `accept-language`:
@@ -503,6 +599,13 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `create_contact` | each field of the contact, its note whole when it fits; or that it is in the address book already | the contact, by its UID, as the address book holds it, if at all |
 | `update_contact` | each field it changes, as it would be and as it was, what it removes named as such | the contact as it is |
 | `delete_contact` | that the contact goes for good, and each field it holds | the contact as it is |
+| `add_feed_reaction`, `remove_feed_reaction` | which item gets or loses which reaction, in which space, with a post's text; or that nothing changes | the item as shown, and whether the user reacted so |
+| `create_feed_post` | the space the post goes to, how many members see it, and its text | the space and its members |
+| `update_feed_post` | the post's new text and its former one | the post as it is, and who reads it |
+| `delete_feed_post` | that the post goes for good with its reactions, and its text | the post as it is |
+| `add_space_members` | whom the space takes in and as what, and who is a member already | the people, and who of them are members already |
+| `update_space_member` | the member's new role and their former one, and what an admin does | the member as they are |
+| `remove_space_member` | who leaves the space, the user maybe | the member as they are |
 
 ## Errors
 
@@ -516,7 +619,9 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 401 | `missing_token` | no bearer token |
 | 401 | `invalid_token` | the token is not one the broker got for this service: another type, issuer, audience, client or key, or expired |
 | 401 | `missing_drive_token` | a Drive contract without the user's Drive token |
-| 403 | `forbidden_role` | the user is a viewer of the board: they only read it |
+| 403 | `forbidden_role` | the user is a viewer of the board, where they only read, or of the space, where they read and react but do not post |
+| 403 | `not_space_admin` | the user is not an admin of the space, whose admins alone change its members |
+| 403 | `not_author` | someone else wrote the post, which only its author edits or deletes |
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
 | 404 | `invitation_not_found` | no invitation to an event of this UID was sent to the user: their calendars have no copy of the event, their copy does not list them as an attendee, or they organize it |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
@@ -533,6 +638,10 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `contacts_user_not_found` | Contacts has no user with the user's email |
 | 404 | `address_book_not_found` | the user reads no address book with this id: neither their own, nor one shared with them, nor their domain's |
 | 404 | `contact_not_found` | the address book has no contact with this id |
+| 404 | `space_not_found` | the user is a member of no space with this id |
+| 404 | `feed_item_not_found` | the feed of the space has no item with this id |
+| 404 | `member_not_found` | the space has no member with this user id |
+| 404 | `person_not_found` | the user's organization has no active person with these usernames: `usernames` lists them, and nobody was added |
 | 409 | `changed_since_preview` | what the call acts on changed since its owner was shown what it would do: nothing was done |
 | 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series |
 | 409 | `invitation_cancelled` | the organizer cancelled the event |
@@ -553,6 +662,9 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `mailbox_forbidden` | `move_email` and `move_emails` do not move an email to drafts, sent, outbox, templates, trash or spam |
 | 409 | `email_in_spam` | the email is in spam, which only `trash_email` and `trash_emails` take it out of; the code of an email refused when several are moved at once |
 | 409 | `contact_exists` | the user's default address book has a contact with one of the emails already, or the one the same call added, changed since: `book_id` and `contact_id` name it, and nothing was added |
+| 409 | `not_a_post` | the item of the feed is a card, which shows what an app did: only posts are edited or deleted |
+| 409 | `member_exists` | some of the people to add are members of the space already, with another role, which `update_space_member` changes: `members` names them, when the contract tells, and nobody was added |
+| 409 | `last_admin` | the change or the removal would leave the space without an admin |
 | 413 | `file_too_large` | the document takes more than the 20 MiB the service reads, or more than it reads once uncompressed |
 | 413 | `contact_too_large` | the contact would take more than the 1 MiB Contacts takes in a card: nothing was written |
 | 415 | `content_not_extractable` | the file is neither text nor a document the service reads, or the document is damaged, holds no text, as a scanned PDF, or gave none in the time or the memory its reading has |
@@ -571,6 +683,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 502 | `task_created_partially` | Tasks created the task, then failed to set its priority or due date: `board_id`, `task_id` and `key` name it |
 | 502 | `contacts_refused` | Contacts refused the user's token |
 | 502 | `contacts_unavailable` | Contacts did not answer, or answered in an unexpected form |
+| 502 | `space_refused` | Space refused the user's token, or knows the user in no organization, as when their token gives it no `org_id` |
+| 502 | `space_unavailable` | Space did not answer, answered an error, or in an unexpected form |
 | 503 | `keys_unavailable` | the signing keys of LemonLDAP-NG could not be fetched, and none are held |
 | 503 | `reading_busy` | the service reads as many documents as it may at once, or one of the user's, and none ended in the 10 seconds a request waits: try again in a few seconds |
 
@@ -600,12 +714,13 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `DRIVE_SCHEME` | how the service reaches the users' Drive instances, `https` by default; `http` for a local cozy-stack |
 | `DRIVE_PORT` | the port of those instances, when it is not the scheme's, such as `8080` for a local cozy-stack |
 | `TASKS_URL` | Twake Tasks, whose REST API is under `/api`; needed once `PUBLISHED_APPS` names `tasks`, and only then |
+| `SPACE_URL` | the Twake Space backend, which serves `/spaces` and `/organization/members` under it; needed once `PUBLISHED_APPS` names `space`, and only then |
 
 The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user 10001 and reads the same variables. It is published as `latest` from `main` and with the version from `v*` tags.
 
 ## Test
 
-The tests call the HTTP API, and need neither a database nor Docker. LemonLDAP-NG's signing keys, the Calendar side service, with esn-sabre's address books behind its `/dav` proxy and its search across them, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. The documents the fake cozy-stack serves are built in the tests, by python-docx, python-pptx and openpyxl, which only the tests use, or by hand, as are OpenDocument files, PDFs and the documents crafted against a reader, and each is read in its own process, as the service reads them. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
+The tests call the HTTP API, and need neither a database nor Docker. LemonLDAP-NG's signing keys, the Calendar side service, with esn-sabre's address books behind its `/dav` proxy and its search across them, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance, Twake Tasks and the Twake Space backend, with the directory of the organization behind it, are faked at the HTTP boundary. The documents the fake cozy-stack serves are built in the tests, by python-docx, python-pptx and openpyxl, which only the tests use, or by hand, as are OpenDocument files, PDFs and the documents crafted against a reader, and each is read in its own process, as the service reads them. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
 
 ```sh
 uv run pytest
