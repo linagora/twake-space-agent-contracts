@@ -3,7 +3,16 @@ some of them crafted to take down whatever reads them."""
 
 from httpx import AsyncClient
 
-from tests.documents import DOCX, declaring, read_content, rezipped, word
+from tests.documents import (
+    DOCX,
+    compound_file,
+    declaring,
+    encrypted_office_document,
+    encrypting,
+    read_content,
+    rezipped,
+    word,
+)
 from tests.fakes import FakeBoundary, text_file
 from twake_space_agent_contracts.drive_contents import LARGEST_DOCUMENT
 
@@ -143,6 +152,37 @@ async def test_a_part_that_holds_more_than_it_declares_is_not_read(
     boundary.drive.add(text_file("lying", "Lying.docx", content=lying, mime=DOCX))
 
     response = await read_content(client, "lying")
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"
+
+
+async def test_a_document_protected_by_a_password_is_refused(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.drive.add(
+        text_file("locked", "Locked.docx", content=encrypted_office_document(), mime=DOCX),
+        text_file(
+            "zipped", "Zipped.docx", content=encrypting(plans(), "word/document.xml"), mime=DOCX
+        ),
+    )
+
+    for file_id in ("locked", "zipped"):
+        response = await read_content(client, file_id)
+
+        assert response.status_code == 409, response.text
+        assert response.json()["code"] == "file_encrypted"
+        assert "password" in response.json()["detail"]
+
+
+async def test_an_older_office_document_under_a_newer_type_is_not_extractable(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # A Word 97 document, whose text sits in the WordDocument stream of a compound file
+    older = compound_file(("WordDocument", b"Plans".ljust(4096, b"\0")))
+    boundary.drive.add(text_file("older", "Older.docx", content=older, mime=DOCX))
+
+    response = await read_content(client, "older")
 
     assert response.status_code == 415, response.text
     assert response.json()["code"] == "content_not_extractable"

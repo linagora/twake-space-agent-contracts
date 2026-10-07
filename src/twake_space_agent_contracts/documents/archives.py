@@ -13,7 +13,7 @@ from urllib.parse import unquote
 from xml.etree.ElementTree import Element, TreeBuilder
 from xml.parsers import expat
 
-from twake_space_agent_contracts.documents.reading import TooLarge, Unreadable
+from twake_space_agent_contracts.documents.reading import Encrypted, TooLarge, Unreadable
 
 CHUNK = 65_536
 """The bytes of a part parsed at a time."""
@@ -37,6 +37,20 @@ Events = Iterator[tuple[str, Element]]
 _END = b"PK\x05\x06"
 _END_SIZE = 22
 _LONGEST_COMMENT = 65_535
+# How a compound file starts, and the name of the stream where Office keeps a document it encrypts
+_COMPOUND_FILE = bytes.fromhex("d0cf11e0a1b11ae1")
+_ENCRYPTED_PACKAGE = "EncryptedPackage".encode("utf-16-le")
+
+
+def open_office(content: bytes) -> zipfile.ZipFile:
+    """The zip of an Office Open XML document. A document protected by a password is no zip, but
+    a compound file, the container of Office's older documents, which names the zip encrypted
+    EncryptedPackage."""
+    if content.startswith(_COMPOUND_FILE):
+        if _ENCRYPTED_PACKAGE in content:
+            raise Encrypted("the document is protected by a password")
+        raise Unreadable("an older Office document")
+    return open_zip(content)
 
 
 def open_zip(content: bytes) -> zipfile.ZipFile:
@@ -58,6 +72,9 @@ def open_zip(content: bytes) -> zipfile.ZipFile:
     for file in files_listed:
         if file.file_size > RATIO_FROM and file.file_size > HIGHEST_RATIO * file.compress_size:
             raise TooLarge("a file of the zip is compressed too many times")
+        # Encrypted with a password, which the zip module asks for to unpack it
+        if file.flag_bits & 1:
+            raise Encrypted("a file of the zip is encrypted")
     return archive
 
 

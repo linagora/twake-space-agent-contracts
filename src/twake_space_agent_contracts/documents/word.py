@@ -13,7 +13,7 @@ from twake_space_agent_contracts.documents.archives import (
     has,
     local,
     main_part,
-    open_zip,
+    open_office,
     parsed,
     relationships,
 )
@@ -48,7 +48,7 @@ class _Table:
 
 
 def read(content: bytes, output: Output) -> None:
-    archive = open_zip(content)
+    archive = open_office(content)
     document = main_part(archive, "word/document.xml")
     styles = _styles(archive, document)
     tables: list[_Table] = []
