@@ -3,27 +3,17 @@
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.mail.tmail import JMAP_ID, Moved, Placement, TMail
+from twake_space_agent_contracts.mail import EXAMPLE_ID, EmailId
+from twake_space_agent_contracts.mail.tmail import JMAP_ID, SPAM_ROLES, Moved, Placement, TMail
 from twake_space_agent_contracts.problems import Problem, invalid_request
 
 # The special mailboxes an email is not moved to: trash_email puts an email in the trash, and the
 # user moves emails to the others in Twake Mail
-SPECIAL = {"drafts", "sent", "outbox", "templates", "trash", "spam", "junk"}
-
-EXAMPLE_ID = "0f9c7a50-a2b1-11f0-8de9-0242ac120002"
-"""The id of an email, as TMail writes them, for the worked calls."""
-
-EmailId = Annotated[
-    str,
-    Path(
-        pattern=JMAP_ID,
-        description="The id of the email, as list_emails or search_emails gives it.",
-    ),
-]
+SPECIAL = {"drafts", "sent", "outbox", "templates", "trash", *SPAM_ROLES}
 
 
 class Destination(BaseModel):

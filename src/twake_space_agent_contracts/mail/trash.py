@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.mail.move import EXAMPLE_ID, EmailId
+from twake_space_agent_contracts.mail import EXAMPLE_ID, EmailId
 from twake_space_agent_contracts.mail.tmail import Moved, TMail
 
 

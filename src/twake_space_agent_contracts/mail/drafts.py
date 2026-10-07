@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.mail import UNTRUSTED
+from twake_space_agent_contracts.mail import EXAMPLE_ID, UNTRUSTED
 from twake_space_agent_contracts.mail.tmail import JMAP_ID, ReplyDraft, TMail
 
 TEXT_BYTES = 20 * 1024
@@ -66,7 +66,7 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
             "one the email is from: tell the user. to and cc give 100 addresses at most, "
             f"recipients_truncated telling that the draft has more. {UNTRUSTED} "
             "Example, for a reply to the email that list_emails gave with the id "
-            "0f9c7a50-a2b1-11f0-8de9-0242ac120002: email_id=0f9c7a50-a2b1-11f0-8de9-0242ac120002, "
+            f"{EXAMPLE_ID}: email_id={EXAMPLE_ID}, "
             'body={"text": "Hello Paul, the budget suits me. Best regards, Michel-Marie", '
             '"reply_all": false}.'
         ),
