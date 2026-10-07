@@ -3,11 +3,12 @@ some of them crafted to take down whatever reads them."""
 
 from httpx import AsyncClient
 
-from tests.documents import DOCX, read_content, rezipped, word
+from tests.documents import DOCX, declaring, read_content, rezipped, word
 from tests.fakes import FakeBoundary, text_file
 from twake_space_agent_contracts.drive_contents import LARGEST_DOCUMENT
 
 WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+MIB = 1_048_576
 
 
 def _laughs() -> str:
@@ -89,3 +90,59 @@ async def test_a_document_larger_than_its_size_says_is_refused(
     # The stack's size aside, no more is downloaded than the service reads
     assert response.status_code == 413, response.text
     assert response.json()["code"] == "file_too_large"
+
+
+def plans() -> bytes:
+    return word(lambda document: document.add_paragraph("Plans"))
+
+
+async def test_a_zip_bomb_is_refused_before_it_unpacks(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # 8 MiB of zeros, a thousand times smaller compressed, where XML is some ten times smaller
+    bomb = rezipped(plans(), {"word/media/image1.png": bytes(8 * MIB)})
+    boundary.drive.add(text_file("bomb", "Bomb.docx", content=bomb, mime=DOCX))
+
+    response = await read_content(client, "bomb")
+
+    assert len(bomb) < MIB // 10
+    assert response.status_code == 413, response.text
+    assert response.json()["code"] == "file_too_large"
+
+
+async def test_a_document_that_unpacks_into_too_much_is_refused(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # 300 MiB once uncompressed, ten times what the zip holds of it, as XML would be
+    huge = declaring(plans(), "word/document.xml", size=300 * MIB, compressed=30 * MIB)
+    boundary.drive.add(text_file("huge", "Huge.docx", content=huge, mime=DOCX))
+
+    response = await read_content(client, "huge")
+
+    assert response.status_code == 413, response.text
+    assert response.json()["code"] == "file_too_large"
+
+
+async def test_a_zip_of_too_many_files_is_refused(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    crowded = rezipped(plans(), {f"word/media/image{n}.png": b"" for n in range(10_001)})
+    boundary.drive.add(text_file("crowded", "Crowded.docx", content=crowded, mime=DOCX))
+
+    response = await read_content(client, "crowded")
+
+    assert response.status_code == 413, response.text
+    assert response.json()["code"] == "file_too_large"
+
+
+async def test_a_part_that_holds_more_than_it_declares_is_not_read(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Unpacked as far as it declares, then found damaged
+    lying = declaring(plans(), "word/document.xml", size=100)
+    boundary.drive.add(text_file("lying", "Lying.docx", content=lying, mime=DOCX))
+
+    response = await read_content(client, "lying")
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"

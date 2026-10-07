@@ -1,9 +1,11 @@
 """What the documents kept in a zip share, as Office Open XML and OpenDocument keep theirs: the zip,
-and its XML parts, read as they unpack, without a document type declaration, where XML bombs and
-external entities hide."""
+refused when it would unpack into more than the service reads, as a zip bomb does, and its XML
+parts, read as they unpack, without a document type declaration, where XML bombs and external
+entities hide."""
 
 import io
 import posixpath
+import struct
 import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -11,16 +13,67 @@ from urllib.parse import unquote
 from xml.etree.ElementTree import Element, TreeBuilder
 from xml.parsers import expat
 
-from twake_space_agent_contracts.documents.reading import Unreadable
+from twake_space_agent_contracts.documents.reading import TooLarge, Unreadable
 
 CHUNK = 65_536
 """The bytes of a part parsed at a time."""
+MOST_FILES = 10_000
+"""The files a zip holds at most: a document holds a few dozen, a deck of a thousand slides a few
+thousand."""
+LARGEST_DIRECTORY = 4_194_304
+"""The bytes of the zip's directory at most, which lists its files: 4 MiB, some 400 bytes for each
+file it may hold."""
+LARGEST_UNPACKED = 268_435_456
+"""The bytes a zip's files take at most once uncompressed, all together: 256 MiB."""
+HIGHEST_RATIO = 100
+"""How many times smaller than its content a file of the zip may be compressed, once it takes more
+than RATIO_FROM uncompressed: XML is some ten times smaller compressed, a zip bomb thousands of
+times."""
+RATIO_FROM = 1_048_576
 
 Events = Iterator[tuple[str, Element]]
 
+# The record that ends a zip, and the longest comment it may end with
+_END = b"PK\x05\x06"
+_END_SIZE = 22
+_LONGEST_COMMENT = 65_535
+
 
 def open_zip(content: bytes) -> zipfile.ZipFile:
-    return zipfile.ZipFile(io.BytesIO(content))
+    """The zip, once found within what the service unpacks: as many files as its directory lists,
+    and as many bytes as each says it holds, since the zip module never unpacks more of a file than
+    it says. Each of those sizes is checked before any file is unpacked."""
+    listed = _directory(content)
+    if listed is not None:
+        files, size = listed
+        # Before the zip module reads the directory, which takes memory for each file it lists
+        if files > MOST_FILES or size > LARGEST_DIRECTORY:
+            raise TooLarge("the zip lists too many files")
+    archive = zipfile.ZipFile(io.BytesIO(content))
+    files_listed = archive.infolist()
+    if len(files_listed) > MOST_FILES:
+        raise TooLarge("the zip lists too many files")
+    if sum(file.file_size for file in files_listed) > LARGEST_UNPACKED:
+        raise TooLarge("the zip unpacks into too much")
+    for file in files_listed:
+        if file.file_size > RATIO_FROM and file.file_size > HIGHEST_RATIO * file.compress_size:
+            raise TooLarge("a file of the zip is compressed too many times")
+    return archive
+
+
+def _directory(content: bytes) -> tuple[int, int] | None:
+    """How many files the zip's directory lists, and how many bytes it takes, as the record that
+    ends the zip says, found as the zip module finds it; None without such a record."""
+    end = len(content) - _END_SIZE
+    if end < 0:
+        return None
+    # Ended by its record, without a comment, or else by a comment after it
+    if content[end : end + 4] != _END or content[-2:] != b"\0\0":
+        end = content.rfind(_END, max(0, len(content) - _END_SIZE - _LONGEST_COMMENT))
+        if end < 0 or end + _END_SIZE > len(content):
+            return None
+    files, size = struct.unpack_from("<HI", content, end + 10)
+    return files, size
 
 
 def has(archive: zipfile.ZipFile, name: str) -> bool:

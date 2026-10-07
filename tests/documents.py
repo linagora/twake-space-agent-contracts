@@ -2,6 +2,7 @@
 kind, or by hand for what no library writes, such as a part a test replaces."""
 
 import io
+import struct
 import zipfile
 from collections.abc import Callable
 from typing import Any
@@ -71,3 +72,20 @@ def rezipped(content: bytes, parts: dict[str, bytes]) -> bytes:
 def part_of(content: bytes, name: str) -> bytes:
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
         return archive.read(name)
+
+
+def declaring(content: bytes, name: str, *, size: int, compressed: int | None = None) -> bytes:
+    """The zip with the part of that name declaring these sizes in the zip's directory, whatever
+    it holds: the sizes a zip is unpacked by."""
+    data = bytearray(content)
+    # The end of a zip without a comment says where its directory starts
+    (offset,) = struct.unpack_from("<I", data, len(data) - 22 + 16)
+    while data[offset : offset + 4] == b"PK\x01\x02":
+        name_size, extra_size, comment_size = struct.unpack_from("<3H", data, offset + 28)
+        if data[offset + 46 : offset + 46 + name_size].decode() == name:
+            if compressed is not None:
+                struct.pack_into("<I", data, offset + 20, compressed)
+            struct.pack_into("<I", data, offset + 24, size)
+            return bytes(data)
+        offset += 46 + name_size + extra_size + comment_size
+    raise AssertionError(f"No part {name} in the zip")
