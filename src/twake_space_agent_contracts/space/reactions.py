@@ -1,28 +1,33 @@
 """space.reaction.add.v1 and space.reaction.remove.v1: the user reacts to an item of the feed of one
 of their spaces in Twake Space, with a reaction Space offers, and takes a reaction back."""
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.previews import Preview, Previewing, digest_of
+from twake_space_agent_contracts.problems import invalid_request
 from twake_space_agent_contracts.space import EXAMPLE_ITEM, UNTRUSTED, ItemId, SpaceId
 from twake_space_agent_contracts.space.backend import FeedItem, TwakeSpace, feed_item_not_found
 from twake_space_agent_contracts.space.feed import SpaceFeedItem, feed_item
 from twake_space_agent_contracts.space.summaries import reacting, unreacting
 
-Key = Literal[
+OFFERED = (
     "\N{THUMBS UP SIGN}",
     "\N{HEAVY BLACK HEART}\N{VARIATION SELECTOR-16}",
     "\N{FACE WITH TEARS OF JOY}",
     "\N{PARTY POPPER}",
     "\N{EYES}",
     "\N{PERSON WITH FOLDED HANDS}",
-]
-"""The reactions Twake Space offers in its feed."""
+)
+"""The reactions the Space web app offers in its feed."""
+LONGEST_KEY = 16
+"""The longest reaction Space takes, in characters."""
+
+Key = Annotated[str, Field(min_length=1, max_length=LONGEST_KEY)]
 
 
 class NewReaction(BaseModel):
@@ -30,7 +35,10 @@ class NewReaction(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    key: Key = Field(description="The reaction, one of those Twake Space offers.")
+    key: Key = Field(
+        description=f"The reaction: one of those Twake Space offers, {' '.join(OFFERED)}, or one "
+        "the item has already, as reactions gives it, to join it."
+    )
 
 
 class OwnReaction(BaseModel):
@@ -39,6 +47,13 @@ class OwnReaction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: Key = Field(description="The reaction, one of those Twake Space offers.")
+
+    @field_validator("key")
+    @classmethod
+    def _offered(cls, key: str) -> str:
+        if key not in OFFERED:
+            raise ValueError(f"give one of the reactions Twake Space offers, {' '.join(OFFERED)}")
+        return key
 
 
 def _acted_on(item: FeedItem) -> dict[str, str | None]:
@@ -70,6 +85,12 @@ async def _react(
     item = await space.item(user, space_id, item_id)
     if item is None:
         raise feed_item_not_found(space_id, item_id)
+    # The words of a reaction are the web app's, or someone's whom the user joins: never the model's
+    if adding and key not in OFFERED and key not in {found.key for found in item.reactions}:
+        raise invalid_request(
+            f"key: Give one of the reactions Twake Space offers, {' '.join(OFFERED)}, or one the"
+            " item has already."
+        )
     reacted = item.reacted(me, key)
     # What the owner allows: the item as they were shown it, and whether the user reacted so
     digest = digest_of(space_id, _acted_on(item), key, reacted)

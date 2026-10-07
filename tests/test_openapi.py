@@ -689,10 +689,11 @@ async def test_reacting_and_taking_a_reaction_back_are_low_risk_writes(
 
 
 @pytest.mark.parametrize("operation_id", ["add_feed_reaction", "remove_feed_reaction"])
-async def test_a_reaction_is_one_of_those_twake_space_offers(
+async def test_the_body_of_a_reaction_is_its_key_as_space_takes_it(
     client: AsyncClient, operation_id: str
 ) -> None:
-    # The model reacts with what the Space web app offers, never with words members would read
+    # The model reacts with what the Space web app offers, or joins a reaction the item has: the
+    # contract checks which, the gateway its length, 1 to 16 characters as Space counts them
     document = (await client.get("/openapi.json")).json()
     operations = {
         operation["operationId"]: operation for _, _, operation in operations_of(document)
@@ -703,14 +704,8 @@ async def test_a_reaction_is_one_of_those_twake_space_offers(
     assert "$ref" not in json.dumps(schema)
     assert schema["required"] == ["key"]
     assert schema["additionalProperties"] is False
-    assert schema["properties"]["key"]["enum"] == [
-        "\N{THUMBS UP SIGN}",
-        "\N{HEAVY BLACK HEART}\N{VARIATION SELECTOR-16}",
-        "\N{FACE WITH TEARS OF JOY}",
-        "\N{PARTY POPPER}",
-        "\N{EYES}",
-        "\N{PERSON WITH FOLDED HANDS}",
-    ]
+    key = schema["properties"]["key"]
+    assert (key["type"], key["minLength"], key["maxLength"]) == ("string", 1, 16)
 
 
 async def test_posting_editing_and_deleting_a_post_are_high_risk_writes(

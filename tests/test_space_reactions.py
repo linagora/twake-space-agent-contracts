@@ -10,6 +10,8 @@ MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
 THUMBS_UP = "\N{THUMBS UP SIGN}"
 PARTY = "\N{PARTY POPPER}"
+ROCKET = "\N{ROCKET}"
+"""A reaction Space does not offer, which a member made through its API."""
 
 
 def design(boundary: FakeBoundary, role: str = "viewer") -> SpaceRoom:
@@ -67,10 +69,12 @@ async def test_a_reaction_the_user_made_already_writes_nothing(
     assert boundary.space.writes == []
 
 
-async def test_a_reaction_space_does_not_offer_is_invalid(
+async def test_a_reaction_neither_offered_nor_on_the_item_is_invalid(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
+    # The model never writes words members would read as a reaction
     post = roadmap(boundary, design(boundary))
+    boundary.space.react(post, ALICE, ROCKET)
 
     responses = [
         await react(client, post, key)
@@ -79,6 +83,18 @@ async def test_a_reaction_space_does_not_offer_is_invalid(
 
     assert [response.status_code for response in responses] == [400, 400, 400]
     assert {response.json()["code"] for response in responses} == {"invalid_request"}
+    assert boundary.space.writes == []
+
+
+async def test_a_reaction_longer_than_space_takes_is_refused_before_space_is_asked(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    post = roadmap(boundary, design(boundary))
+
+    response = await react(client, post, "x" * 17)
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
     assert boundary.space.requests == []
 
 
@@ -243,3 +259,21 @@ async def test_an_item_gone_before_the_reaction_is_not_found(
 
     assert response.status_code == 404
     assert response.json()["code"] == "feed_item_not_found"
+
+
+async def test_the_user_joins_a_reaction_the_item_has_already(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # As the web app lets them: a reaction someone made, one Space offers or not
+    post = roadmap(boundary, design(boundary))
+    boundary.space.react(post, ALICE, ROCKET)
+
+    response = await react(client, post, ROCKET)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["reactions"] == [
+        {"count": 2, "mine": True, "untrusted": {"key": ROCKET}}
+    ]
+    assert boundary.space.writes == [
+        ("PUT", f"/spaces/{post.space}/feed/items/{post.id}/reactions/{ROCKET}", None)
+    ]
