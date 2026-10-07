@@ -30,7 +30,11 @@ MOST_PEOPLE = 10
 
 def people(addresses: list[Address], total: int, language: Language) -> str:
     """The people of a header, as a preview names them: the first ones, and how many others."""
-    named = [found for found in (person(a.name, a.email) for a in addresses[:MOST_PEOPLE]) if found]
+    named = [
+        found
+        for found in (person(a.name, a.email, language) for a in addresses[:MOST_PEOPLE])
+        if found
+    ]
     others = total - len(named)
     if others <= 0:
         return ", ".join(named)

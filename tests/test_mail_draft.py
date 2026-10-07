@@ -367,8 +367,8 @@ async def test_a_preview_tells_the_owner_whom_the_draft_answers_and_creates_noth
     assert told == (
         "Préparer dans tes brouillons une réponse, jamais envoyée : tu la relis et l'envoies"
         " toi-même.\n"
-        "À : Paul Martin <paul.martin@twake.test>, Bob <bob@twake.test>\n"
-        "Cc : Alice <alice@twake.test>\n"
+        "À : « Paul Martin » <paul.martin@twake.test>, « Bob » <bob@twake.test>\n"
+        "Cc : « Alice » <alice@twake.test>\n"
         "Objet : « Re: Budget Q4 »\n"
         "Texte : « Hello Paul, the budget suits me. Michel-Marie »"
     )
@@ -385,7 +385,7 @@ async def test_a_preview_says_the_draft_answers_another_address_than_the_senders
 
     assert told == (
         "Prepare a reply in your drafts, never sent: you review it and send it yourself.\n"
-        "To: Mallory <mallory@elsewhere.test>\n"
+        "To: “Mallory” <mallory@elsewhere.test>\n"
         "Subject: “Re: Budget Q4”\n"
         "Text: “Hello Paul, the budget suits me. Michel-Marie”\n"
         "It goes to the reply address the email gives, not to its sender."
@@ -403,8 +403,8 @@ async def test_a_preview_of_a_long_reply_shows_its_beginning_and_counts_the_rest
     )
 
     to, text = told.splitlines()[1], told.splitlines()[3]
-    shown = ", ".join(f"Person {n} <person{n}@twake.test>" for n in range(1, 10))
-    assert to == f"À : Paul Martin <paul.martin@twake.test>, {shown} et 2 autres"
+    shown = ", ".join(f"« Person {n} » <person{n}@twake.test>" for n in range(1, 10))
+    assert to == f"À : « Paul Martin » <paul.martin@twake.test>, {shown} et 2 autres"
     assert text == f"Texte : « {'a' * 299}… »"
 
 

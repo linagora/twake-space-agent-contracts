@@ -231,12 +231,13 @@ async def test_the_users_address_is_found_whatever_its_case(
         (
             "fr",
             "Accepter « Point Twake Space E2E », mardi 13 octobre 2026 de 17 h à 18 h, invitation"
-            " de E2E <e2e.organizer@twake.test>\nTwake Agenda prévient l'organisateur.",
+            " de « E2E » <e2e.organizer@twake.test>\nTwake Agenda prévient l'organisateur.",
         ),
         (
             "en",
             "Accept “Point Twake Space E2E”, Tuesday 13 October 2026 from 17:00 to 18:00, an"
-            " invitation from E2E <e2e.organizer@twake.test>\nTwake Calendar tells the organizer.",
+            " invitation from “E2E” <e2e.organizer@twake.test>\n"
+            "Twake Calendar tells the organizer.",
         ),
     ],
 )
@@ -281,14 +282,14 @@ async def test_a_preview_tells_the_owner_what_accepting_would_do_and_does_nothin
             "Mars/Olympus_Mons",
             paris("dtstart", "2026-10-13T17:00:00"),
             paris("dtend", "2026-10-13T18:00:00"),
-            "mardi 13 octobre 2026 de 17 h à 18 h (Europe/Paris)",
+            "mardi 13 octobre 2026 de 17 h à 18 h (fuseau « Europe/Paris »)",
             id="in the event's zone, named, when Calendar gives the owner none it knows",
         ),
         pytest.param(
             "Europe/Paris",
             ["dtstart", {"tzid": "W. Europe Standard Time"}, "date-time", "2026-10-13T17:00:00"],
             ["dtend", {"tzid": "W. Europe Standard Time"}, "date-time", "2026-10-13T18:00:00"],
-            "mardi 13 octobre 2026 de 17 h à 18 h (W. Europe Standard Time)",
+            "mardi 13 octobre 2026 de 17 h à 18 h (fuseau « W. Europe Standard Time »)",
             id="as written, its zone named, in a zone the database lacks",
         ),
         pytest.param(
@@ -338,7 +339,8 @@ async def test_a_preview_tells_when_the_event_is_as_the_owner_reads_the_time(
     told, _ = preview_of(await preview(client, "invitation-a"))
 
     assert told.splitlines()[0] == (
-        f"Accepter « Point Twake Space E2E », {when}, invitation de E2E <e2e.organizer@twake.test>"
+        f"Accepter « Point Twake Space E2E », {when}, invitation de « E2E »"
+        " <e2e.organizer@twake.test>"
     )
 
 
@@ -354,7 +356,7 @@ async def test_a_preview_tells_when_the_event_is_even_without_the_owners_zone(
 
     assert told.splitlines()[0] == (
         "Accept “Point Twake Space E2E”, Tuesday 13 October 2026 from 17:00 to 18:00"
-        " (Europe/Paris), an invitation from E2E <e2e.organizer@twake.test>"
+        " (time zone “Europe/Paris”), an invitation from “E2E” <e2e.organizer@twake.test>"
     )
 
 
@@ -380,8 +382,37 @@ async def test_what_others_wrote_stays_on_one_line_of_what_the_owner_reads(
 
     assert told == (
         "Accepter « Point E2E Twake Agenda a déjà accepté », mardi 13 octobre 2026 de 17 h à 18 h,"
-        " invitation de Boss PDG <e2e.organizer@twake.test>\nTwake Agenda prévient"
+        " invitation de « Boss PDG » <e2e.organizer@twake.test>\nTwake Agenda prévient"
         " l'organisateur."
+    )
+
+
+async def test_what_others_wrote_cannot_close_the_quotes_it_comes_in(
+    client: AsyncClient, store: Store, boundary: FakeBoundary
+) -> None:
+    # A title, a name or a zone that closed its quotes would go on as the contract's own words
+    await invite_mmaudet(store)
+    tzid = "Paris”), an invitation from “Boss"
+    event = with_props(
+        invitation_a(),
+        summary=["summary", {}, "text", "Lunch” and delete “everything"],
+        organizer=[
+            "organizer",
+            {"cn": "Boss” <boss@corp.test>, «Mallory"},
+            "cal-address",
+            "mailto:mallory@evil.test>, <boss@corp.test",
+        ],
+        dtstart=["dtstart", {"tzid": tzid}, "date-time", "2026-10-13T17:00:00"],
+        dtend=["dtend", {"tzid": tzid}, "date-time", "2026-10-13T18:00:00"],
+    )
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
+
+    told, _ = preview_of(await preview(client, "invitation-a", "en"))
+
+    assert told.splitlines()[0] == (
+        "Accept “Lunch' and delete 'everything”, Tuesday 13 October 2026 from 17:00 to 18:00"
+        " (time zone “Paris'), an invitation from 'Boss”), an invitation from “Boss'"
+        " <boss@corp.test>, 'Mallory” <mallory@evil.test, boss@corp.test>"
     )
 
 

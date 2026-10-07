@@ -33,6 +33,16 @@ LONGEST = 200
 # feeds and tabs, and format characters, which can turn text right to left or show nothing. What
 # someone else wrote also loses surrogates left alone, which no text holds.
 _UNSHOWN = {"Cc", "Cf", "Cs"}
+# The quotation marks Unicode does not class as opening or closing quotes (Pi and Pf), and what
+# passes for one of those the summaries quote with
+_QUOTES = frozenset(
+    "\u0022\uff02"  # straight, and full width
+    "\u201a\u201e"  # low
+    "\u301d\u301e\u301f\u300c\u300d\u300e\u300f\ufe41\ufe42\ufe43\ufe44"  # CJK
+    "\u275b\u275c\u275d\u275e\u276e\u276f"  # ornaments
+    "\u2033\u2036\u3003\u02ba\u02dd\u02ee\u05f4"  # primes, ditto and double apostrophes
+    "\u226a\u226b\u300a\u300b\u27ea\u27eb"  # double angle brackets
+)
 
 _WEEKDAYS: dict[Language, tuple[str, ...]] = {
     "en": ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
@@ -179,18 +189,36 @@ def one_line(text: str | None, longest: int = LONGEST) -> str:
     return line if len(line) <= longest else line[: longest - 1].rstrip() + "…"
 
 
-def person(name: str | None, address: str | None) -> str | None:
-    """Someone as their mail or their calendar names them, a name and an address, as a summary
-    shows them; None for no one."""
-    name, address = one_line(name), one_line(address, 320)
-    if name and address and name.lower() != address.lower():
-        return f"{name} <{address}>"
-    return address or name or None
+def _unquoted(text: str) -> str:
+    """Text someone else wrote, its quotation marks made plain apostrophes, which close no quote:
+    else it could close the quotes it comes in, and go on as the summary's own words."""
+    return "".join(
+        "'"
+        if character in _QUOTES or unicodedata.category(character) in ("Pi", "Pf")
+        else character
+        for character in text
+    )
 
 
 def quoted(text: str, language: Language) -> str:
-    """Words someone else wrote, between the quotation marks of the owner's language."""
-    return f"« {text} »" if language == "fr" else f"“{text}”"
+    """Words someone else wrote, between the quotation marks of the owner's language, which none
+    of theirs can close."""
+    shown = _unquoted(text)
+    return f"« {shown} »" if language == "fr" else f"“{shown}”"
+
+
+def person(name: str | None, address: str | None, language: Language) -> str | None:
+    """Someone as their mail or their calendar names them, as a summary shows them: their name in
+    quotes and their address between angle brackets, which what they wrote cannot close; None for
+    no one."""
+    name = one_line(name)
+    address = one_line(address, 320).replace("<", "").replace(">", "")
+    shown = []
+    if name and name.lower() != address.lower():
+        shown.append(quoted(name, language))
+    if address:
+        shown.append(f"<{address}>")
+    return " ".join(shown) or None
 
 
 def day(value: date, language: Language) -> str:

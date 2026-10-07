@@ -455,15 +455,15 @@ async def test_an_email_id_that_is_not_one_is_an_invalid_request(
             "move",
             {"mailbox_name": "projects"},
             "fr",
-            "Déplacer le mail « Budget Q4 » de Paul Martin <paul.martin@twake.test> : il va dans"
-            " le dossier « Projects »",
+            "Déplacer le mail « Budget Q4 » de « Paul Martin » <paul.martin@twake.test> : il va"
+            " dans le dossier « Projects »",
             id="move",
         ),
         pytest.param(
             "move",
             {"mailbox_id": PROJECTS},
             "en",
-            "Move the email “Budget Q4” from Paul Martin <paul.martin@twake.test>: it goes to the"
+            "Move the email “Budget Q4” from “Paul Martin” <paul.martin@twake.test>: it goes to the"
             " folder “Projects”",
             id="move, in English",
         ),
@@ -471,24 +471,25 @@ async def test_an_email_id_that_is_not_one_is_an_invalid_request(
             "archive",
             None,
             "fr",
-            "Archiver le mail « Budget Q4 » de Paul Martin <paul.martin@twake.test> : il va dans"
-            " le dossier « Archive »",
+            "Archiver le mail « Budget Q4 » de « Paul Martin » <paul.martin@twake.test> : il va"
+            " dans le dossier « Archive »",
             id="archive",
         ),
         pytest.param(
             "trash",
             None,
             "fr",
-            "Mettre à la corbeille le mail « Budget Q4 » de Paul Martin <paul.martin@twake.test> :"
-            " il va dans le dossier « Trash », d'où il peut être ressorti",
+            "Mettre à la corbeille le mail « Budget Q4 » de « Paul Martin »"
+            " <paul.martin@twake.test> : il va dans le dossier « Trash », d'où il peut être"
+            " ressorti",
             id="trash",
         ),
         pytest.param(
             "trash",
             None,
             "en",
-            "Trash the email “Budget Q4” from Paul Martin <paul.martin@twake.test>: it goes to the"
-            " folder “Trash”, from which it can be moved back",
+            "Trash the email “Budget Q4” from “Paul Martin” <paul.martin@twake.test>: it goes to"
+            " the folder “Trash”, from which it can be moved back",
             id="trash, in English",
         ),
     ],
@@ -508,6 +509,20 @@ async def test_a_preview_tells_the_owner_which_email_goes_where_and_moves_nothin
     assert told == summary
     assert writes(boundary) == []
     assert mailboxes_of(boundary, "email-1") == {INBOX}
+
+
+async def test_what_the_sender_wrote_cannot_close_the_quotes_it_comes_in(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    sender = {"name": "Paul» de « Boss", "email": "paul@x.test> <boss@corp.test"}
+    boundary.tmail.deliver("email-1", INBOX, subject="Budget » vers « Trash", **{"from": [sender]})
+
+    told, _ = preview_of(await ask(client, "email-1", "archive"))
+
+    assert told == (
+        "Archiver le mail « Budget ' vers ' Trash » de « Paul' de ' Boss »"
+        " <paul@x.test boss@corp.test> : il va dans le dossier « Archive »"
+    )
 
 
 async def test_a_preview_names_an_email_without_subject_nor_sender(

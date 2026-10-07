@@ -46,6 +46,7 @@ class _Words:
     all_day: str
     days: str
     invited_by: str
+    zoned: str
     told: str
 
 
@@ -59,6 +60,7 @@ _WORDS: dict[Language, _Words] = {
         all_day="{day}, toute la journée",
         days="du {first} au {last}",
         invited_by="invitation de {organizer}",
+        zoned="{when} (fuseau {zone})",
         told="Twake Agenda prévient l'organisateur.",
     ),
     "en": _Words(
@@ -70,6 +72,7 @@ _WORDS: dict[Language, _Words] = {
         all_day="{day}, all day",
         days="from {first} to {last}",
         invited_by="an invitation from {organizer}",
+        zoned="{when} (time zone {zone})",
         told="Twake Calendar tells the organizer.",
     ),
 }
@@ -120,7 +123,8 @@ def _when(event: CalendarEvent, zone: ZoneInfo | None, language: Language) -> st
             last=day(ending.date(), language),
             end=time_of_day(ending.time(), language),
         )
-    return f"{when} ({one_line(named)})" if named else when
+    # The zone the event names, which its organizer's calendar wrote
+    return words.zoned.format(when=when, zone=quoted(one_line(named), language)) if named else when
 
 
 def _summary(event: CalendarEvent, zone: ZoneInfo | None, language: Language) -> str:
@@ -132,7 +136,7 @@ def _summary(event: CalendarEvent, zone: ZoneInfo | None, language: Language) ->
     when = _when(event, zone, language)
     if when is not None:
         parts.append(when)
-    organizer = person(*event.organizer)
+    organizer = person(*event.organizer, language)
     if organizer is not None:
         parts.append(words.invited_by.format(organizer=organizer))
     return ", ".join(parts) + "\n" + words.told
