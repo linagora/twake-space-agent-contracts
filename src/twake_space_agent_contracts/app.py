@@ -65,9 +65,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        # Without an application that reads the events database, the service never connects to it
-        if any(application.events_database for application in published):
-            await pool.open()
+        await pool.open()
         try:
             yield
         finally:

@@ -72,9 +72,6 @@ class Application:
     """What writing covers there, in 200 characters at most; None when no contract writes."""
     routers: Callable[[Context], Sequence[APIRouter]]
     """The routers of its contracts, one per contract."""
-    events_database: bool = False
-    """Whether its contracts read the events database, which the service connects to only while
-    it publishes an application that does."""
 
     def described(self) -> Description:
         """Its entry in x-twake-domains, as the harness reads it."""
@@ -180,7 +177,6 @@ APPLICATIONS = (
         ),
         write=None,
         routers=lambda context: [events.router(context.pool, context.caller)],
-        events_database=True,
     ),
     Application(
         domain="calendar",
@@ -196,8 +192,6 @@ APPLICATIONS = (
             " ajouter des événements à ton agenda, sans y inviter personne",
         ),
         routers=_calendar,
-        # An invitation is accepted once found among the events stored for the user
-        events_database=True,
     ),
     Application(
         domain="chat",

@@ -1,32 +1,18 @@
 """The applications the service publishes, as the operator sets them in PUBLISHED_APPS."""
 
-from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from typing import Any
 
-import httpx
-import psycopg
 import pytest
 from httpx import AsyncClient
-from psycopg.conninfo import make_conninfo
 
 from tests.conftest import AS_MMAUDET, Serve, operations_of, serving
-from tests.fakes import (
-    CHAT_GATEWAY_KEY,
-    ISSUER,
-    SETTINGS,
-    FakeBoundary,
-    FakeClock,
-    as_drive_owner,
-    email_of,
-)
-from twake_space_agent_contracts.app import create_app, create_app_from_env
+from tests.fakes import CHAT_GATEWAY_KEY, ISSUER, SETTINGS, FakeBoundary, as_drive_owner, email_of
+from twake_space_agent_contracts.app import create_app_from_env
 from twake_space_agent_contracts.settings import Settings
 
 PERIOD = {"start": "2026-10-13T17:00:00+02:00", "end": "2026-10-13T18:00:00+02:00"}
 EVENTS_PATHS = {"/contracts/v1/events", "/contracts/v1/events/{event_id}"}
-# The name the service under test gives its connections to the events database
-SERVICE_CONNECTIONS = "agent-contracts-under-test"
 CHAT_SETTINGS = {
     "CHAT_URL": "https://gateway.test/synapse/",
     "CHAT_GATEWAY_KEY": CHAT_GATEWAY_KEY,
@@ -51,19 +37,6 @@ async def document_of(client: AsyncClient) -> dict[str, Any]:
 
 def operation_ids(document: dict[str, Any]) -> set[str]:
     return {operation["operationId"] for _, _, operation in operations_of(document)}
-
-
-async def connections_named(database_url: str, application_name: str) -> int:
-    """How many connections the database holds that give that application name."""
-    async with await psycopg.AsyncConnection.connect(database_url) as connection:
-        cursor = await connection.execute(
-            "SELECT count(*) FROM pg_stat_activity WHERE application_name = %s",
-            (application_name,),
-        )
-        row = await cursor.fetchone()
-    assert row is not None
-    count: int = row[0]
-    return count
 
 
 @pytest.fixture
@@ -140,34 +113,6 @@ async def test_events_taken_out_is_gone_until_it_is_put_back(serve: Serve) -> No
     assert set(document["paths"]) >= EVENTS_PATHS
     assert "events" in document["x-twake-domains"]
     assert listed.status_code == 200, listed.text
-
-
-async def test_the_events_database_is_reached_only_while_an_application_reading_it_is_published(
-    database_url: str, boundary: FakeBoundary, clock: FakeClock
-) -> None:
-    # events and calendar read it: a service that publishes neither has no use for it
-    named = make_conninfo(database_url, application_name=SERVICE_CONNECTIONS)
-
-    def start(*domains: str) -> AbstractAsyncContextManager[AsyncClient]:
-        settings = replace(SETTINGS, published_apps=frozenset(domains))
-        http = httpx.AsyncClient(transport=httpx.MockTransport(boundary.handle))
-        return serving(create_app(named, settings, http=http, clock=clock))
-
-    async with start("contacts") as client:
-        await document_of(client)
-        unread = await connections_named(database_url, SERVICE_CONNECTIONS)
-
-    async with start("calendar") as client:
-        accept = await client.post(
-            "/contracts/v1/calendar/invitations/evt-1/accept", headers=AS_MMAUDET
-        )
-        read = await connections_named(database_url, SERVICE_CONNECTIONS)
-
-    assert unread == 0
-    # Without events, Calendar still looks the invitation up among the stored events
-    assert accept.status_code == 404, accept.text
-    assert accept.json()["code"] == "invitation_not_found"
-    assert read > 0
 
 
 @pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])
