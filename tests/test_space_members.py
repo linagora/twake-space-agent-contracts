@@ -6,7 +6,7 @@ from typing import Any
 from httpx import AsyncClient, Response
 
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
-from tests.fakes import FakeBoundary, SpaceRoom, space_person
+from tests.fakes import FakeBoundary, SpaceMembership, SpaceRoom, space_person
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
@@ -213,7 +213,7 @@ async def test_the_people_its_owner_allowed_are_added(
     response = await add(client, room, body, allowed_after(digest))
 
     assert response.status_code == 200, response.text
-    assert room.members[JEANNE.user_id] == (JEANNE, "editor")
+    assert room.members[JEANNE.user_id] == SpaceMembership(JEANNE, "editor")
 
 
 async def test_people_whose_membership_changed_since_the_preview_are_not_added(
@@ -223,7 +223,7 @@ async def test_people_whose_membership_changed_since_the_preview_are_not_added(
     body = {"usernames": ["jmartin", "pmartin"], "role": "editor"}
     _, digest = preview_of(await add(client, room, body, asking_preview("en")))
     # Another admin adds one of them before the owner says yes
-    room.members[PAUL.user_id] = (PAUL, "editor")
+    room.members[PAUL.user_id] = SpaceMembership(PAUL, "editor")
 
     response = await add(client, room, body, allowed_after(digest))
 
@@ -260,7 +260,7 @@ async def test_an_admin_changes_the_role_of_a_member(
     assert boundary.space.writes == [
         ("PATCH", f"/spaces/{room.id}/members/{BOB.user_id}", {"role": "editor"})
     ]
-    assert room.members[BOB.user_id] == (BOB, "editor")
+    assert room.members[BOB.user_id] == SpaceMembership(BOB, "editor")
 
 
 async def test_a_role_is_changed_by_an_admin_for_a_member_only(
@@ -268,7 +268,7 @@ async def test_a_role_is_changed_by_an_admin_for_a_member_only(
 ) -> None:
     room = design(boundary)
     outsider = await change(client, room, JEANNE.user_id, {"role": "editor"})
-    room.members[MMAUDET.user_id] = (MMAUDET, "editor")
+    room.members[MMAUDET.user_id] = SpaceMembership(MMAUDET, "editor")
     not_admin = await change(client, room, BOB.user_id, {"role": "editor"})
 
     assert (outsider.status_code, outsider.json()["code"]) == (404, "member_not_found")
@@ -293,7 +293,7 @@ async def test_the_last_admin_keeps_their_role(client: AsyncClient, boundary: Fa
 
     assert response.status_code == 409
     assert response.json()["code"] == "last_admin"
-    assert room.members[MMAUDET.user_id] == (MMAUDET, "admin")
+    assert room.members[MMAUDET.user_id] == SpaceMembership(MMAUDET, "admin")
 
 
 async def test_a_member_space_no_longer_finds_is_not_found(
@@ -340,15 +340,15 @@ async def test_a_role_changed_since_the_preview_is_left_as_it_is(
     _, digest = preview_of(
         await change(client, room, BOB.user_id, {"role": "admin"}, asking_preview("en"))
     )
-    room.members[BOB.user_id] = (BOB, "editor")
+    room.members[BOB.user_id] = SpaceMembership(BOB, "editor")
 
     changed = await change(client, room, BOB.user_id, {"role": "admin"}, allowed_after(digest))
-    room.members[BOB.user_id] = (BOB, "viewer")
+    room.members[BOB.user_id] = SpaceMembership(BOB, "viewer")
     allowed = await change(client, room, BOB.user_id, {"role": "admin"}, allowed_after(digest))
 
     assert (changed.status_code, changed.json()["code"]) == (409, "changed_since_preview")
     assert allowed.status_code == 200, allowed.text
-    assert room.members[BOB.user_id] == (BOB, "admin")
+    assert room.members[BOB.user_id] == SpaceMembership(BOB, "admin")
 
 
 async def remove(
@@ -377,7 +377,7 @@ async def test_a_member_is_removed_by_an_admin_and_the_last_admin_stays(
     room = boundary.space.space("Design", {MMAUDET: "admin", BOB: "viewer"})
     outsider = await remove(client, room, JEANNE.user_id)
     last = await remove(client, room, MMAUDET.user_id)
-    room.members[MMAUDET.user_id] = (MMAUDET, "editor")
+    room.members[MMAUDET.user_id] = SpaceMembership(MMAUDET, "editor")
     not_admin = await remove(client, room, BOB.user_id)
 
     assert (outsider.status_code, outsider.json()["code"]) == (404, "member_not_found")
@@ -414,13 +414,13 @@ async def test_a_member_changed_since_the_preview_stays(
 ) -> None:
     room = design(boundary)
     _, digest = preview_of(await remove(client, room, BOB.user_id, asking_preview("en")))
-    room.members[BOB.user_id] = (BOB, "admin")
+    room.members[BOB.user_id] = SpaceMembership(BOB, "admin")
 
     response = await remove(client, room, BOB.user_id, allowed_after(digest))
 
     assert response.status_code == 409
     assert response.json()["code"] == "changed_since_preview"
-    assert room.members[BOB.user_id] == (BOB, "admin")
+    assert room.members[BOB.user_id] == SpaceMembership(BOB, "admin")
 
 
 async def test_the_preview_of_twenty_people_of_long_names_stays_within_what_the_harness_shows(

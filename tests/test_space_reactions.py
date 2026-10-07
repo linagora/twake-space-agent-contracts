@@ -4,8 +4,7 @@ one of their spaces, with one of the reactions Twake Space offers, and takes a r
 from httpx import AsyncClient, Response
 
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
-from tests.fakes import FakeBoundary, SpaceCard, SpacePost, SpaceRoom, space_person
-from tests.fakes import space_id as space_id_of
+from tests.fakes import FakeBoundary, SpaceCard, SpacePost, SpaceRoom, space_person, space_uuid
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
@@ -87,7 +86,7 @@ async def test_an_item_outside_the_feed_takes_no_reaction(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
     room = design(boundary)
-    gone = SpacePost(space_id_of("gone"), room.id, ALICE.user_id, "Gone", "2026-10-06T08:30:00Z")
+    gone = SpacePost(space_uuid("gone"), room.id, ALICE.user_id, "Gone", "2026-10-06T08:30:00Z")
 
     response = await react(client, gone, THUMBS_UP)
 

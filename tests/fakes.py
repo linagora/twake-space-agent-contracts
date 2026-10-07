@@ -2525,7 +2525,7 @@ DIRECTORY_PAGE = 20
 """How many people a page of the organization's directory holds."""
 
 
-def space_id(name: str) -> str:
+def space_uuid(name: str) -> str:
     """The UUID Twake Space gives a person, a space or an item of a feed, the same for the same
     name."""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"space:{name}"))
@@ -2544,7 +2544,16 @@ class SpacePerson:
 
 def space_person(uid: str, display_name: str | None = None) -> SpacePerson:
     """The person of that uid, by the email of their token."""
-    return SpacePerson(space_id(email_of(uid)), uid, email_of(uid), display_name)
+    return SpacePerson(space_uuid(email_of(uid)), uid, email_of(uid), display_name)
+
+
+@dataclass(frozen=True)
+class SpaceMembership:
+    """A person's membership of a space: who they are, and their role there, viewer, editor or
+    admin."""
+
+    person: SpacePerson
+    role: str
 
 
 @dataclass
@@ -2553,8 +2562,8 @@ class SpaceRoom:
 
     id: str
     name: str
-    members: dict[str, tuple[SpacePerson, str]]
-    """Its members by user id, each with their role: viewer, editor or admin."""
+    members: dict[str, SpaceMembership]
+    """Its members by user id."""
     organization: str = SPACE_ORGANIZATION
     description: str = ""
     created_at: str = "2026-10-01T08:00:00.000Z"
@@ -2670,7 +2679,7 @@ class FakeSpace:
             else actor
         )
         card = SpaceCard(
-            space_id(f"card {room.id} {object['id']}"),
+            space_uuid(f"card {room.id} {object['id']}"),
             room.id,
             category,
             type,
@@ -2689,7 +2698,7 @@ class FakeSpace:
     ) -> SpacePost:
         """Arranges a post in the feed of the space, by its author, None once deleted."""
         post = SpacePost(
-            space_id(f"post {room.id} {time} {body}"),
+            space_uuid(f"post {room.id} {time} {body}"),
             room.id,
             author.user_id if author else None,
             body,
@@ -2712,9 +2721,9 @@ class FakeSpace:
         """Arranges a space of that name, with its members and their roles, who are people of its
         organization."""
         room = SpaceRoom(
-            space_id(name),
+            space_uuid(name),
             name,
-            {person.user_id: (person, role) for person, role in members.items()},
+            {person.user_id: SpaceMembership(person, role) for person, role in members.items()},
             **more,
         )
         self.spaces[room.id] = room
@@ -2746,7 +2755,7 @@ class FakeSpace:
         if self.unexpected is not None:
             return httpx.Response(200, json=self.unexpected)
         self.requests.append((request.method, request.url.path))
-        caller = (space_id(subject), organization)
+        caller = (space_uuid(subject), organization)
         path = request.url.path
         if request.method != "GET":
             self.writes.append((request.method, path, json.loads(request.content or b"null")))
@@ -2802,20 +2811,20 @@ class FakeSpace:
             return _space_refusal(400, "invalid_request")
         if member_id is not None and not _is_uuid(member_id):
             return _space_refusal(400, "invalid_request")
-        if room.members[user_id][1] != "admin":
+        if room.members[user_id].role != "admin":
             return _space_refusal(403, "not_space_admin")
         if method == "POST":
             return self._add_members(room, body)
         if member_id not in room.members:
             return _space_refusal(404, "not_found")
-        person, former = room.members[member_id]
-        admins = [key for key, (_, held) in room.members.items() if held == "admin"]
+        person, former = room.members[member_id].person, room.members[member_id].role
+        admins = [key for key, held in room.members.items() if held.role == "admin"]
         if former == "admin" and admins == [member_id] and role != "admin":
             return _space_refusal(409, "LAST_ADMIN")
         if method == "DELETE":
             del room.members[member_id]
         elif isinstance(role, str):
-            room.members[member_id] = (person, role)
+            room.members[member_id] = SpaceMembership(person, role)
         return httpx.Response(204)
 
     def _add_members(self, room: SpaceRoom, body: Any) -> httpx.Response:
@@ -2832,21 +2841,22 @@ class FakeSpace:
         if len(people) != len(usernames):
             return _space_refusal(404, "USER_NOT_FOUND")
         role = body["role"]
-        if any(room.members.get(person.user_id, (person, role))[1] != role for person in people):
+        held = [room.members[person.user_id] for person in people if person.user_id in room.members]
+        if any(membership.role != role for membership in held):
             return _space_refusal(409, "MEMBER_EXISTS")
         for person in people:
-            room.members[person.user_id] = (person, role)
+            room.members[person.user_id] = SpaceMembership(person, role)
         return httpx.Response(204)
 
     def _post(self, room: SpaceRoom, user_id: str, body: Any) -> httpx.Response:
         """A new post of the person, an editor or an admin of the space."""
-        if room.members[user_id][1] == "viewer":
+        if room.members[user_id].role == "viewer":
             return _space_refusal(403, "cannot_post")
         text = _post_body(body)
         if text is None:
             return _space_refusal(400, "invalid_request")
         post = SpacePost(
-            space_id(f"post {room.id} {len(self.posts)}"), room.id, user_id, text, self.now
+            space_uuid(f"post {room.id} {len(self.posts)}"), room.id, user_id, text, self.now
         )
         self.posts[post.id] = post
         return httpx.Response(201, json=self._item(room, post.id))
@@ -2935,7 +2945,7 @@ class FakeSpace:
             {
                 "id": room.id,
                 "name": room.name,
-                "role": room.members[user_id][1],
+                "role": room.members[user_id].role,
                 "color": None,
                 "description": room.description,
                 "members": [
@@ -2944,7 +2954,7 @@ class FakeSpace:
                         "username": person.username,
                         "displayName": person.display_name,
                     }
-                    for person, _ in _by_username(room)
+                    for person in (membership.person for membership in _by_username(room))
                 ],
             }
             for room in sorted(self.spaces.values(), key=lambda room: room.name)
@@ -3030,7 +3040,7 @@ class FakeSpace:
         if not isinstance(actor, dict) or actor.get("type") != "user":
             return actor
         member = room.members.get(actor.get("id") or "")
-        name = (member[0].display_name or member[0].username) if member else None
+        name = (member.person.display_name or member.person.username) if member else None
         return {"type": "user", "id": actor.get("id"), "name": name}
 
     def _space(self, room: SpaceRoom, user_id: str) -> dict[str, Any]:
@@ -3042,11 +3052,11 @@ class FakeSpace:
             "color": None,
             "description": room.description,
             "apps": room.apps,
-            "role": room.members[user_id][1],
+            "role": room.members[user_id].role,
             "chat": True,
             "mail": True,
             "homeserverUrl": "https://matrix.twake.test",
-            "members": [_member(person, role) for person, role in _by_username(room)],
+            "members": [_member(membership) for membership in _by_username(room)],
             "groups": [
                 {"id": group_id, "name": name, "role": role}
                 for group_id, name, role in sorted(room.groups, key=lambda group: group[1])
@@ -3090,20 +3100,21 @@ def _space_refusal(status: int, error: str) -> httpx.Response:
     return httpx.Response(status, json={"error": error})
 
 
-def _member(person: SpacePerson, role: str) -> dict[str, Any]:
+def _member(membership: SpaceMembership) -> dict[str, Any]:
     """A member of a space, as GET /spaces/:id gives them."""
+    person = membership.person
     return {
         "id": person.user_id,
         "username": person.username,
         "email": person.email,
         "displayName": person.display_name,
-        "role": role,
+        "role": membership.role,
     }
 
 
-def _by_username(room: SpaceRoom) -> list[tuple[SpacePerson, str]]:
-    """The members of a space and their roles, by username, as Twake Space sorts them."""
-    return sorted(room.members.values(), key=lambda member: member[0].username)
+def _by_username(room: SpaceRoom) -> list[SpaceMembership]:
+    """The members of a space, by username, as Twake Space sorts them."""
+    return sorted(room.members.values(), key=lambda membership: membership.person.username)
 
 
 class FakeBoundary:

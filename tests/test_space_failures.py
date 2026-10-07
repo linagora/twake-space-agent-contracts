@@ -7,12 +7,12 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET
-from tests.fakes import FakeBoundary, SpacePost, space_id, space_person
+from tests.fakes import FakeBoundary, SpacePost, space_person, space_uuid
 
 MMAUDET = space_person("mmaudet")
-SPACE = f"/contracts/v1/space/spaces/{space_id('Design')}"
-ITEM = f"{SPACE}/feed/items/{space_id('Hello')}"
-POST = f"{SPACE}/feed/posts/{space_id('Hello')}"
+SPACE = f"/contracts/v1/space/spaces/{space_uuid('Design')}"
+ITEM = f"{SPACE}/feed/items/{space_uuid('Hello')}"
+POST = f"{SPACE}/feed/posts/{space_uuid('Hello')}"
 BOB = space_person("bob")
 MEMBER = f"{SPACE}/members/{BOB.user_id}"
 THUMBS_UP = {"key": "\N{THUMBS UP SIGN}"}
@@ -51,9 +51,9 @@ def design(boundary: FakeBoundary) -> None:
 
 def hello(boundary: FakeBoundary) -> SpacePost:
     """The post ITEM names, in the feed of the space SPACE names."""
-    room = boundary.space.spaces[space_id("Design")]
+    room = boundary.space.spaces[space_uuid("Design")]
     post = boundary.space.post(room, MMAUDET, "Hello", time="2026-10-06T08:30:00.000Z")
-    post.id = space_id("Hello")
+    post.id = space_uuid("Hello")
     boundary.space.posts = {post.id: post}
     return post
 

@@ -6,8 +6,15 @@ from typing import Any
 from httpx import AsyncClient, Response
 
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
-from tests.fakes import FakeBoundary, SpacePerson, SpacePost, SpaceRoom, space_person
-from tests.fakes import space_id as space_id_of
+from tests.fakes import (
+    FakeBoundary,
+    SpaceMembership,
+    SpacePerson,
+    SpacePost,
+    SpaceRoom,
+    space_person,
+    space_uuid,
+)
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
@@ -136,7 +143,7 @@ async def test_a_post_to_members_changed_since_the_preview_is_not_posted(
     _, digest = preview_of(await post(client, room, {"text": "Hello"}, asking_preview("en")))
     # An admin adds someone before the owner says yes: more people would read it
     carol = space_person("carol")
-    room.members[carol.user_id] = (carol, "viewer")
+    room.members[carol.user_id] = SpaceMembership(carol, "viewer")
 
     response = await post(client, room, {"text": "Hello"}, allowed_after(digest))
 
@@ -215,7 +222,7 @@ async def test_a_post_outside_the_feed_is_not_found(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
     room = design(boundary)
-    gone = SpacePost(space_id_of("gone"), room.id, MMAUDET.user_id, "", "2026-10-05T09:00:00Z")
+    gone = SpacePost(space_uuid("gone"), room.id, MMAUDET.user_id, "", "2026-10-05T09:00:00Z")
 
     response = await edit(client, gone, {"text": "Bye"})
 

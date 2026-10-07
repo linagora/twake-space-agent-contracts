@@ -5,8 +5,7 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET
-from tests.fakes import FakeBoundary, SpacePerson, space_person
-from tests.fakes import space_id as space_id_of
+from tests.fakes import FakeBoundary, SpacePerson, space_person, space_uuid
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
@@ -158,7 +157,7 @@ async def test_a_space_the_user_is_not_a_member_of_answers_like_an_unknown_one(
 
     responses = [
         await client.get(f"/contracts/v1/space/spaces/{space_id}", headers=AS_MMAUDET)
-        for space_id in (finance.id, space_id_of("unknown"))
+        for space_id in (finance.id, space_uuid("unknown"))
     ]
 
     assert [response.status_code for response in responses] == [404, 404]
