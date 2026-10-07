@@ -231,3 +231,20 @@ async def test_a_task_moved_since_the_preview_is_not_completed(
     assert response.status_code == 409
     assert response.json()["code"] == "changed_since_preview"
     assert boundary.tasks.writes == []
+
+
+async def test_subtasks_the_board_lists_otherwise_since_the_preview_change_nothing(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    board = website(boundary)
+    task = boundary.tasks.task(board, "Fix the login page", section_id=TO_DO)
+    boundary.tasks.task(board, "Reproduce it", parent_id=task.id)
+    boundary.tasks.task(board, "Write a test", parent_id=task.id)
+    _, digest = preview_of(await complete(client, task, asking_preview("fr")))
+    # Tasks lists the same tasks in another order
+    boundary.tasks.tasks = dict(reversed(boundary.tasks.tasks.items()))
+
+    response = await complete(client, task, allowed_after(digest))
+
+    assert response.status_code == 200, response.text
+    assert (task.state, task.section_id) == ("completed", DONE)

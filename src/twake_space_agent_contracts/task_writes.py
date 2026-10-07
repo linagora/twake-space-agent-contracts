@@ -470,7 +470,8 @@ def _changed(
 
 
 def _open_subtasks(board: BoardContent, task_id: str) -> list[str]:
-    """The ids of the open tasks under that one, at any depth, as the board shows them."""
+    """The ids of the open tasks under that one, at any depth, as the board shows them: sorted, so
+    that the same subtasks, listed in another order, make the same digest."""
     children: dict[str, list[str]] = {}
     for key, item in board.tasks.items():
         parent = item.get("parentId") if isinstance(item, dict) else None
@@ -483,11 +484,11 @@ def _open_subtasks(board: BoardContent, task_id: str) -> list[str]:
             if key not in under and key != task_id:
                 under.append(key)
                 parents.append(key)
-    return [
+    return sorted(
         key
         for key in under
         if not board.tasks[key].get("completedAt") and not board.tasks[key].get("canceledAt")
-    ]
+    )
 
 
 def _completing(

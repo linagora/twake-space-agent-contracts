@@ -102,9 +102,11 @@ def changed_since_preview() -> Problem:
 
 
 def digest_of(*acted_on: Any) -> str:
-    """The digest of what a call acts on, given as JSON values: the SHA-256 of their JSON, in a
-    form the harness keeps and sends back as it is."""
-    encoded = json.dumps(acted_on, sort_keys=True, separators=(",", ":"), default=str)
+    """The digest of what a call acts on, given as JSON values, the same on every replica: the
+    SHA-256 of their JSON, its keys sorted, in a form the harness keeps and sends back as it is.
+    A value JSON does not hold is refused with a TypeError, rather than written in a form one
+    replica alone may give it, as a set in the order its hashes left it."""
+    encoded = json.dumps(acted_on, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
 
 

@@ -2,8 +2,10 @@
 
 import json
 
+import pytest
+
 from tests.conftest import HARNESS_LIMIT, harness_size
-from twake_space_agent_contracts.previews import Preview
+from twake_space_agent_contracts.previews import Preview, digest_of
 
 
 def test_no_summary_takes_more_than_the_harness_shows() -> None:
@@ -19,3 +21,10 @@ def test_no_summary_takes_more_than_the_harness_shows() -> None:
     assert shown == ("<&>" * 4_000)[: len(shown)]
     assert len(shown) > 2_000
     assert cut == f"(cut here: {12_000 - len(shown):,} more characters are not shown)"
+
+
+def test_a_digest_takes_no_value_without_one_order() -> None:
+    # Two replicas must find the same digest for the same thing: a set has no order they share,
+    # and is refused rather than written in whichever its replica holds
+    with pytest.raises(TypeError):
+        digest_of({"WEB-1", "WEB-2"})
