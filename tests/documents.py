@@ -14,12 +14,14 @@ from httpx import AsyncClient, Response
 from openpyxl import Workbook
 from pptx import Presentation as new_presentation
 from pptx.presentation import Presentation
+from pypdf import PdfReader, PdfWriter
 
 from tests.fakes import as_drive_owner
 
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+PDF = "application/pdf"
 
 # The prefixes the WordprocessingML a test adds may use
 WORD_NAMESPACES = {
@@ -119,6 +121,57 @@ def excel_workbook(rows: str, strings: list[str], *, date1904: bool = False) -> 
     with zipfile.ZipFile(written, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, part in parts.items():
             archive.writestr(name, '<?xml version="1.0" encoding="UTF-8"?>' + part)
+    return written.getvalue()
+
+
+def pdf(*pages: str | None) -> bytes:
+    """A PDF of these pages, each showing its text in Helvetica, a line under the other, or None
+    for a page that shows no text, as a scan's image does, here a grey rectangle. Its objects:
+    the catalog, the page tree, the font, then each page and its content stream."""
+    kids = " ".join(f"{4 + 2 * number} 0 R" for number in range(len(pages)))
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]
+    for number, text in enumerate(pages):
+        if text is None:
+            drawn = b"0.5 g 72 72 468 648 re f"
+        else:
+            shown = (_pdf_string(line) + b" Tj T*" for line in text.split("\n"))
+            drawn = b"BT /F1 12 Tf 72 720 Td 14 TL " + b" ".join(shown) + b" ET"
+        objects.append(
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 3 0 R >> >> /Contents "
+            + f"{5 + 2 * number} 0 R >>".encode()
+        )
+        objects.append(f"<< /Length {len(drawn)} >>\nstream\n".encode() + drawn + b"\nendstream")
+    written = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(written))
+        written += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
+    table = len(written)
+    written += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    written += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets)
+    written += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n".encode()
+    written += f"startxref\n{table}\n%%EOF\n".encode()
+    return bytes(written)
+
+
+def _pdf_string(text: str) -> bytes:
+    """Text as a PDF string between parentheses, in the font's encoding, close to Latin-1."""
+    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    return b"(" + escaped.encode("latin-1") + b")"
+
+
+def encrypted_pdf(content: bytes, *, user_password: str, owner_password: str) -> bytes:
+    """The PDF encrypted with AES-256 as pypdf encrypts it: opened with the user's password,
+    which may be empty, its owner's password then only limiting what readers may do."""
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(content)))
+    writer.encrypt(user_password=user_password, owner_password=owner_password, algorithm="AES-256")
+    written = io.BytesIO()
+    writer.write(written)
     return written.getvalue()
 
 

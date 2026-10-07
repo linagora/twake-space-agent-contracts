@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from twake_space_agent_contracts.documents import (
     KINDS,
     MOST_COLUMNS,
+    MOST_PAGES,
     MOST_ROWS,
     Kind,
     Reader,
@@ -87,6 +88,11 @@ def refusal(reason: Reason) -> Problem:
         case "unreadable":
             return not_extractable(
                 "The file cannot be read as the document its type says: it may be damaged."
+            )
+        case "no_text":
+            return not_extractable(
+                "The PDF holds no text: its pages may be images, as a scan's are, which the "
+                "service does not read."
             )
         case "too_long":
             return not_extractable("Reading the document took too long: no text came of it.")
@@ -167,9 +173,12 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
             "number and name, such as # Sheet 1: Budget, then a line for each row that holds "
             "values, its values parted by tabs: the values computed, never the formulas, and "
             f"only the first {MOST_ROWS} rows and {MOST_COLUMNS} columns of a sheet, as a line "
-            "between brackets then says. Other files, such as PDFs and notes, and documents over "
-            f"20 MiB cannot be read this way. At most max_bytes bytes of text come back, {DEFAULT} "
-            "by default: truncated is true when there is more. "
+            "between brackets then says. A PDF comes page by page, each under a heading with its "
+            "number, such as # Page 3, from its text layer: a PDF of images, as a scan is, has "
+            f"none to give, and only its first {MOST_PAGES} pages come. Other files, such as "
+            "notes, documents over 20 MiB and those protected by a password cannot be read this "
+            f"way. At most max_bytes bytes of text come back, {DEFAULT} by default: truncated is "
+            "true when there is more. "
             f"{DATA_NOT_INSTRUCTIONS} Example: file_id=6494e0acdfcb11e588c1472e84a9cbee, "
             "max_bytes=65536."
         ),

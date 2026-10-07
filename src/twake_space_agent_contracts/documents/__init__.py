@@ -12,13 +12,14 @@ from asyncio.subprocess import DEVNULL, PIPE
 from dataclasses import dataclass
 from typing import Literal, get_args
 
-Kind = Literal["docx", "pptx", "xlsx"]
+Kind = Literal["docx", "pptx", "xlsx", "pdf"]
 """What the service reads a document as."""
 
 KINDS: dict[str, Kind] = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/pdf": "pdf",
 }
 """The kind of each type of document the service reads, by the type its uploader declared."""
 
@@ -26,11 +27,13 @@ MOST_ROWS = 1_000
 """The rows that hold values read from each sheet of a spreadsheet, at most."""
 MOST_COLUMNS = 50
 """The columns read from each sheet of a spreadsheet, at most, from the first."""
+MOST_PAGES = 200
+"""The pages read from a PDF, at most, from the first."""
 
-Reason = Literal["encrypted", "too_large", "unreadable", "too_long"]
+Reason = Literal["encrypted", "too_large", "unreadable", "no_text", "too_long"]
 """Why a document's text cannot be read: it is protected by a password; it holds more than the
-service reads, once uncompressed; it is not the document its type says, or damaged; or its reading
-gave no text in the time it has."""
+service reads, once uncompressed; it is not the document its type says, or damaged; it holds no
+text, as a PDF of images; or its reading gave no text in the time it has."""
 
 _REASONS: dict[str, Reason] = {reason: reason for reason in get_args(Reason)}
 

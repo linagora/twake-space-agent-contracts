@@ -29,6 +29,12 @@ class Unreadable(Refusal):
     reason = "unreadable"
 
 
+class NoText(Refusal):
+    """The document holds no text, as a PDF of images does."""
+
+    reason = "no_text"
+
+
 class Full(Exception):
     """The text holds more than its budget: the rest of the document is not read."""
 
