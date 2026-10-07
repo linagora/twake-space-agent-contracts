@@ -10,6 +10,7 @@ from twake_space_agent_contracts.previews import (
     Language,
     day,
     excerpt,
+    fitted,
     one_line,
     quoted,
     shown_size,
@@ -153,20 +154,6 @@ _WORDS: dict[Language, _Words] = {
         types={"work": "work", "home": "home", "cell": "mobile", "fax": "fax", "other": "other"},
     ),
 }
-
-
-def fitted(text: str, room: int) -> str:
-    """Text on one line that takes at most `room` of a summary, cut with an ellipsis when it would
-    take more."""
-    if shown_size(text) <= room:
-        return text
-    kept, spent = [], shown_size("…")
-    for character in text:
-        spent += shown_size(character)
-        if spent > room:
-            break
-        kept.append(character)
-    return "".join(kept).rstrip() + "…"
 
 
 def said(text: str | None, room: int, language: Language) -> str:
