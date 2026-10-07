@@ -59,6 +59,15 @@ def file_not_found(file_id: str) -> Problem:
     )
 
 
+def folder_not_found(folder_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="folder_not_found",
+        title="Folder not found",
+        detail=f"No folder {folder_id} in the user's Drive.",
+    )
+
+
 def file_blocked() -> Problem:
     return Problem(
         status=409,
@@ -211,6 +220,13 @@ def _next(answer: dict[str, Any], parameter: str) -> str | None:
     return httpx.URL(link).params.get(parameter) if isinstance(link, str) else None
 
 
+def _json(response: httpx.Response, method: str, path: str) -> Any:
+    try:
+        return response.json()
+    except ValueError as error:
+        raise _unavailable(f"Drive did not answer {method} {path}.") from error
+
+
 def _checked(
     response: httpx.Response, method: str, path: str, *, missing_ok: bool, cursor: str | None
 ) -> httpx.Response | None:
@@ -249,6 +265,26 @@ class Drive:
     def _url(self, host: str, path: str = "") -> str:
         return f"{self._scheme}://{host}{self._port}{path}"
 
+    async def _send(
+        self,
+        owner: DriveOwner,
+        method: str,
+        path: str,
+        *,
+        headers: dict[str, str] | None = None,
+        **request: Any,
+    ) -> httpx.Response:
+        """The stack's answer, whatever its status."""
+        try:
+            return await self._http.request(
+                method,
+                self._url(owner.instance, path),
+                headers={"Authorization": f"Bearer {owner.token}"} | (headers or {}),
+                **request,
+            )
+        except httpx.HTTPError as error:
+            raise _unavailable(f"Drive did not answer {method} {path}.") from error
+
     async def _request(
         self,
         owner: DriveOwner,
@@ -261,19 +297,10 @@ class Drive:
     ) -> Any:
         """The stack's JSON answer; None when what is asked for is missing, and missing_ok is
         set."""
-        headers = {"Authorization": f"Bearer {owner.token}"}
-        try:
-            response = await self._http.request(
-                method, self._url(owner.instance, path), headers=headers, **request
-            )
-        except httpx.HTTPError as error:
-            raise _unavailable(f"Drive did not answer {method} {path}.") from error
+        response = await self._send(owner, method, path, **request)
         if _checked(response, method, path, missing_ok=missing_ok, cursor=cursor) is None:
             return None
-        try:
-            return response.json()
-        except ValueError as error:
-            raise _unavailable(f"Drive did not answer {method} {path}.") from error
+        return _json(response, method, path)
 
     async def app(self, owner: DriveOwner) -> str:
         """Where the user's Drive web app is: on <name>-drive.<domain> when the stack serves its

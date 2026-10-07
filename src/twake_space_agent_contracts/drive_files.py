@@ -17,9 +17,10 @@ from twake_space_agent_contracts.drive import (
     DriveOwnerDependency,
     StackItem,
     file_not_found,
+    folder_not_found,
     plain_line,
 )
-from twake_space_agent_contracts.problems import Problem, invalid_request
+from twake_space_agent_contracts.problems import invalid_request
 
 RECENT = timedelta(days=7)
 LONGEST_RECENT = timedelta(days=31)
@@ -129,12 +130,7 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
             owner, ROOT_ID if folder_id == "root" else folder_id, limit, cursor
         )
         if page is None or page.folder.type != "directory" or page.folder.in_trash:
-            raise Problem(
-                status=404,
-                code="folder_not_found",
-                title="Folder not found",
-                detail=f"No folder {folder_id} in the user's Drive.",
-            )
+            raise folder_not_found(folder_id)
         app = await drive.app(owner)
         # The stack gives the path of a folder, but not of the files in it
         here = page.folder.path or "/"
