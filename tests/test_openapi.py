@@ -394,6 +394,9 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "move_email": ("post", True),
         "archive_email": ("post", True),
         "trash_email": ("post", True),
+        "create_task": ("post", True),
+        "update_task": ("patch", True),
+        "complete_task": ("post", True),
     }
 
 

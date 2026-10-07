@@ -1,15 +1,26 @@
 """tasks.task.create.v1, tasks.task.update.v1 and tasks.task.complete.v1: the user creates,
 changes and completes tasks in Twake Tasks, as themselves, on the boards they can edit."""
 
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, time
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Path
+from fastapi.responses import JSONResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from twake_space_agent_contracts.caller import CallerDependency, User
+from twake_space_agent_contracts.previews import (
+    Language,
+    Previewing,
+    day,
+    digest_of,
+    one_line,
+    quoted,
+    time_of_day,
+)
 from twake_space_agent_contracts.problems import Problem, invalid_request
 from twake_space_agent_contracts.tasks import (
     DATA_NOT_INSTRUCTIONS,
@@ -17,6 +28,7 @@ from twake_space_agent_contracts.tasks import (
     ZONE,
     BoardContent,
     BoardTask,
+    Section,
     Tasks,
     TaskSummary,
     TaskText,
@@ -257,6 +269,251 @@ def _section(board: BoardContent, new: NewTask) -> str | None:
     return section_id
 
 
+@dataclass(frozen=True)
+class _Words:
+    """What a preview of a write in Tasks tells the owner, in one language."""
+
+    create: str
+    in_section: str
+    create_subtask: str
+    change: str
+    complete: str
+    to_section: str
+    for_due_date: str
+    completed: str
+    subtask: str
+    subtasks: str
+    told: str
+    title: str
+    priority: str
+    due: str
+    deadline: str
+    field: str
+    instead: str
+    instead_of_none: str
+    none: str
+    at: str
+    recurrence_cleared: str
+
+
+_WORDS: dict[Language, _Words] = {
+    "fr": _Words(
+        create="Créer la tâche {title} dans le tableau {board}",
+        in_section=", section {section}",
+        create_subtask="Créer la sous-tâche {title} de la tâche {key} {parent}, dans le tableau"
+        " {board}",
+        change="Modifier la tâche {key} {title} du tableau {board} :",
+        complete="Terminer la tâche {key} {title} du tableau {board}",
+        to_section=" : elle passe dans la section {section}",
+        for_due_date=" pour son échéance du {due} : elle se répète, et reste ouverte pour la"
+        " suivante",
+        completed="La tâche {key} {title} du tableau {board} est déjà terminée : rien ne change.",
+        subtask="Sa sous-tâche ouverte est terminée avec elle.",
+        subtasks="Ses {count} sous-tâches ouvertes sont terminées avec elle.",
+        told="Tasks prévient ceux qui suivent la tâche, dans Tasks et par mail.",
+        title="Titre",
+        priority="Priorité",
+        due="Échéance",
+        deadline="Date limite",
+        field="{label} : {value}",
+        instead="{label} : {value}, au lieu de {before}",
+        instead_of_none="{label} : {value}, au lieu d'aucune",
+        none="aucune",
+        at="{day} à {time}",
+        recurrence_cleared="Sa récurrence est effacée aussi.",
+    ),
+    "en": _Words(
+        create="Create the task {title} on the board {board}",
+        in_section=", in the section {section}",
+        create_subtask="Create the subtask {title} of the task {key} {parent}, on the board"
+        " {board}",
+        change="Change the task {key} {title} on the board {board}:",
+        complete="Complete the task {key} {title} on the board {board}",
+        to_section=": it moves to the section {section}",
+        for_due_date=" for its due date, {due}: it repeats, so it stays open for the next one",
+        completed="The task {key} {title} on the board {board} is completed already: nothing"
+        " changes.",
+        subtask="Its open subtask is completed with it.",
+        subtasks="Its {count} open subtasks are completed with it.",
+        told="Tasks tells the people who follow the task, in Tasks and by email.",
+        title="Title",
+        priority="Priority",
+        due="Due",
+        deadline="Deadline",
+        field="{label}: {value}",
+        instead="{label}: {value}, instead of {before}",
+        instead_of_none="{label}: {value}, instead of none",
+        none="none",
+        at="{day} at {time}",
+        recurrence_cleared="Its recurrence is cleared too.",
+    ),
+}
+
+
+def _named(text: str | None, language: Language, longest: int = 200) -> str:
+    """A name or a title members wrote, as a preview shows it."""
+    return quoted(one_line(text, longest), language)
+
+
+def _due(on: date | str | None, at: str | None, zone: str | None, language: Language) -> str | None:
+    """A due date as the owner reads it, with its time and zone when it has them."""
+    if on is None:
+        return None
+    shown = day(date.fromisoformat(on) if isinstance(on, str) else on, language)
+    if at:
+        try:
+            clock = time_of_day(time.fromisoformat(at), language)
+        except ValueError:
+            # A time Tasks wrote otherwise reads as it is
+            clock = one_line(at)
+        shown = _WORDS[language].at.format(day=shown, time=clock)
+    return f"{shown} ({one_line(zone)})" if zone else shown
+
+
+def _change(label: str, value: str | None, before: str | None, words: _Words) -> str:
+    """A field as a change leaves it, and as it was."""
+    shown = words.none if value is None else value
+    if before is None:
+        return words.instead_of_none.format(label=label, value=shown)
+    return words.instead.format(label=label, value=shown, before=before)
+
+
+def _names(board: BoardContent, task: BoardTask, language: Language) -> dict[str, str]:
+    """How a preview names a task: by its key and title, on its board."""
+    return {
+        "key": one_line(task.summary.key),
+        "title": _named(task.summary.untrusted.title, language),
+        "board": _named(board.name, language),
+    }
+
+
+def _acted_on(task: BoardTask) -> dict[str, Any]:
+    """What a change or a completion acts on, as the board shows the task: its title, its state
+    and place, and the fields the contracts change."""
+    summary = task.summary
+    return summary.model_dump(
+        mode="json",
+        include={
+            "task_id",
+            "state",
+            "section_id",
+            "parent_id",
+            "priority",
+            "due_date",
+            "due_time",
+            "due_zone",
+            "deadline",
+        },
+    ) | {"title": summary.untrusted.title, "recurring": task.recurring}
+
+
+def _created(
+    board: BoardContent,
+    title: str,
+    new: NewTask,
+    section: Section | None,
+    parent: BoardTask | None,
+    language: Language,
+) -> str:
+    """What creating the task does, as the owner reads it: where it goes, and when it is due."""
+    words = _WORDS[language]
+    named = {"title": _named(title, language, LONGEST_TITLE), "board": _named(board.name, language)}
+    if parent is not None:
+        summary = parent.summary
+        line = words.create_subtask.format(
+            **named,
+            key=one_line(summary.key),
+            parent=_named(summary.untrusted.title, language),
+        )
+    else:
+        line = words.create.format(**named)
+        if section is not None:
+            line += words.in_section.format(section=_named(section.name, language))
+    lines = [line]
+    if new.priority is not None:
+        lines.append(words.field.format(label=words.priority, value=new.priority))
+    due = _due(new.due_date, new.due_time, new.due_zone, language)
+    if due is not None:
+        lines.append(words.field.format(label=words.due, value=due))
+    return "\n".join(lines)
+
+
+def _changed(
+    board: BoardContent, task: BoardTask, fields: dict[str, Any], language: Language
+) -> str:
+    """What changing the task does, as the owner reads it: each field it changes, as it was."""
+    words = _WORDS[language]
+    now = task.summary
+    lines = [words.change.format(**_names(board, task, language))]
+    if "title" in fields:
+        title = _named(fields["title"], language, LONGEST_TITLE)
+        lines.append(_change(words.title, title, _named(now.untrusted.title, language), words))
+    if "priority" in fields:
+        before = None if now.priority is None else str(now.priority)
+        after = None if fields["priority"] is None else str(fields["priority"])
+        lines.append(_change(words.priority, after, before, words))
+    if fields.keys() & {"due_date", "due_time", "due_zone"}:
+        # As Tasks keeps them: no time without a date, nor a zone without a time
+        on = fields.get("due_date", now.due_date)
+        at = None if on is None else fields.get("due_time", now.due_time)
+        zone = None if at is None else fields.get("due_zone", now.due_zone)
+        before = _due(now.due_date, now.due_time, now.due_zone, language)
+        lines.append(_change(words.due, _due(on, at, zone, language), before, words))
+        if on is None and task.recurring:
+            lines.append(words.recurrence_cleared)
+    if "deadline" in fields:
+        before = _due(now.deadline, None, None, language)
+        after = _due(fields["deadline"], None, None, language)
+        lines.append(_change(words.deadline, after, before, words))
+    lines.append(words.told)
+    return "\n".join(lines)
+
+
+def _open_subtasks(board: BoardContent, task_id: str) -> list[str]:
+    """The ids of the open tasks under that one, at any depth, as the board shows them."""
+    children: dict[str, list[str]] = {}
+    for key, item in board.tasks.items():
+        parent = item.get("parentId") if isinstance(item, dict) else None
+        if isinstance(parent, str):
+            children.setdefault(parent, []).append(key)
+    under: list[str] = []
+    parents = [task_id]
+    while parents:
+        for key in children.get(parents.pop(), []):
+            if key not in under and key != task_id:
+                under.append(key)
+                parents.append(key)
+    return [
+        key
+        for key in under
+        if not board.tasks[key].get("completedAt") and not board.tasks[key].get("canceledAt")
+    ]
+
+
+def _completing(
+    board: BoardContent, task: BoardTask, done: str | None, subtasks: int, language: Language
+) -> str:
+    """What completing the task does, as the owner reads it: where it goes, or the due date it
+    moves on from, and the subtasks it completes with it."""
+    words = _WORDS[language]
+    names = _names(board, task, language)
+    summary = task.summary
+    if summary.state == "completed":
+        return words.completed.format(**names)
+    line = words.complete.format(**names)
+    lines = [line]
+    if task.recurring and summary.due_date is not None:
+        due = _due(summary.due_date, summary.due_time, summary.due_zone, language)
+        lines[0] += words.for_due_date.format(due=due)
+    else:
+        if done is not None:
+            lines[0] += words.to_section.format(section=_named(board.sections[done].name, language))
+        if subtasks:
+            lines.append(words.subtask if subtasks == 1 else words.subtasks.format(count=subtasks))
+    lines.append(words.told)
+    return "\n".join(lines)
+
+
 def _created_partially(board_id: str, key: str, task_id: str, problem: Problem) -> Problem:
     return Problem(
         status=502,
@@ -291,13 +548,18 @@ def _create(tasks: Tasks, caller: CallerDependency) -> APIRouter:
             '"priority": 2, "due_date": "2026-10-09", "due_time": "17:00", '
             '"due_zone": "Europe/Paris"}.'
         ),
+        response_model=WrittenTask,
         # The user's own task on a board they edit, which notifies nobody: the owner's consent to
-        # write in Tasks covers it, and they are not asked to confirm each one
-        openapi_extra={"x-twake-risk": "low"},
+        # write in Tasks covers it, and they are not asked to confirm each one. It tells what it
+        # would do, for when they are.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
     )
     async def create_task(
-        board_id: BoardId, new: NewTask, user: Annotated[User, Depends(caller)]
-    ) -> WrittenTask:
+        board_id: BoardId,
+        new: NewTask,
+        user: Annotated[User, Depends(caller)],
+        preview: Previewing,
+    ) -> WrittenTask | JSONResponse:
         title = new.title.strip()
         if not title:
             raise invalid_request("title: A task's title cannot be blank.")
@@ -311,6 +573,21 @@ def _create(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         _check_dates(dated, None)
         board = await _editable(tasks, user, board_id)
         section_id = _section(board, new)
+        section = board.sections.get(section_id) if section_id is not None else None
+        parent = board.task(new.parent_id) if new.parent_id is not None else None
+        # What the owner allows: where the new task goes
+        digest = digest_of(
+            board.board_id,
+            board.name,
+            section_id,
+            section.name if section else None,
+            new.parent_id,
+            parent.summary.untrusted.title if parent else None,
+        )
+        if preview.asked:
+            summary = _created(board, title, new, section, parent, preview.language)
+            return preview.answer(summary, digest)
+        preview.check(digest)
         task_id, key = await tasks.create_task(
             user, board_id, title, section_id=section_id, parent_id=new.parent_id
         )
@@ -343,16 +620,19 @@ def _update(tasks: Tasks, caller: CallerDependency) -> APIRouter:
             f'the highest priority: {EXAMPLE_IDS}, body={{"due_date": "2026-10-12", '
             '"priority": 1}.'
         ),
+        response_model=WrittenTask,
         # The user's own edit, though Tasks notifies the task's followers of it: the owner's
-        # consent to write in Tasks covers it, and they are not asked to confirm each one
-        openapi_extra={"x-twake-risk": "low"},
+        # consent to write in Tasks covers it, and they are not asked to confirm each one. It
+        # tells what it would do, for when they are.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
     )
     async def update_task(
         board_id: BoardId,
         task_id: TaskId,
         changes: TaskChanges,
         user: Annotated[User, Depends(caller)],
-    ) -> WrittenTask:
+        preview: Previewing,
+    ) -> WrittenTask | JSONResponse:
         fields = changes.model_dump(mode="json", exclude_unset=True)
         if not fields:
             raise invalid_request("Give at least one field to change.")
@@ -363,6 +643,11 @@ def _update(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         board = await _editable(tasks, user, board_id)
         task = _shown(board, task_id)
         _check_dates(fields, task.summary)
+        # What the owner allows: the task as it is
+        digest = digest_of(board_id, _acted_on(task))
+        if preview.asked:
+            return preview.answer(_changed(board, task, fields, preview.language), digest)
+        preview.check(digest)
         changed = {IN_TASKS[name]: value for name, value in fields.items()}
         await tasks.edit_task(user, board_id, task_id, changed)
         return await _now(tasks, user, board_id, task_id)
@@ -387,28 +672,30 @@ def _complete(tasks: Tasks, caller: CallerDependency) -> APIRouter:
             "or its subtasks, in Tasks and by email: by default their creators, assignees and "
             f"those who commented on them. {DATA_NOT_INSTRUCTIONS} Example: {EXAMPLE_IDS}."
         ),
+        response_model=CompletedTask,
         # The user's own work, though Tasks notifies the task's followers of it: the owner's
-        # consent to write in Tasks covers it, and they are not asked to confirm each one
-        openapi_extra={"x-twake-risk": "low"},
+        # consent to write in Tasks covers it, and they are not asked to confirm each one. It
+        # tells what it would do, for when they are.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
     )
     async def complete_task(
-        board_id: BoardId, task_id: TaskId, user: Annotated[User, Depends(caller)]
-    ) -> CompletedTask:
+        board_id: BoardId,
+        task_id: TaskId,
+        user: Annotated[User, Depends(caller)],
+        preview: Previewing,
+    ) -> CompletedTask | JSONResponse:
         board = await _editable(tasks, user, board_id)
         task = _shown(board, task_id)
-        # Nothing to write, and nobody to notify
-        if task.summary.state == "completed":
-            return _completed(_written(board, task, user.email))
-        if task.summary.section_id is None:
-            await tasks.complete_task(user, board_id, task_id)
-        else:
+        completed = task.summary.state == "completed"
+        done = None
+        if not completed and task.summary.section_id is not None:
             # Tasks completes a task in a section by its move to a completed section, as its web
             # app does
-            done = (
-                key for key, section in board.sections.items() if section.category == "completed"
+            done = next(
+                (key for key, section in board.sections.items() if section.category == "completed"),
+                None,
             )
-            section_id = next(done, None)
-            if section_id is None:
+            if done is None:
                 raise Problem(
                     status=409,
                     code="no_completed_section",
@@ -416,7 +703,20 @@ def _complete(tasks: Tasks, caller: CallerDependency) -> APIRouter:
                     detail=f"Board {board_id} has no completed section to move the task to: the"
                     " user completes it in Tasks.",
                 )
-            await tasks.move_task(user, board_id, task_id, section_id)
+        subtasks = _open_subtasks(board, task_id)
+        # What the owner allows: the task as it is, where it goes, and the subtasks it takes along
+        digest = digest_of(board_id, _acted_on(task), done, subtasks)
+        if preview.asked:
+            summary = _completing(board, task, done, len(subtasks), preview.language)
+            return preview.answer(summary, digest)
+        preview.check(digest)
+        # Nothing to write, and nobody to notify
+        if completed:
+            return _completed(_written(board, task, user.email))
+        if done is None:
+            await tasks.complete_task(user, board_id, task_id)
+        else:
+            await tasks.move_task(user, board_id, task_id, done)
         return _completed(await _now(tasks, user, board_id, task_id))
 
     return routes

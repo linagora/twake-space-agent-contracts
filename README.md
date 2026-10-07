@@ -330,6 +330,7 @@ Opens Twake Tasks as the user, as its web app does when they open it, then lists
 - It is a low-risk write (`x-twake-risk: low`): the user's own Inbox and the invitations made to them, which the owner's consent to write in Tasks covers without a confirmation each time. It takes no body.
 - Archived boards are left out unless `include_archived=true`. The list holds 100 boards at most.
 - Each board gives the user's `role` (`viewer`, `editor` or `admin`), whether it is their Inbox, its project's `project_id`, whether that project is a Twake Space's (`space`), and how many of its tasks are open. The names of boards and projects come under `untrusted`.
+- It declares no preview ([Previews](#previews)): Tasks lists boards only by doing what opening does, so the contract cannot tell, without doing it, whether the user's Inbox would be set up or which invitations they would join. Its owner reads the call itself, which names no board.
 
 ### `tasks.task.read.v1`
 
@@ -372,6 +373,7 @@ Create, change and complete tasks as the user, on the boards they may edit.
 - A title takes 500 characters at most, and a priority goes from 1 to 4. Due dates and deadlines are days (`2026-10-09`); a due time, `HH:MM`, needs a due date, and its zone a due time. The zone must be in the IANA time zone database, as Tasks requires, which the `tzdata` package completes: an unknown one is an invalid request, before anything is written.
 - Tasks notifies nobody of a new task, which the user follows. It notifies the other people who follow a task of each change and of its completion, in Tasks and by email: by default its creator, its assignees and those who commented on it.
 - Each is a low-risk write (`x-twake-risk: low`): the user's own work, which the owner's consent to write in Tasks covers without a confirmation each time.
+- Each tells what it would do ([Previews](#previews)), once it read the board as it would. `create_task` tells the task's title, its board and its section, or the task it goes under, and its priority and due date. `update_task` tells each field it changes, as it would be and as it was, a due date with its time and zone, and that clearing it clears its recurrence. `complete_task` tells the section the task moves to and how many open subtasks complete with it, or, for a recurring task, the due date it is completed for, or that a completed task stays as it is. The digest covers where a new task goes, its board, section and parent, and for a change or a completion the task as it is, with the section a completion moves it to and the subtasks it takes along: a call made once a member changed them answers `changed_since_preview`.
 
 ## Previews
 
@@ -388,6 +390,9 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `accept_invitation` | the event's title, when it takes place, in the user's time zone, and who organizes it | the event as the user would accept it |
 | `create_reply_draft` | whom the draft answers, its subject and the start of its text, never sent | the draft as it would be created, but for its text |
 | `move_email`, `archive_email`, `trash_email` | which email, by its subject and senders, goes to which mailbox | the email, where it is, and where it would go |
+| `create_task` | the task's title, where it goes and when it is due | its board, its section or the task it goes under |
+| `update_task` | each field it changes, as it would be and as it was | the task as it is |
+| `complete_task` | where the task goes, or the due date it moves on from, and the subtasks it completes | the task as it is, its completed section and its open subtasks |
 
 ## Errors
 

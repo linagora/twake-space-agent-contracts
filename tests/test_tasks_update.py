@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient, Response
 
-from tests.conftest import AS_MMAUDET
+from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
 from tests.fakes import FakeBoundary, TasksBoard, TasksTask, tasks_id, tasks_member
 
 MMAUDET = tasks_member("mmaudet")
@@ -15,9 +15,13 @@ def website(boundary: FakeBoundary) -> TasksBoard:
     return boundary.tasks.board("Website", "WEB", MMAUDET, ALICE)
 
 
-async def update(client: AsyncClient, task: TasksTask, **body: Any) -> Response:
+async def update(
+    client: AsyncClient, task: TasksTask, headers: dict[str, str] | None = None, **body: Any
+) -> Response:
     return await client.patch(
-        f"/contracts/v1/tasks/boards/{task.board}/tasks/{task.id}", json=body, headers=AS_MMAUDET
+        f"/contracts/v1/tasks/boards/{task.board}/tasks/{task.id}",
+        json=body,
+        headers=AS_MMAUDET | (headers or {}),
     )
 
 
@@ -140,3 +144,98 @@ async def test_a_task_off_the_board_answers_like_an_unknown_one(
         assert response.status_code == 404
         assert response.json()["code"] == "task_not_found"
     assert boundary.tasks.writes == []
+
+
+async def test_a_preview_tells_the_owner_what_would_change_and_changes_nothing(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    board = website(boundary)
+    task = boundary.tasks.task(
+        board,
+        "Send the budget",
+        priority=3,
+        due_date="2026-10-09",
+        due_time="17:00",
+        due_zone="Europe/Paris",
+    )
+
+    response = await update(
+        client, task, asking_preview("fr"), due_date="2026-10-12", priority=1, title="Send it"
+    )
+
+    told, _ = preview_of(response)
+    assert told == (
+        "Modifier la tâche WEB-1 « Send the budget » du tableau « Website » :\n"
+        "Titre : « Send it », au lieu de « Send the budget »\n"
+        "Priorité : 1, au lieu de 3\n"
+        "Échéance : lundi 12 octobre 2026 à 17 h (Europe/Paris), au lieu de vendredi 9 octobre"
+        " 2026 à 17 h (Europe/Paris)\n"
+        "Tasks prévient ceux qui suivent la tâche, dans Tasks et par mail."
+    )
+    assert boundary.tasks.writes == []
+    assert (task.title, task.priority, task.due_date) == ("Send the budget", 3, "2026-10-09")
+
+
+async def test_a_preview_says_what_clearing_the_due_date_clears_with_it(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    board = website(boundary)
+    task = boundary.tasks.task(
+        board, "Weekly report", due_date="2026-10-09", due_time="09:00", recurrence=WEEKLY
+    )
+
+    response = await update(
+        client, task, asking_preview("en"), due_date=None, deadline="2026-10-16"
+    )
+
+    told, _ = preview_of(response)
+    assert told == (
+        "Change the task WEB-1 “Weekly report” on the board “Website”:\n"
+        "Due: none, instead of Friday 9 October 2026 at 09:00\n"
+        "Its recurrence is cleared too.\n"
+        "Deadline: Friday 16 October 2026, instead of none\n"
+        "Tasks tells the people who follow the task, in Tasks and by email."
+    )
+
+
+async def test_a_preview_shows_a_due_time_written_otherwise_as_it_is(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    task = boundary.tasks.task(
+        website(boundary), "Send the budget", due_date="2026-10-09", due_time="5 pm"
+    )
+
+    response = await update(client, task, asking_preview("en"), due_date="2026-10-12")
+
+    told, _ = preview_of(response)
+    assert told.splitlines()[1] == (
+        "Due: Monday 12 October 2026 at 5 pm, instead of Friday 9 October 2026 at 5 pm"
+    )
+
+
+async def test_the_owner_who_allowed_what_they_were_shown_changes_the_task(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    task = boundary.tasks.task(website(boundary), "Send the budget", priority=3)
+    _, digest = preview_of(await update(client, task, asking_preview("fr"), priority=1))
+
+    response = await update(client, task, allowed_after(digest), priority=1)
+
+    assert response.status_code == 200, response.text
+    assert task.priority == 1
+
+
+async def test_a_task_changed_since_the_preview_is_left_as_it_is(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    task = boundary.tasks.task(website(boundary), "Send the budget", priority=3)
+    _, digest = preview_of(await update(client, task, asking_preview("fr"), priority=1))
+    # A member sets its priority before the owner says yes
+    task.priority = 2
+
+    response = await update(client, task, allowed_after(digest), priority=1)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "changed_since_preview"
+    assert boundary.tasks.writes == []
+    assert task.priority == 2
