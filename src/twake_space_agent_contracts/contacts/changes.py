@@ -10,7 +10,8 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from twake_space_agent_contracts.contacts import line, paragraphs
 from twake_space_agent_contracts.contacts.cards import ContactText, fields_of
-from twake_space_agent_contracts.problems import Problem, invalid_request
+from twake_space_agent_contracts.problems import Problem, invalid_email, invalid_request
+from twake_space_agent_contracts.text import EMAIL
 
 LONGEST_TEXT = 200
 """The most characters of a name, an organization, a job title or a part of an address."""
@@ -41,12 +42,6 @@ HEADING = {"version", "prodid", "uid"}
 # box and its extended address
 PARTS = ("street", "locality", "region", "postal_code", "country")
 
-# An email address: its local part, dot-separated atoms of letters, digits and the signs RFC 5322
-# allows, then a domain of two labels at least, the last one letters, or the punycode of a top
-# level domain. Letters and digits of any script: an address may be internationalized.
-_ATOM = r"[\w!#$%&'*+/=?^`{|}~-]+"
-_LABEL = r"[^\W_](?:[\w-]{0,61}[^\W_])?"
-EMAIL = re.compile(rf"{_ATOM}(?:\.{_ATOM})*@(?:{_LABEL}\.)+(?:[^\W\d_]{{2,63}}|xn--[a-z0-9-]+)")
 # A phone number as people write one: digits, maybe after a plus, with spaces, dots, dashes,
 # slashes and parentheses among them
 PHONE = re.compile(r"\+?[0-9() ./-]+")
@@ -147,10 +142,8 @@ def _invalid(code: str, title: str, detail: str) -> Problem:
 def _email(address: str) -> str:
     """The address, if it is one."""
     if not EMAIL.fullmatch(address):
-        raise _invalid(
-            "invalid_email",
-            "Invalid email",
-            f"emails: {address!r} is not an email address, such as jeanne.martin@example.com.",
+        raise invalid_email(
+            f"emails: {address!r} is not an email address, such as jeanne.martin@example.com."
         )
     return address
 

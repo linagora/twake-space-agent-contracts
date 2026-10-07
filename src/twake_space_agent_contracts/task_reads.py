@@ -112,7 +112,7 @@ def router(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         ] = 20,
     ) -> TaskList:
         if due == "all":
-            found = await tasks.assigned(user)
+            found = await tasks.my_tasks(user)
         else:
             # Tasks gives the overdue tasks with those due within the days asked, today the first
             today, agenda = await tasks.agenda(user, zone, days if due == "upcoming" else 1)
@@ -199,12 +199,16 @@ def router(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         if task.assignee_ids:
             # Tasks does not say who the user is: the member who joined with their email alone
             # tells, and no guess stands in for them
-            me = board.member_named(user.email)
+            me = board.member_id(user.email)
             if me is None:
                 raise owner_not_member("whether the task is theirs cannot be told")
             assigned_to_me = me in task.assignee_ids
         description = await tasks.description(user, board.board_id, task.summary.task_id)
-        found = await tasks.comments(user, board.board_id, task.summary.task_id) if comments else []
+        found = (
+            await tasks.task_comments(user, board.board_id, task.summary.task_id)
+            if comments
+            else []
+        )
         # Gone from the board since it was read, to another board or purged from the trash
         if description is None or found is None:
             raise task_not_found(board_id, task_id)

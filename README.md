@@ -362,10 +362,12 @@ Creates a text file in the user's own Drive, in a folder that nobody else sees.
 
 ### Tasks, as the user
 
-The Tasks contracts call the REST API of Twake Tasks 0.1.1 with the user's token. Tasks accepts it once the token broker's client has the audience `twaketasks` and LemonLDAP-NG gives Tasks the user's `uuid`, `org_id` and `sid`: Tasks then acts for the user's `uuid` in their `org_id`, and shows them the boards of the projects they are a member of. Tasks also refuses the token unless the `sub` LemonLDAP-NG gives its own client, `twaketasks-backend`, which introspects the token, is the one userinfo gives for the token broker's client: both clients must take the same identifier attribute. The service publishes the Tasks contracts once `PUBLISHED_APPS` names `tasks`, and then needs `TASKS_URL`: without it, it refuses to start.
+The Tasks contracts call the REST API of Twake Tasks 0.2.10 with the user's token. Tasks accepts it once the token broker's client has the audience `twaketasks` and LemonLDAP-NG gives Tasks the user's `uuid`, `org_id` and `sid`: Tasks then acts for the user's `uuid` in their `org_id`, and shows them the boards of the projects they are a member of. Tasks also refuses the token unless the `sub` LemonLDAP-NG gives its own client, `twaketasks-backend`, which introspects the token, is the one userinfo gives for the token broker's client: both clients must take the same identifier attribute. The service publishes the Tasks contracts once `PUBLISHED_APPS` names `tasks`, and then needs `TASKS_URL`: without it, it refuses to start.
 
 - A user whose token gives Tasks no `org_id` is a personal account for Tasks, which then shows them only what lies outside any organization: an organization's boards answer like unknown ones. Nothing in Tasks' answers tells the contracts which of the two the user is.
-- Tasks 0.1.1 lists the user's boards only with `GET /api/boards`, which, as opening its web app does, creates the user's Inbox if they have none and accepts their pending invitations to projects. Listing boards is therefore an act, which a read never does: `open_boards` does it, as a write.
+- Tasks 0.2.10 lists the user's boards only with `GET /api/boards`, which, as opening its web app does, creates the user's Inbox if they have none, accepts their pending invitations to projects and gives their memberships the name they signed in with. Listing boards is therefore an act, which a read never does: `open_boards` does it, as a write.
+- Since 0.2.10, Tasks gives each person, an assignee, the author of a comment or a member of a board, with the name they chose, and a search with the words of a description around those found. The contracts still tell people by the email they joined with, and pass neither on.
+- Tasks 0.2.10 creates a project only with a board, and has no endpoint that renames or deletes a project: only Twake Space does, for the project of a space. No contract renames or deletes a project.
 
 ### `tasks.board.open.v1`
 
@@ -375,7 +377,7 @@ Opens Twake Tasks as the user, as its web app does when they open it, then lists
 |---|---|---|
 | `open_boards` | `POST /contracts/v1/tasks/boards/open?include_archived=…` | `{"boards": [...], "truncated"}`, the user's Inbox first, then their favorite boards, then by name |
 
-- The first time, Tasks sets up the user's Inbox; each time, it makes them a member of the projects they were invited to. It notifies nobody.
+- The first time, Tasks sets up the user's Inbox; each time, it makes them a member of the projects they were invited to, and shows the other members the name they signed in with. It notifies nobody.
 - It is a low-risk write (`x-twake-risk: low`): the user's own Inbox and the invitations made to them, which the owner's consent to write in Tasks covers without a confirmation each time. It takes no body.
 - Archived boards are left out unless `include_archived=true`. The list holds 100 boards at most.
 - Each board gives the user's `role` (`viewer`, `editor` or `admin`), whether it is their Inbox, its project's `project_id`, whether that project is a Twake Space's (`space`), and how many of its tasks are open. The names of boards and projects come under `untrusted`.
@@ -423,6 +425,41 @@ Create, change and complete tasks as the user, on the boards they may edit.
 - Tasks notifies nobody of a new task, which the user follows. It notifies the other people who follow a task of each change and of its completion, in Tasks and by email: by default its creator, its assignees and those who commented on it.
 - Each is a low-risk write (`x-twake-risk: low`): the user's own work, which the owner's consent to write in Tasks covers without a confirmation each time.
 - Each tells what it would do ([Previews](#previews)), once it read the board as it would. `create_task` tells the task's title, its board and its section, or the task it goes under, and its priority and due date. `update_task` tells each field it changes, as it would be and as it was, a due date with its time and zone, and that clearing it clears its recurrence. `complete_task` tells the section the task moves to and how many open subtasks complete with it, or, for a recurring task, the due date it is completed for, or that a completed task stays as it is. The digest covers where a new task goes, its board, section and parent, and for a change or a completion the task as it is, with the section a completion moves it to and the subtasks it takes along: a call made once a member changed them answers `changed_since_preview`.
+
+### `tasks.task.delete.v1`, `tasks.task.assign.v1` and `tasks.comment.create.v1`
+
+Delete, assign and comment on tasks as the user.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `delete_task` | `DELETE /contracts/v1/tasks/boards/{board_id}/tasks/{task_id}` | the task as it was, with `deleted_subtasks` |
+| `assign_task` | `PUT /contracts/v1/tasks/boards/{board_id}/tasks/{task_id}/assignees` `{"assignees"}` | the task |
+| `comment_on_task` | `POST /contracts/v1/tasks/boards/{board_id}/tasks/{task_id}/comments` `{"body"}` | 201, `{"board_id", "task_id", "comment_id", "created_at", "mentioned"}` |
+
+- `delete_task` and `assign_task` keep the rules of the other writes on a task: they read the board first, and write nothing on a board the user is not a member of, nor on one where no member, or more than one, joined with their email, that they only view or that is archived. A task the board does not show, archived or in the trash, is not found.
+- `delete_task` moves the task to the board's trash (`DELETE /api/boards/{board_id}/tasks/{task_id}`), with its subtasks at any depth, which `deleted_subtasks` counts. An editor or an admin of the board can restore them in Tasks for 30 days, after which Tasks deletes them for good. It answers the task as it was.
+- `assign_task` sets whom the task is assigned to (`PUT /api/boards/{board_id}/tasks/{task_id}/assignees`, by user ids). `assignees` lists the members by the emails they joined with, as `read_task` gives the assignees, whatever their case and each once, 50 at most, and replaces the whole list, as in Tasks: `[]` assigns the task to nobody. An email that is not an address is refused with `invalid_email`, before anything is read, and one that no member of the board, or more than one, joined with is refused with `assignee_not_member`, whose `members` lists the first 20 of the emails the contract takes, in alphabetical order, and `more_members` how many others it takes. Assignees that do not change are not written. It answers the task as Tasks then shows it.
+- `comment_on_task` adds a comment of the user (`POST /api/boards/{board_id}/tasks/{task_id}/comments`), in Markdown. Tasks takes 10,000 characters, but the owner confirms a comment only once they read it whole: a comment longer than its preview shows whole, in either language the harness speaks, is refused (`invalid_request`), its detail saying how many of its characters the preview shows. That is some 5,900 characters of plain text, fewer of accented letters or emoji, or under a long title or many mentions. As in Tasks, any member of the board comments, a viewer too. The contract reads the board first all the same: it refuses an archived board, which Tasks keeps read only though it takes a comment there, and finds no archived task, nor one in the trash, which Tasks would take a comment on. Tasks offers no way to change or delete a comment.
+- A comment mentions a member with `@` and the email they joined with, at its start or after a blank, as Tasks finds mentions: `mentioned` gives back the members it mentions, but the user.
+- Tasks tells the people who follow a task, in Tasks and by email: by default its creator, its assignees and those who commented on it. `assign_task` also tells each new assignee, who then follows the task, and `comment_on_task` the members it mentions, who then follow it, as the user does. Tasks notifies nobody of a task moved to the trash.
+- Each is a high-risk write (`x-twake-risk: high`), which the owner confirms call by call: a deleted task leaves its board, and goes for good after 30 days in the trash, and an assignment or a comment reaches other people by email, which nothing takes back.
+- Each tells what it would do ([Previews](#previews)), once it read the board as it would. `delete_task` tells where the task goes, for how long, and the subtasks that go with it, by their keys and titles, ten at most and as many as fit, then how many others; `assign_task`, whom the task is assigned to now, no longer and still, by email, ten members at most in each list, or that nothing changes; `comment_on_task`, the comment, whole, and the members it mentions, ten at most. The digest covers the task as it is, with the subtasks that go with it, by their titles, for `delete_task`, its assignees and those it would have for `assign_task`, and its key, its title and the members mentioned for `comment_on_task`: a call made once they changed answers `changed_since_preview`.
+
+### `tasks.project.read.v1` and `tasks.project.create.v1`
+
+The projects of the user, which hold their boards, and the projects they create.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_projects` | `GET /contracts/v1/tasks/projects` | `{"projects": [{"project_id", "role", "personal", "space", "untrusted": {"name"}}], "truncated"}`, by name |
+| `create_project` | `POST /contracts/v1/tasks/projects` `{"name", "key_prefix"}` | 201, `{"project_id", "role", "personal", "space", "board", "untrusted": {"name"}}`, the project and its first board |
+
+- `list_projects` reads the projects the user is a member of (`GET /api/projects`), 100 at most, with the user's `role` in each: their personal project (`personal`), which holds their Inbox and is never shared, the projects they created or joined, and the project of each Twake Space they are a member of (`space`), whose members are the space's. Project names come under `untrusted`.
+- It only reads, unlike `open_boards`: it neither sets up the user's Inbox nor accepts their invitations, so that a project they were invited to is listed once `open_boards` made them a member. Each board `open_boards` gives names its project by its `project_id`.
+- `create_project` creates a project as Tasks does, with a board outside any project (`POST /api/boards`, without a `projectId`). The project and its first board both take `name`, of 100 characters at most, and the board the sections Tasks gives a new board, `To do`, `In progress` and `Done`. The keys of its tasks start with `key_prefix`, 1 to 10 capital letters or digits starting with a letter: a prefix Tasks keeps for another board answers `key_prefix_taken`, and `INBOX`, which it keeps for every Inbox, before anything is written. The user is the project's only member, as its admin, and Tasks notifies nobody. `board` is the board as `open_boards` gives it.
+- Tasks takes the name of a project the user has already, and no idempotency key: each call creates a new project.
+- `create_project` is a low-risk write (`x-twake-risk: low`): a project the user alone is a member of, which the owner's consent to write in Tasks covers without a confirmation each time.
+- It tells what it would do ([Previews](#previews)): the project's name, its board's, the start of its task keys, and how many projects of that name, whatever its case, the user has already. The digest covers those projects: a call made once one more was created answers `changed_since_preview`.
 
 ### Contacts, as the user
 
@@ -594,6 +631,10 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `create_task` | the task's title, where it goes and when it is due | its board, its section or the task it goes under |
 | `update_task` | each field it changes, as it would be and as it was | the task as it is |
 | `complete_task` | where the task goes, or the due date it moves on from, and the subtasks it completes | the task as it is, its completed section and its open subtasks |
+| `delete_task` | where the task goes, for how long, and the subtasks that go with it, ten at most by their keys and titles | the task as it is, and the subtasks that go with it, by their titles |
+| `assign_task` | whom the task is assigned to now, no longer and still, or that nothing changes | the task as it is, its assignees and those it would have |
+| `comment_on_task` | the comment, whole, and the members it mentions | the task, by its key and title, and the members mentioned |
+| `create_project` | the project's name, its first board's, the start of its task keys, and the projects of that name the user has already | the projects of that name the user has already |
 | `create_file` | the file's name, type and size, its folder and its content | the folder, where it is |
 | `create_event` | the event's title, when it takes place, in the user's time zone, whether it leaves them free, where it is and what it is for; or that it is in their calendar already | the event, by its UID, the zone it is written in, and the event as the calendar holds it, if at all |
 | `create_contact` | each field of the contact, its note whole when it fits; or that it is in the address book already | the contact, by its UID, as the address book holds it, if at all |
@@ -619,7 +660,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 401 | `missing_token` | no bearer token |
 | 401 | `invalid_token` | the token is not one the broker got for this service: another type, issuer, audience, client or key, or expired |
 | 401 | `missing_drive_token` | a Drive contract without the user's Drive token |
-| 403 | `forbidden_role` | the user is a viewer of the board, where they only read, or of the space, where they read and react but do not post |
+| 403 | `forbidden_role` | the user is a viewer of the board, where they only read and comment, or of the space, where they read and react but do not post |
 | 403 | `not_space_admin` | the user is not an admin of the space, whose admins alone change its members |
 | 403 | `not_author` | someone else wrote the post, which only its author edits or deletes |
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
@@ -654,8 +695,10 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `name_taken` | a file or folder of that name is already in the folder |
 | 409 | `quota_exceeded` | the user's Drive has no room left for the file |
 | 409 | `owner_not_member` | no member of the board, or more than one, has the user's email, when a contract writes on it or reads a task with assignees |
+| 409 | `assignee_not_member` | no member of the board, or more than one, joined with an email `assign_task` was given: `members` lists 20 of the emails it takes at most, and `more_members` how many others |
 | 409 | `board_archived` | the board is archived |
 | 409 | `section_required` | a new task names no section, and the board has none `unstarted` to put it in: `sections` lists them |
+| 409 | `key_prefix_taken` | Tasks keeps the key prefix a new project's board is given for another board, such as `INBOX` for every Inbox: nothing was created |
 | 409 | `no_completed_section` | the task is in a section, and the board has no `completed` section to move it to |
 | 409 | `mailbox_ambiguous` | several of the user's mailboxes have the name given, or the role archive: the user says which one, and `move_email`, or `move_emails` for several emails, takes its id |
 | 409 | `trash_ambiguous` | several of the user's mailboxes have the role trash, which no contract chooses among: the user keeps a single one in Twake Mail |

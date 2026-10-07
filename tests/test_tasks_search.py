@@ -67,6 +67,35 @@ async def test_a_key_finds_its_task(client: AsyncClient, boundary: FakeBoundary)
     assert [task["untrusted"]["title"] for task in answer["tasks"]] == ["Fix the login page"]
 
 
+async def test_a_task_found_by_its_description_comes_as_any_other(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Since 0.2.10, Tasks quotes the words of the description around those found: read_task gives
+    # the description, under untrusted, and a search no part of it
+    arrange_release(boundary)
+
+    answer = await search(client, q="blocks")
+
+    assert [task["key"] for task in answer["tasks"]] == ["WEB-2"]
+    assert set(answer["tasks"][0]) == {
+        "board_id",
+        "task_id",
+        "key",
+        "parent_id",
+        "section_id",
+        "state",
+        "priority",
+        "due_date",
+        "due_time",
+        "due_zone",
+        "deadline",
+        "assignees",
+        "assigned_to_me",
+        "untrusted",
+    }
+    assert set(answer["tasks"][0]["untrusted"]) == {"title", "board_name", "labels"}
+
+
 async def test_a_search_tells_only_that_a_task_without_assignees_is_not_the_users(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:

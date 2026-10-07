@@ -1,4 +1,4 @@
-"""Twake Tasks (0.1.1), called as the user with their own token: Tasks acts for the uuid of the
+"""Twake Tasks (0.2.10), called as the user with their own token: Tasks acts for the uuid of the
 token's user in their org_id, and shows them the boards of the projects they are a member of."""
 
 from collections.abc import Callable
@@ -65,7 +65,18 @@ def forbidden_role(board_id: str) -> Problem:
         status=403,
         code="forbidden_role",
         title="Role forbids writing",
-        detail=f"The user is a viewer of board {board_id}: they only read it.",
+        detail=f"The user is a viewer of board {board_id}: they only read it, and comment on its"
+        " tasks with comment_on_task.",
+    )
+
+
+def key_prefix_taken(prefix: str) -> Problem:
+    return Problem(
+        status=409,
+        code="key_prefix_taken",
+        title="Key prefix taken",
+        detail=f"Tasks keeps the key prefix {prefix} for another board, such as INBOX for every"
+        " Inbox: nothing was created. Give the board another one.",
     )
 
 
@@ -101,7 +112,8 @@ class Board(BaseModel):
     key_prefix: str
     project_id: str
     role: str = Field(
-        description="The user's role in the project: viewer, editor or admin. A viewer only reads."
+        description="The user's role in the project: viewer, editor or admin. A viewer only reads "
+        "and comments."
     )
     inbox: bool = Field(description="Whether this is the user's Inbox, their personal board.")
     space: bool = Field(
@@ -110,6 +122,30 @@ class Board(BaseModel):
     archived: bool
     open_tasks: int
     untrusted: BoardText
+
+
+class ProjectText(BaseModel):
+    """What members wrote: the project's name."""
+
+    name: str
+
+
+class Project(BaseModel):
+    """A project the user is a member of, which holds boards."""
+
+    project_id: str
+    role: str = Field(
+        description="The user's role in the project: viewer, editor or admin. A viewer only reads "
+        "and comments."
+    )
+    personal: bool = Field(
+        description="Whether this is the user's personal project, which holds their Inbox and is "
+        "never shared."
+    )
+    space: bool = Field(
+        description="Whether the project is a Twake Space's, whose members are the space's."
+    )
+    untrusted: ProjectText
 
 
 class TaskText(BaseModel):
@@ -215,7 +251,7 @@ class BoardContent:
     tasks: dict[str, Any]
     """Its tasks as Tasks gives them, by id."""
 
-    def member_named(self, email: str) -> str | None:
+    def member_id(self, email: str) -> str | None:
         """The user id of the one member who joined with that email; None if no member did, or
         several did."""
         found = [user_id for user_id, joined in self.members if joined == email]
@@ -326,8 +362,9 @@ class Tasks:
         """The boards of the projects the user is a member of: their Inbox, their favorite
         boards, then the others by name.
 
-        As opening the Tasks web app does, this sets up the user's Inbox if they have none, and
-        makes them a member of the projects they were invited to: never a read."""
+        As opening the Tasks web app does, this sets up the user's Inbox if they have none, makes
+        them a member of the projects they were invited to, and gives their memberships the name
+        they signed in with: never a read."""
         found = await self._get(user, "/api/boards")
         try:
             return [
@@ -346,6 +383,63 @@ class Tasks:
             ]
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Tasks gave the boards in an unexpected form.") from error
+
+    async def projects(self, user: User) -> list[Project]:
+        """The projects the user is a member of, by name, a space's included: a read, which
+        neither sets up their Inbox nor accepts their invitations."""
+        found = await self._get(user, "/api/projects")
+        try:
+            return [
+                Project(
+                    project_id=project["id"],
+                    role=project["role"],
+                    personal=project["personal"],
+                    space=project["managed"],
+                    untrusted=ProjectText(name=project["name"]),
+                )
+                for project in found["projects"]
+            ]
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Tasks gave the projects in an unexpected form.") from error
+
+    async def create_project(self, user: User, name: str, key_prefix: str) -> tuple[Project, Board]:
+        """Creates a project of that name, with the user as its admin, which Tasks does only as
+        it creates a board outside any project: the project, and that board, of the same name,
+        whose task keys start with key_prefix."""
+        path = "/api/boards"
+        response = await self._call(
+            user, "POST", path, body={"name": name, "keyPrefix": key_prefix}
+        )
+        if response.status_code == 409 and _error_of(response) == "key_prefix_taken":
+            raise key_prefix_taken(key_prefix)
+        # Tasks checks what the contract cannot
+        if response.status_code == 400:
+            raise invalid_request(f"Tasks refused POST {path}: {_error_of(response)}.")
+        found = self._json(response, "POST", path)
+        try:
+            project = found["project"]
+            board = Board(
+                board_id=found["id"],
+                key_prefix=found["keyPrefix"],
+                project_id=project["id"],
+                role=found["role"],
+                inbox=found["inbox"],
+                space=project["managed"],
+                archived=found["archived"],
+                # A new board holds no task
+                open_tasks=0,
+                untrusted=BoardText(name=found["name"], project_name=project["name"]),
+            )
+            created = Project(
+                project_id=project["id"],
+                role=found["role"],
+                personal=project["personal"],
+                space=project["managed"],
+                untrusted=ProjectText(name=project["name"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Tasks gave the new board in an unexpected form.") from error
+        return created, board
 
     def _tasks(self, found: Any, whose: Whose) -> list[TaskSummary]:
         try:
@@ -375,7 +469,7 @@ class Tasks:
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Tasks gave the agenda in an unexpected form.") from error
 
-    async def assigned(self, user: User) -> list[TaskSummary]:
+    async def my_tasks(self, user: User) -> list[TaskSummary]:
         """The open tasks assigned to the user, dated ones first."""
         return self._tasks(await self._get(user, "/api/my-tasks"), lambda task: True)
 
@@ -452,12 +546,33 @@ class Tasks:
         instead."""
         await self._write(user, "POST", board_id, task_id, {"state": "completed"}, "/complete")
 
+    async def assign_task(
+        self, user: User, board_id: str, task_id: str, user_ids: list[str]
+    ) -> None:
+        """Assigns the task to these members of the board, by their user ids, and to no other."""
+        await self._write(user, "PUT", board_id, task_id, {"userIds": user_ids}, "/assignees")
+
+    async def trash_task(self, user: User, board_id: str, task_id: str) -> None:
+        """Moves the task to the board's trash, with the subtasks the board shows, where an editor
+        or an admin of the board can restore it for 30 days, before Tasks deletes it for good."""
+        await self._write(user, "DELETE", board_id, task_id, None)
+
     async def move_task(self, user: User, board_id: str, task_id: str, section_id: str) -> None:
         """Moves a task to the end of a section: to a completed one, this completes it, or moves
         a recurring one to its next due date instead."""
         await self._write(user, "POST", board_id, task_id, {"sectionId": section_id}, "/move")
 
-    async def comments(self, user: User, board_id: str, task_id: str) -> list[Comment] | None:
+    async def comment_on_task(
+        self, user: User, board_id: str, task_id: str, body: str
+    ) -> tuple[str, datetime]:
+        """Adds a comment of the user to the task: its id, and when Tasks took it."""
+        created = await self._write(user, "POST", board_id, task_id, {"body": body}, "/comments")
+        try:
+            return str(created["id"]), datetime.fromisoformat(created["createdAt"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Tasks gave the new comment in an unexpected form.") from error
+
+    async def task_comments(self, user: User, board_id: str, task_id: str) -> list[Comment] | None:
         """The task's comments, oldest first; None if the board has no such task."""
         path = f"/api/boards/{board_id}/tasks/{task_id}/comments"
         found = await self._get(user, path, missing_ok=True)

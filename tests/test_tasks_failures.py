@@ -11,6 +11,14 @@ TASK = f"/contracts/v1/tasks/boards/{BOARD}/tasks/{tasks_id('WEB-1')}"
 # Each operation's method, path, query and body
 OPERATIONS = [
     pytest.param("POST", "/contracts/v1/tasks/boards/open", {}, None, id="open_boards"),
+    pytest.param("GET", "/contracts/v1/tasks/projects", {}, None, id="list_projects"),
+    pytest.param(
+        "POST",
+        "/contracts/v1/tasks/projects",
+        {},
+        {"name": "Q4 launch", "key_prefix": "LAUNCH"},
+        id="create_project",
+    ),
     pytest.param(
         "GET", "/contracts/v1/tasks/mine", {"zone": "Europe/Paris"}, None, id="list_my_tasks"
     ),
@@ -32,8 +40,14 @@ OPERATIONS = [
     ),
     pytest.param("PATCH", TASK, {}, {"priority": 1}, id="update_task"),
     pytest.param("POST", f"{TASK}/complete", {}, None, id="complete_task"),
+    pytest.param("DELETE", TASK, {}, None, id="delete_task"),
+    pytest.param("POST", f"{TASK}/comments", {}, {"body": "Soon?"}, id="comment_on_task"),
+    pytest.param(
+        "PUT", f"{TASK}/assignees", {}, {"assignees": ["mmaudet@twake.test"]}, id="assign_task"
+    ),
 ]
-WRITES = [each for each in OPERATIONS if each.id in ("create_task", "update_task", "complete_task")]
+# Every write but open_boards, which only reads boards from Tasks
+WRITES = [each for each in OPERATIONS if each.values[0] != "GET" and each.id != "open_boards"]
 PARAMETERS = ("method", "path", "params", "body")
 
 
@@ -129,7 +143,8 @@ async def test_only_open_boards_opens_tasks(
     response = await client.request(method, path, params=params, json=body, headers=AS_MMAUDET)
 
     assert response.status_code < 500, response.text
-    assert "/api/boards" not in [asked for asked, _ in boundary.tasks.requests]
+    asked = [(request.method, request.url.path) for request in boundary.requests]
+    assert ("GET", "/api/boards") not in asked
 
 
 @pytest.mark.parametrize(PARAMETERS, WRITES)

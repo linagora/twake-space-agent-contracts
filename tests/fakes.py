@@ -1869,11 +1869,18 @@ class TasksMember:
     user_id: str
     email: str
     role: str = "editor"
+    name: str | None = None
+    """The name they chose, else the one they last signed in with; None for someone who never
+    signed in. Tasks gives it with each person since 0.2.10."""
+
+    def person(self) -> dict[str, Any]:
+        """The member, as Tasks gives a person: an assignee, an author or a member of a board."""
+        return {"userId": self.user_id, "email": self.email, "name": self.name, "avatar": None}
 
 
 def tasks_member(uid: str, role: str = "editor") -> TasksMember:
     """The person of that uid, a member of a project, by the email of their token."""
-    return TasksMember(tasks_id(email_of(uid)), email_of(uid), role)
+    return TasksMember(tasks_id(email_of(uid)), email_of(uid), role, uid.capitalize())
 
 
 @dataclass
@@ -1895,6 +1902,11 @@ class TasksBoard:
     """Its sections in order, each with its id, name and category."""
     labels: dict[str, str] = field(default_factory=dict)
     """The names of its labels, by id."""
+    project_id: str = ""
+    """The id of its project: by default, that of every project of that name."""
+
+    def __post_init__(self) -> None:
+        self.project_id = self.project_id or tasks_id(f"project {self.project}")
 
 
 @dataclass
@@ -1925,15 +1937,17 @@ class TasksTask:
 
 @dataclass(frozen=True)
 class TasksPerson:
-    """Whom Tasks acts for: the uuid and the org_id LemonLDAP-NG gives it for the token."""
+    """Whom Tasks acts for: the uuid, the org_id and the email LemonLDAP-NG gives it for the
+    token."""
 
     user_id: str
     organization: str | None
     """None for a personal account, which Tasks takes a user without org_id for."""
+    email: str
 
 
 class FakeTasks:
-    """Twake Tasks 0.1.1, as the contracts call its REST API with the bearer's token.
+    """Twake Tasks 0.2.10, as the contracts call its REST API with the bearer's token.
 
     Tasks acts for the person of the token, by the uuid and org_id LemonLDAP-NG gives it, here
     derived from the token's subject. A board shows only to the members of its project, in their
@@ -1973,6 +1987,9 @@ class FakeTasks:
         self.unreadable_after_write = False
         """Whether Tasks answers 503 to a read once it took a write, as when it fails right after
         one."""
+        self.kept_prefixes = {"INBOX"}
+        """The key prefixes Tasks keeps for its own boards, such as INBOX for every Inbox, which
+        it refuses for a new board."""
 
     def board(self, name: str, key_prefix: str, *members: TasksMember, **more: Any) -> TasksBoard:
         """Arranges a board of that name, with the members of its project."""
@@ -2011,8 +2028,12 @@ class FakeTasks:
             return httpx.Response(status, json={"error": _ERRORS[status]})
         if self.unreadable_after_write and request.method == "GET" and self.writes:
             return httpx.Response(503, json={"error": "unavailable"})
-        person = TasksPerson(tasks_id(subject), self.organizations.get(subject, "linagora"))
+        person = TasksPerson(
+            tasks_id(subject), self.organizations.get(subject, "linagora"), subject
+        )
         params = request.url.params
+        if request.method == "POST" and request.url.path == "/api/boards":
+            return self._new_board(self.writes[-1][2], person, subject)
         if request.method != "GET":
             return self._write(request.method, request.url.path, self.writes[-1][2], person)
         if request.url.path == "/api/boards":
@@ -2022,6 +2043,8 @@ class FakeTasks:
                 key=lambda board: (not board.inbox, board.name),
             )
             return httpx.Response(200, json={"boards": [self._listed(b, person) for b in listed]})
+        if request.url.path == "/api/projects":
+            return httpx.Response(200, json={"projects": self._projects(person)})
         if request.url.path == "/api/my-tasks":
             return httpx.Response(
                 200,
@@ -2036,6 +2059,38 @@ class FakeTasks:
         if request.url.path == "/api/search":
             return self._search(person, params.get("q", "").strip())
         return self._board_read(request.url.path, person)
+
+    def _new_board(self, body: Any, person: TasksPerson, email: str) -> httpx.Response:
+        """A board outside any project, which starts a project of its own, named after it, with
+        the person as its admin and the sections Tasks gives a new board."""
+        if not isinstance(body, dict) or set(body) != {"name", "keyPrefix"}:
+            return _refused("invalid_request")
+        name = body["name"].strip() if isinstance(body["name"], str) else ""
+        prefix = body["keyPrefix"]
+        if not 1 <= len(name) <= 100 or not re.fullmatch(r"[A-Z][A-Z0-9]{0,9}", str(prefix)):
+            return _refused("invalid_request")
+        if prefix in self.kept_prefixes:
+            return httpx.Response(409, json={"error": "key_prefix_taken"})
+        number = len(self.boards)
+        board = TasksBoard(
+            tasks_id(f"board {number} {name}"),
+            name,
+            prefix,
+            [TasksMember(person.user_id, email, "admin")],
+            project=name,
+            organization=person.organization,
+            sections=[
+                {"id": tasks_id(f"section {number} {section}"), "name": section, "category": kind}
+                for section, kind in (
+                    ("To do", "unstarted"),
+                    ("In progress", "started"),
+                    ("Done", "completed"),
+                )
+            ],
+            project_id=tasks_id(f"project {number} {name}"),
+        )
+        self.boards[board.id] = board
+        return httpx.Response(201, json=self._board(board, person))
 
     def _welcome(self, person: TasksPerson, email: str) -> None:
         """What opening Tasks does first: it sets up the person's Inbox if they have none, and
@@ -2093,7 +2148,17 @@ class FakeTasks:
                 words.lower() in text.lower() for text in (task.title, task.description)
             )
 
-        return httpx.Response(200, json={"tasks": self._tasks_of(person, matches)[:SEARCH_LIMIT]})
+        found = self._tasks_of(person, matches)[:SEARCH_LIMIT]
+        # Since 0.2.10, the words of the description around them, for a title that lacks them
+        for item in found:
+            task = self.tasks[item["id"]]
+            at = task.description.lower().find(words.lower())
+            item["excerpt"] = (
+                task.description[max(0, at - 30) : at + len(words) + 60]
+                if at >= 0 and words.lower() not in task.title.lower()
+                else None
+            )
+        return httpx.Response(200, json={"tasks": found})
 
     def _board_read(self, path: str, person: TasksPerson) -> httpx.Response:
         found = re.fullmatch(r"/api/boards/([^/]+)(?:/tasks/([^/]+)/(description|comments))?", path)
@@ -2111,15 +2176,22 @@ class FakeTasks:
         return httpx.Response(200, json={"comments": task.comments})
 
     def _write(self, method: str, path: str, body: Any, person: TasksPerson) -> httpx.Response:
-        found = re.fullmatch(r"/api/boards/([^/]+)/tasks(?:/([^/]+)(?:/(complete|move))?)?", path)
+        found = re.fullmatch(
+            r"/api/boards/([^/]+)/tasks(?:/([^/]+)(?:/(complete|move|comments|assignees))?)?", path
+        )
         board = self.boards.get(found[1]) if found else None
         role = self._role(board, person) if board else None
         if found is None or board is None or role is None:
             return httpx.Response(404, json={"error": "not_found"})
+        # Any member comments, a viewer too, and on an archived board too
+        if method == "POST" and found[3] == "comments":
+            return self._comment(board, found[2], body, person)
         if role == "viewer":
             return httpx.Response(403, json={"error": "forbidden"})
         if board.archived:
             return httpx.Response(409, json={"error": "archived"})
+        if method == "DELETE":
+            return self._trash(board, found[2], found[3], body)
         if not isinstance(body, dict):
             return _refused("invalid_request")
         if found[2] is None:
@@ -2135,7 +2207,62 @@ class FakeTasks:
                 return self._complete(task, body)
             case "POST", "move":
                 return self._move(task, board, body)
+            case "PUT", "assignees":
+                return self._assign(task, board, body)
         return httpx.Response(404)
+
+    def _comment(
+        self, board: TasksBoard, task_id: str | None, body: Any, person: TasksPerson
+    ) -> httpx.Response:
+        """Adds a comment, by the person, to a task of the board, archived or trashed too."""
+        task = self.tasks.get(task_id or "")
+        if task is None or task.board != board.id:
+            return httpx.Response(404, json={"error": "not_found"})
+        if not isinstance(body, dict) or set(body) != {"body"} or not isinstance(body["body"], str):
+            return _refused("invalid_request")
+        text = body["body"].strip()
+        if not 1 <= len(text) <= 10_000:
+            return _refused("invalid_request")
+        member = next((m for m in board.members if m.user_id == person.user_id), None)
+        created = {
+            "id": tasks_id(f"comment {len(task.comments)} on {task.id}"),
+            "author": (member or TasksMember(person.user_id, person.email)).person()
+            | {"email": person.email},
+            "body": text,
+            "createdAt": "2026-10-07T09:30:00.000Z",
+        }
+        task.comments.append(created)
+        return httpx.Response(201, json={"id": created["id"], "createdAt": created["createdAt"]})
+
+    def _trash(
+        self, board: TasksBoard, task_id: str | None, then: str | None, body: Any
+    ) -> httpx.Response:
+        """Moves a task to the board's trash, with the subtasks the board shows at any depth."""
+        task = self.tasks.get(task_id or "")
+        # Unlike the other writes, it finds no archived or trashed task
+        if then or body is not None or task is None or task.board != board.id or task.hidden:
+            return httpx.Response(404, json={"error": "not_found"})
+        hiding = [task]
+        while hiding:
+            hidden = hiding.pop()
+            hidden.hidden = True
+            hiding.extend(
+                child
+                for child in self.tasks.values()
+                if child.parent_id == hidden.id and not child.hidden
+            )
+        return httpx.Response(204)
+
+    def _assign(self, task: TasksTask, board: TasksBoard, body: dict[str, Any]) -> httpx.Response:
+        """Assigns the task to these members of the board, and to no other."""
+        user_ids = body.get("userIds")
+        if set(body) != {"userIds"} or not isinstance(user_ids, list) or len(user_ids) > 50:
+            return _refused("invalid_request")
+        members = {member.user_id: member for member in board.members}
+        if not all(user_id in members for user_id in user_ids):
+            return _refused("invalid_assignee")
+        task.assignees = [members[user_id] for user_id in dict.fromkeys(user_ids)]
+        return httpx.Response(204)
 
     def _create(self, board: TasksBoard, body: dict[str, Any]) -> httpx.Response:
         # A task in a section, outside sections when sectionId is null, or a subtask
@@ -2282,7 +2409,7 @@ class FakeTasks:
             "canceledAt": "2026-10-06T16:00:00.000Z" if task.state == "canceled" else None,
             # Someone who left the board stays assigned, but is not shown
             "assignees": [
-                {"userId": member.user_id, "email": member.email}
+                member.person()
                 for member in sorted(board.members, key=lambda member: member.email)
                 if member.user_id in assigned
             ],
@@ -2292,11 +2419,20 @@ class FakeTasks:
 
     def _project(self, board: TasksBoard) -> dict[str, Any]:
         return {
-            "id": tasks_id(f"project {board.project}"),
+            "id": board.project_id,
             "name": board.project,
             "personal": board.inbox,
             "managed": board.managed,
         }
+
+    def _projects(self, person: TasksPerson) -> list[dict[str, Any]]:
+        """The projects the person is a member of, by name, as listing them reads them only."""
+        found: dict[str, dict[str, Any]] = {}
+        for board in self.boards.values():
+            role = self._role(board, person)
+            if role is not None:
+                found.setdefault(board.project_id, self._project(board) | {"role": role})
+        return sorted(found.values(), key=lambda project: str(project["name"]))
 
     def _listed(self, board: TasksBoard, person: TasksPerson) -> dict[str, Any]:
         return {
@@ -2331,8 +2467,7 @@ class FakeTasks:
             "version": 1,
             "role": self._role(board, person),
             "members": [
-                {"userId": member.user_id, "email": member.email}
-                for member in sorted(board.members, key=lambda member: member.email)
+                member.person() for member in sorted(board.members, key=lambda member: member.email)
             ],
             "labels": [{"id": label, "name": name} for label, name in board.labels.items()],
             "sections": board.sections,
