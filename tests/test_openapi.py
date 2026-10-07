@@ -332,6 +332,32 @@ async def test_each_published_application_is_named_in_plain_words(client: AsyncC
     assert problems == []
 
 
+async def test_mail_words_name_each_of_its_writes(client: AsyncClient) -> None:
+    # The harness asks the owner once for all the writes of an application, in its words: they must
+    # name every write of Mail, so that a merge that keeps the words of one contract fails
+    document = (await client.get("/openapi.json")).json()
+    words = document["x-twake-domains"]["mail"]["write"]
+    # What names each write of Mail, in English and in French
+    named = {
+        "create_reply_draft": ("drafts", "brouillons"),
+        "move_email": ("move", "déplacer"),
+        "archive_email": ("archive", "archiver"),
+        "trash_email": ("trash", "corbeille"),
+    }
+
+    writes = {
+        operation["operationId"]
+        for _, method, operation in operations_of(document)
+        if method != "get" and operation["tags"][0].startswith("mail.")
+    }
+
+    assert writes == set(named)
+    unnamed = [
+        name for name, (en, fr) in named.items() if en not in words["en"] or fr not in words["fr"]
+    ]
+    assert unnamed == []
+
+
 async def test_each_write_declares_its_risk(client: AsyncClient) -> None:
     # The harness confirms a write without a risk it knows each time, as a high one
     document = (await client.get("/openapi.json")).json()
