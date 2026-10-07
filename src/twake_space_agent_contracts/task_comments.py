@@ -4,7 +4,7 @@ the people who follow it."""
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, get_args
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -17,7 +17,9 @@ from twake_space_agent_contracts.previews import (
     Previewing,
     digest_of,
     excerpt,
+    longest_shown_whole,
     shown_size,
+    shown_whole,
 )
 from twake_space_agent_contracts.problems import invalid_request
 from twake_space_agent_contracts.task_writes import (
@@ -36,8 +38,9 @@ from twake_space_agent_contracts.tasks import (
     task_not_found,
 )
 
-LONGEST_COMMENT = 10_000
-"""The longest comment Tasks takes."""
+LONGEST_COMMENT = BUDGET // 2
+"""More characters than the preview of a comment ever shows whole, each taking two bytes at least
+of what the harness counts: Tasks itself takes 10,000."""
 # A mention, as Tasks finds them in a comment: @ and an email, at the start or after a blank
 MENTION = re.compile(r"(?:^|\s)@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]*[A-Za-z0-9])")
 
@@ -52,7 +55,8 @@ class NewComment(BaseModel):
         Field(
             min_length=1,
             max_length=LONGEST_COMMENT,
-            description="The comment, in Markdown, 10,000 characters at most.",
+            description="The comment, in Markdown, no longer than its preview shows whole: some "
+            "5,900 characters of plain text, fewer of accented letters or emoji.",
         ),
     ]
 
@@ -110,11 +114,10 @@ _WORDS: dict[Language, _Words] = {
 }
 
 
-def _commenting(
-    board: BoardContent, task: BoardTask, body: str, mentioned: list[str], language: Language
-) -> str:
-    """What commenting does, as the owner reads it: the comment, whole when it fits, the members
-    it mentions, and whom Tasks tells."""
+def _around(
+    board: BoardContent, task: BoardTask, mentioned: list[str], language: Language
+) -> tuple[str, str]:
+    """What the preview of a comment tells before it, and after it."""
     words = _WORDS[language]
     head = words.comment.format(**task_names(board, task, language)) + "\n"
     tail = words.told
@@ -122,9 +125,28 @@ def _commenting(
         one, several = words.mentions
         mentions = one if len(mentioned) == 1 else several
         tail = mentions.format(people=members_named(mentioned, language)) + "\n" + tail
-    # The comment takes what the rest leaves of the summary
-    room = BUDGET - shown_size(head) - shown_size("\n" + tail)
-    return head + excerpt(body, room, language) + "\n" + tail
+    return head, tail
+
+
+def _room(board: BoardContent, task: BoardTask, mentioned: list[str]) -> int:
+    """What the preview of a comment leaves of its summary for the comment, in whichever of its
+    languages leaves less."""
+    rooms = (
+        BUDGET - shown_size(head) - shown_size("\n" + tail)
+        for head, tail in (
+            _around(board, task, mentioned, language) for language in get_args(Language)
+        )
+    )
+    return min(rooms)
+
+
+def _commenting(
+    board: BoardContent, task: BoardTask, body: str, mentioned: list[str], language: Language
+) -> str:
+    """What commenting does, as the owner reads it: the comment, whole, the members it mentions,
+    and whom Tasks tells."""
+    head, tail = _around(board, task, mentioned, language)
+    return head + excerpt(body, _room(board, task, mentioned), language) + "\n" + tail
 
 
 def router(tasks: Tasks, caller: CallerDependency) -> APIRouter:
@@ -137,7 +159,9 @@ def router(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         summary="Comment on a task in Twake Tasks as the user",
         description=(
             "Adds a comment, as the user you act for, to a task of a board they are a member of, "
-            "a viewer too, as in Tasks: body is Markdown, 10,000 characters at most. @ and the "
+            "a viewer too, as in Tasks: body is Markdown, no longer than its preview shows "
+            "whole, which the owner reads before they confirm it, some 5,900 characters of plain "
+            "text, fewer of accented letters or emoji. @ and the "
             "email of a member of the board, such as @alice@example.com, mentions them, as "
             "mentioned gives back. Tasks tells the people who follow the task, in Tasks and by "
             "email: by default its creator, its assignees and those who commented on it, and the "
@@ -174,6 +198,14 @@ def router(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         if task is None:
             raise task_not_found(board_id, task_id)
         mentioned = _mentioned(board, body, user.email)
+        # The owner confirms a comment once they read it whole, whatever their language
+        room = _room(board, task, mentioned)
+        if not shown_whole(body, room):
+            longest = longest_shown_whole(body, room)
+            raise invalid_request(
+                "body: The comment is longer than its preview shows whole, which its owner reads"
+                f" before they confirm it: keep it to {longest:,} characters like these."
+            )
         # What the owner allows: a comment on this task, which tells these members
         summary = task.summary
         digest = digest_of(board_id, task_id, summary.key, summary.untrusted.title, mentioned)

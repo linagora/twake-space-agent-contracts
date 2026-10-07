@@ -273,18 +273,42 @@ def _cut(text: str, budget: int, language: Language, indent: str = "") -> str:
     return indent + kept.replace("\n", "\n" + indent) + "\n" + said
 
 
-def excerpt(text: str, budget: int, language: Language) -> str:
-    """The text a write would put, as its summary shows it: line by line, each line after a tab,
-    so that none passes for the summary's own, without what a reader does not see. Whole when it
-    takes no more than `budget` of the summary; else cut, with a line that says how much of it is
-    left out, never silently."""
+def _whole(text: str) -> tuple[str, str]:
+    """The text a write would put, without what a reader does not see, and as its summary shows it
+    whole: line by line, each line after a tab, so that none passes for the summary's own."""
     kept = "".join(
         character
         for character in _BREAKS.sub("\n", text)
         if character in "\n\t" or unicodedata.category(character) not in UNSEEN
     ).rstrip()
-    shown = "\t" + kept.replace("\n", "\n\t")
+    return kept, "\t" + kept.replace("\n", "\n\t")
+
+
+def excerpt(text: str, budget: int, language: Language) -> str:
+    """The text a write would put, as its summary shows it: line by line, each line after a tab,
+    so that none passes for the summary's own, without what a reader does not see. Whole when it
+    takes no more than `budget` of the summary; else cut, with a line that says how much of it is
+    left out, never silently."""
+    kept, shown = _whole(text)
     return shown if shown_size(shown) <= budget else _cut(kept, budget, language, "\t")
+
+
+def shown_whole(text: str, budget: int) -> bool:
+    """Whether the summary shows the text a write would put whole, in `budget` of it."""
+    return shown_size(_whole(text)[1]) <= budget
+
+
+def longest_shown_whole(text: str, budget: int) -> int:
+    """How many of the first characters of the text a write would put the summary shows whole, in
+    `budget` of it."""
+    shown, cut = 0, len(text) + 1
+    while cut - shown > 1:
+        middle = (shown + cut) // 2
+        if shown_whole(text[:middle], budget):
+            shown = middle
+        else:
+            cut = middle
+    return shown
 
 
 def day(value: date, language: Language) -> str:

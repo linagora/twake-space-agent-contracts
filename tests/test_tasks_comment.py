@@ -109,7 +109,7 @@ async def test_a_board_the_user_is_not_a_member_of_answers_like_an_unknown_one(
     [
         pytest.param({}, id="no body"),
         pytest.param({"body": " \n "}, id="a blank body"),
-        pytest.param({"body": "c" * 10_001}, id="a body over 10,000 characters"),
+        pytest.param({"body": "c" * 10_001}, id="a body longer than Tasks takes"),
         pytest.param({"body": "Soon?", "notify": False}, id="a field it does not take"),
     ],
 )
@@ -187,22 +187,63 @@ async def test_a_preview_tells_the_owner_what_the_comment_says_and_writes_nothin
     assert task.comments == []
 
 
-async def test_the_largest_comment_is_cut_in_its_preview(
+async def test_a_preview_names_ten_members_mentioned_at_most(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
-    # 10,000 characters of four bytes each, mentioning twelve members: the preview names ten
-    # members at most and cuts the comment, saying so, within what the harness shows
     members = [tasks_member(f"member{number:02}") for number in range(12)]
     task = boundary.tasks.task(website(boundary, MMAUDET, *members), "Fix the login page")
-    mentions = " ".join(f"@{member.email}" for member in members)
-    body = mentions + " " + "😀" * (10_000 - len(mentions) - 1)
+    body = " ".join(f"@{member.email}" for member in members) + " can you check?"
 
     told, _ = preview_of(await comment(client, task, asking_preview("en"), body=body))
 
-    assert "more characters are not shown)" in told
-    assert told.splitlines()[-2].endswith(
-        "and 2 others, whom Tasks tells too, and who then follow the task."
+    assert told.splitlines()[-2] == (
+        "It mentions "
+        + ", ".join(f"<{member.email}>" for member in members[:10])
+        + " and 2 others, whom Tasks tells too, and who then follow the task."
     )
+
+
+@pytest.mark.parametrize(
+    ("character", "most"),
+    [
+        pytest.param("c", range(5_900, 6_000), id="plain text"),
+        pytest.param("é", range(2_900, 3_000), id="accented letters"),
+        pytest.param("😀", range(1_450, 1_500), id="emoji"),
+    ],
+)
+async def test_a_comment_is_no_longer_than_its_preview_shows_whole(
+    client: AsyncClient, boundary: FakeBoundary, character: str, most: range
+) -> None:
+    # The owner confirms a comment they read whole: Tasks takes 10,000 characters, of which the
+    # preview shows fewer, the fewer the more bytes each takes
+    task = boundary.tasks.task(website(boundary), "Fix the login page")
+
+    async def shown_whole(count: int) -> bool:
+        """Whether the preview shows a comment of that many characters whole, or refuses it."""
+        body = character * count
+        response = await comment(client, task, asking_preview("fr"), body=body)
+        if response.status_code == 400:
+            assert response.json()["code"] == "invalid_request"
+            return False
+        summary, _ = preview_of(response)
+        assert f"\t{body}\n" in summary
+        return True
+
+    # The longest comment taken, between one character and the 10,000 Tasks takes
+    taken, refused = 1, 10_000
+    while refused - taken > 1:
+        middle = (taken + refused) // 2
+        if await shown_whole(middle):
+            taken = middle
+        else:
+            refused = middle
+    response = await comment(client, task, body=character * refused)
+
+    assert taken in most
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
+    assert f"keep it to {taken:,} characters" in response.json()["detail"]
+    assert boundary.tasks.writes == []
 
 
 async def test_the_owner_who_allowed_what_they_were_shown_comments(
