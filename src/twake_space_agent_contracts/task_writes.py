@@ -19,7 +19,7 @@ from twake_space_agent_contracts.previews import (
     day,
     digest_of,
     one_line,
-    person,
+    people,
     quoted,
     shown_size,
     time_of_day,
@@ -68,12 +68,6 @@ LISTED_MEMBERS = 20
 the space it is the project of."""
 SHOWN_SUBTASKS = 10
 """How many of the subtasks that go with a deleted task its preview names, at most."""
-MOST_PEOPLE = 10
-"""How many members a preview names in a list, at most."""
-PEOPLE_SIZE = BUDGET // 6
-"""What the members a preview names in a list take of its summary at most, as the harness counts
-it: so that members of a board, however many and however long their emails, leave room for the
-rest."""
 
 
 Title = Annotated[
@@ -477,28 +471,9 @@ def _due(on: date | str | None, at: str | None, zone: str | None, language: Lang
 
 
 def members_named(emails: list[str], language: Language) -> str:
-    """Members by the email they joined with, as a preview names them: the first ones, ten at most
-    and as many as fit in what a list takes of the summary, then how many others."""
-    named: list[str] = []
-    for email in emails[:MOST_PEOPLE]:
-        found = person(None, email, language)
-        if found is None:
-            continue
-        if shown_size(", ".join([*named, found])) > PEOPLE_SIZE:
-            break
-        named.append(found)
-    others = len(emails) - len(named)
-    if not others:
-        return ", ".join(named)
-    if not named:
-        if language == "fr":
-            return "1 membre" if others == 1 else f"{others} membres"
-        return "1 member" if others == 1 else f"{others} members"
-    if language == "fr":
-        rest = "1 autre" if others == 1 else f"{others} autres"
-        return f"{', '.join(named)} et {rest}"
-    rest = "1 other" if others == 1 else f"{others} others"
-    return f"{', '.join(named)} and {rest}"
+    """Members by the email they joined with, as a preview names them: the first ones, then how
+    many others."""
+    return people([(None, email) for email in emails], len(emails), language)
 
 
 def _change(label: str, value: str | None, before: str | None, words: _Words) -> str:

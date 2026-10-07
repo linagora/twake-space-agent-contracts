@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.mail import EXAMPLE_ID, UNTRUSTED, people
+from twake_space_agent_contracts.mail import EXAMPLE_ID, UNTRUSTED, people_of
 from twake_space_agent_contracts.mail.tmail import JMAP_ID, PreparedReply, ReplyDraft, TMail
 from twake_space_agent_contracts.previews import (
     BUDGET,
@@ -99,7 +99,7 @@ def _summary(reply: PreparedReply, text: str, language: Language) -> str:
     for header, shown, line in (("to", reply.to, words.to), ("cc", reply.cc, words.cc)):
         total = len(reply.draft.get(header, []))
         if total:
-            lines.append(line.format(people=people(shown, total, language)))
+            lines.append(line.format(people=people_of(shown, total, language)))
     lines.append(words.subject.format(subject=quoted(one_line(reply.subject), language)))
     if reply.reply_to_differs:
         lines.append(words.reply_to)
