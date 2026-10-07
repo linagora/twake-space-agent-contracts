@@ -64,7 +64,7 @@ def read_text(content: bytes, output: Output) -> None:
     titles = {"Title"}
     tables: list[list[list[list[str]]]] = []
     lists = unseen = 0
-    for event, element in package.parsed("content.xml"):
+    for event, element in package.parsed("content.xml", units=_PARAGRAPHS):
         tag = element.tag
         if _unseen(tag):
             unseen += 1 if event == "start" else -1
@@ -98,7 +98,6 @@ def read_text(content: bytes, output: Output) -> None:
                 layout.paragraph(output, text, level=1)
             else:
                 layout.paragraph(output, text, depth=lists - 1 if lists else None)
-            element.clear()
         elif tag in _CELLS and tables and tables[-1] and tables[-1][-1]:
             row = tables[-1][-1]
             repeated = min(_count(element.get(f"{_TABLE}number-columns-repeated")), MOST_COLUMNS)
@@ -110,7 +109,6 @@ def read_text(content: bytes, output: Output) -> None:
                 tables[-1][-1][-1].append(" ".join(layout.rows(cells)))
             else:
                 layout.table(output, cells)
-            element.clear()
 
 
 def read_spreadsheet(content: bytes, output: Output) -> None:
@@ -121,7 +119,8 @@ def read_spreadsheet(content: bytes, output: Output) -> None:
     sheet = _Sheet("", hidden=False)
     # How deep within tables the parser is: a cell may hold a table of its own
     tables = 0
-    for event, element in package.parsed("content.xml"):
+    units = frozenset({f"{_TABLE}table-row", f"{_STYLE}style"})
+    for event, element in package.parsed("content.xml", units=units):
         tag = element.tag
         if event == "start":
             if tag == f"{_TABLE}table":
@@ -139,7 +138,6 @@ def read_spreadsheet(content: bytes, output: Output) -> None:
                 hidden_styles.add(element.get(f"{_STYLE}name", ""))
         elif tag == f"{_TABLE}table-row" and tables == 1:
             sheet.add(element)
-            element.clear()
             output.tick()
         elif tag == f"{_TABLE}table":
             tables -= 1
@@ -154,7 +152,6 @@ def read_spreadsheet(content: bytes, output: Output) -> None:
                 more_rows=sheet.more_rows,
                 more_columns=sheet.more_columns,
             )
-            element.clear()
 
 
 def read_presentation(content: bytes, output: Output) -> None:
@@ -167,7 +164,7 @@ def read_presentation(content: bytes, output: Output) -> None:
     lines: list[str] = []
     notes: list[str] = []
     within_notes = 0
-    for event, element in package.parsed("content.xml"):
+    for event, element in package.parsed("content.xml", units=_SHAPES | {f"{_STYLE}style"}):
         tag = element.tag
         if event == "start":
             if tag == f"{_DRAW}page":
@@ -192,7 +189,6 @@ def read_presentation(content: bytes, output: Output) -> None:
                 titles.append(" ".join(" ".join(shown).split()))
             elif kind not in _MASTER_FIELDS:
                 lines.extend(shown)
-            element.clear()
         elif tag == f"{_DRAW}page":
             layout.slide(
                 output,
@@ -202,7 +198,6 @@ def read_presentation(content: bytes, output: Output) -> None:
                 lines=lines,
                 notes="\n".join(notes),
             )
-            element.clear()
 
 
 class _Sheet:

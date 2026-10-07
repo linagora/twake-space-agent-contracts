@@ -130,6 +130,20 @@ def child(element: Element | None, name: str) -> Element | None:
     return None
 
 
+def _handed(events: list[tuple[str, Element, Element | None, bool]]) -> Events:
+    """The events of a part parsed at a time, each handed over in turn; then the elements to let
+    go of, cleared, leave those they sit in, each of these rebuilt once."""
+    gone: dict[int, tuple[Element, set[int]]] = {}
+    for event, element, holder, letting_go in events:
+        yield event, element
+        if letting_go:
+            element.clear()
+            if holder is not None:
+                gone.setdefault(id(holder), (holder, set()))[1].add(id(element))
+    for holder, elements in gone.values():
+        holder[:] = [kept for kept in holder if id(kept) not in elements]
+
+
 def _named(name: str) -> str:
     """A name as expat gives it, <namespace>}<name>, as ElementTree writes it."""
     return "{" + name if "}" in name else name
@@ -160,33 +174,49 @@ class Package:
             return False
         return True
 
-    def parsed(self, name: str) -> Events:
-        """The start and the end of each element of an XML part, as the part unpacks: an element
-        comes whole at its end, until it is cleared. A part that declares a document type is
-        refused: no entity is ever declared, so none is expanded or fetched. The copies of content
-        that Office writes for the readers that do not know it are left out, which would give
-        their text twice. Between the parts of the XML parsed at a time, the reading stops once
-        its deadline passed."""
+    def parsed(self, name: str, units: frozenset[str] = frozenset()) -> Events:
+        """The start and the end of each element of an XML part, as the part unpacks. A unit, by
+        its name with or without its namespace, comes whole at its end, such as a paragraph with
+        its runs. Once handed over, a unit is let go of, as is any element that ends outside a
+        unit, so that the part's tree holds only what is open and the unit being read, whatever
+        the part holds.
+
+        A part that declares a document type is refused: no entity is ever declared, so none is
+        expanded or fetched. The copies of content that Office writes for the readers that do not
+        know it are left out, which would give their text twice. Between the parts of the XML
+        parsed at a time, the reading stops once its deadline passed."""
         builder = TreeBuilder()
         parser = expat.ParserCreate(namespace_separator="}")
-        events: list[tuple[str, Element]] = []
+        # Each start and end, with, for an end, the element it sits in and whether to let go of it
+        events: list[tuple[str, Element, Element | None, bool]] = []
+        # The elements started and not ended, the innermost last, each with whether it is a unit
+        opened: list[tuple[Element, bool]] = []
+        within_units = 0
         # How deep within such a copy the parser is
         within_copy = 0
 
         def start(tag: str, attributes: dict[str, str]) -> None:
-            nonlocal within_copy
+            nonlocal within_copy, within_units
             if within_copy or tag == _FALLBACK:
                 within_copy += 1
                 return
             named = {_named(key): value for key, value in attributes.items()}
-            events.append(("start", builder.start(_named(tag), named)))
+            element = builder.start(_named(tag), named)
+            unit = _named(tag) in units or local(tag) in units
+            within_units += unit
+            opened.append((element, unit))
+            events.append(("start", element, None, False))
 
         def end(tag: str) -> None:
-            nonlocal within_copy
+            nonlocal within_copy, within_units
             if within_copy:
                 within_copy -= 1
                 return
-            events.append(("end", builder.end(_named(tag))))
+            element = builder.end(_named(tag))
+            _, unit = opened.pop()
+            within_units -= unit
+            holder = opened[-1][0] if opened else None
+            events.append(("end", element, holder, unit or not within_units))
 
         def data(text: str) -> None:
             if not within_copy:
@@ -205,25 +235,28 @@ class Package:
         with self._archive.open(name) as part:
             while chunk := part.read(CHUNK):
                 parser.Parse(chunk, False)
-                yield from events
+                yield from _handed(events)
                 events.clear()
                 if len(chunk) == CHUNK:
                     self._output.tick()
             parser.Parse(b"", True)
-            yield from events
+            yield from _handed(events)
 
     def relationships(self, part: str) -> list[Relationship]:
         """The links from the part, or from the package itself for "", to the other parts of the
-        document: those outside it, such as web addresses, left out."""
+        document: those outside it, such as web addresses, left out. A part links to as many parts
+        at most as a zip holds files."""
         folder, name = posixpath.split(part)
         links = posixpath.join(folder, "_rels", f"{name}.rels")
         if not self.has(links):
             return []
-        found = []
+        found: list[Relationship] = []
         for event, element in self.parsed(links):
             if event != "end" or local(element.tag) != "Relationship":
                 continue
             if element.get("TargetMode") != "External":
+                if len(found) == MOST_FILES:
+                    raise Unreadable("a part links to more parts than a zip holds files")
                 target = unquote(element.get("Target", ""))
                 path = target[1:] if target.startswith("/") else posixpath.join(folder, target)
                 found.append(

@@ -105,7 +105,7 @@ def _sheet(package: Package, part: str, dates: frozenset[int], date1904: bool) -
     sheet = _Sheet()
     cells: dict[int, Value] = {}
     column = 0
-    for event, element in package.parsed(part):
+    for event, element in package.parsed(part, units=frozenset({"c"})):
         name = local(element.tag)
         if event == "start":
             if name == "row":
@@ -119,14 +119,12 @@ def _sheet(package: Package, part: str, dates: frozenset[int], date1904: bool) -
                 sheet.more_columns = True
             elif value != "":
                 cells[column] = value
-            element.clear()
         elif name == "row":
             if cells and len(sheet.rows) == MOST_ROWS:
                 sheet.more_rows = True
                 break
             if cells:
                 sheet.rows.append([cells.get(index, "") for index in range(1, max(cells) + 1)])
-            element.clear()
     return sheet
 
 
@@ -240,12 +238,11 @@ def _strings(package: Package, part: str, sheet: _Sheet) -> dict[int, str]:
         return strings
     last = max(shown)
     index = 0
-    for event, element in package.parsed(part):
+    for event, element in package.parsed(part, units=frozenset({"si"})):
         if event != "end" or local(element.tag) != "si":
             continue
         if index in shown:
             strings[index] = _text(run_text(element, _UNSEEN))
-        element.clear()
         index += 1
         if index > last:
             break

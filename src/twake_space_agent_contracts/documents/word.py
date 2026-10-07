@@ -46,7 +46,7 @@ def read(content: bytes, output: Output) -> None:
     document = package.main_part("word/document.xml")
     styles = _styles(package, document)
     tables: list[_Table] = []
-    for event, element in package.parsed(document):
+    for event, element in package.parsed(document, units=frozenset({"p"})):
         name = local(element.tag)
         if event == "start":
             if name == "tbl":
@@ -61,7 +61,6 @@ def read(content: bytes, output: Output) -> None:
                 tables[-1].rows[-1][-1].append(_text(element))
             else:
                 _paragraph(element, styles, output)
-            element.clear()
         elif name == "tbl" and tables:
             cells = _cells(tables.pop())
             # A table in a cell of another is part of that cell's text
@@ -69,7 +68,6 @@ def read(content: bytes, output: Output) -> None:
                 tables[-1].rows[-1][-1].append(" ".join(layout.rows(cells)))
             else:
                 layout.table(output, cells)
-            element.clear()
 
 
 def _cells(table: _Table) -> list[list[str]]:
@@ -148,7 +146,7 @@ def _styles(package: Package, document: str) -> dict[str, _Style]:
     styles: dict[str, _Style] = {}
     if not parts:
         return styles
-    for event, element in package.parsed(parts[0]):
+    for event, element in package.parsed(parts[0], units=frozenset({"style"})):
         if event != "end" or local(element.tag) != "style":
             continue
         style_id = attribute(element, "styleId")
@@ -160,5 +158,4 @@ def _styles(package: Package, document: str) -> dict[str, _Style]:
                 outline=_outline(properties),
                 listed=child(properties, "numPr") is not None,
             )
-        element.clear()
     return styles

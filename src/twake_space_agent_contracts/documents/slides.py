@@ -19,6 +19,8 @@ from twake_space_agent_contracts.documents.reading import Output
 # What holds no text a reader sees: the properties of a paragraph or of a run
 _UNSEEN = frozenset({"pPr", "rPr", "endParaRPr"})
 _TITLES = frozenset({"title", "ctrTitle"})
+# The elements of a slide that hold its text: its shapes, and the frames of its tables
+_SHAPES = frozenset({"sp", "graphicFrame"})
 # The placeholders a slide's master fills in, such as its number: not what the slide says
 _FOOTERS = frozenset({"sldNum", "dt", "ftr", "hdr"})
 
@@ -41,7 +43,7 @@ def _slide(package: Package, part: str, number: int, output: Output) -> None:
     hidden = False
     titles: list[str] = []
     lines: list[str] = []
-    for event, element in package.parsed(part):
+    for event, element in package.parsed(part, units=_SHAPES):
         name = local(element.tag)
         if event == "start":
             # Kept out of the slide show
@@ -53,10 +55,8 @@ def _slide(package: Package, part: str, number: int, output: Output) -> None:
                 titles.append(" ".join(text.split()))
             elif kind not in _FOOTERS and text:
                 lines.append(text)
-            element.clear()
         elif name == "graphicFrame":
             lines.extend(layout.rows(_cells(element)))
-            element.clear()
     layout.slide(
         output,
         number,
@@ -105,9 +105,7 @@ def _notes(package: Package, slide: str) -> str:
     ]
     notes = []
     for part in parts[:1]:
-        for event, element in package.parsed(part):
-            if event == "end" and local(element.tag) == "sp":
-                if _placeholder(element) == "body":
-                    notes.append(_shape_text(element))
-                element.clear()
+        for event, element in package.parsed(part, units=frozenset({"sp"})):
+            if event == "end" and local(element.tag) == "sp" and _placeholder(element) == "body":
+                notes.append(_shape_text(element))
     return "\n".join(note for note in notes if note)
