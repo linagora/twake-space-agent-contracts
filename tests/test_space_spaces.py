@@ -188,3 +188,21 @@ async def test_the_user_is_told_apart_whatever_the_case_of_their_email(
         ("alice", False),
         ("mmaudet", True),
     ]
+
+
+async def test_no_member_is_the_user_when_several_have_their_email(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Two accounts of the directory with the user's address, whatever its case: the contracts
+    # cannot tell which one is the user, and mark none, as they do for posts and reactions
+    twin = SpacePerson(space_uuid("former account"), "mmaudet2", "MMaudet@twake.test")
+    design = boundary.space.space("Design", {MMAUDET: "admin", twin: "viewer", ALICE: "editor"})
+
+    response = await client.get(f"/contracts/v1/space/spaces/{design.id}", headers=AS_MMAUDET)
+
+    assert response.status_code == 200, response.text
+    assert [(member["username"], member["you"]) for member in response.json()["members"]] == [
+        ("alice", False),
+        ("mmaudet", False),
+        ("mmaudet2", False),
+    ]

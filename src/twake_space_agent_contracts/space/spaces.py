@@ -104,20 +104,23 @@ class Space(BaseModel):
     untrusted: SpaceText
 
 
-def space_member(member: Member, user: User) -> SpaceMember:
-    """A member as the contracts give them, to the user."""
+def space_member(member: Member, me: str | None) -> SpaceMember:
+    """A member as the contracts give them, to the user, whose user id in the space is `me`, None
+    when the contracts cannot tell it."""
     return SpaceMember(
         user_id=member.user_id,
         username=member.username,
         email=member.email,
         role=member.role,
-        you=member.email.lower() == user.email,
+        you=member.user_id == me,
         untrusted=MemberText(display_name=line(member.display_name, LONGEST_NAME)[0]),
     )
 
 
 def space_of(detail: SpaceDetail, user: User) -> Space:
     """A space as read_space gives it, to the user."""
+    found = detail.member_named(user.email)
+    me = found.user_id if found else None
     linked = detail.resources
     return Space(
         space_id=detail.space_id,
@@ -129,7 +132,7 @@ def space_of(detail: SpaceDetail, user: User) -> Space:
         mailbox_id=linked.get("mailbox"),
         calendar_id=linked.get("calendar"),
         drive_id=linked.get("drive"),
-        members=[space_member(member, user) for member in detail.members],
+        members=[space_member(member, me) for member in detail.members],
         groups=[
             SpaceGroup(
                 group_id=group.group_id,

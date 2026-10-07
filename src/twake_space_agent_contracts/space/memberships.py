@@ -194,6 +194,8 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     ) -> SpaceMember | JSONResponse:
         detail = await _administered(space, user, space_id)
         member = _member(detail, user_id)
+        found = detail.member_named(user.email)
+        me = found.user_id if found else None
         # What the owner allows: the member as they are
         digest = digest_of(space_id, user_id, member.email, member.role)
         if preview.asked:
@@ -201,9 +203,9 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
             return preview.answer(summary, digest)
         preview.check(digest)
         if member.role == changed.role:
-            return space_member(member, user)
+            return space_member(member, me)
         await space.set_role(user, space_id, user_id, changed.role)
-        return space_member(replace(member, role=changed.role), user)
+        return space_member(replace(member, role=changed.role), me)
 
     return routes
 
@@ -235,7 +237,8 @@ def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     ) -> SpaceMember | JSONResponse:
         detail = await _administered(space, user, space_id)
         member = _member(detail, user_id)
-        removed = space_member(member, user)
+        found = detail.member_named(user.email)
+        removed = space_member(member, found.user_id if found else None)
         # What the owner allows: the member as they are
         digest = digest_of(space_id, user_id, member.email, member.role)
         if preview.asked:
