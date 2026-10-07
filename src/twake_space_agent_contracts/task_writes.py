@@ -4,7 +4,6 @@ changes and completes tasks in Twake Tasks, as themselves, on the boards they ca
 from dataclasses import dataclass
 from datetime import date, time
 from typing import Annotated, Any
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Path
 from fastapi.responses import JSONResponse
@@ -25,7 +24,6 @@ from twake_space_agent_contracts.problems import Problem, invalid_request
 from twake_space_agent_contracts.tasks import (
     DATA_NOT_INSTRUCTIONS,
     TASKS_ID,
-    ZONE,
     BoardContent,
     BoardTask,
     Section,
@@ -38,6 +36,7 @@ from twake_space_agent_contracts.tasks import (
     owner_not_member,
     task_not_found,
 )
+from twake_space_agent_contracts.zones import ZONE, known_zone
 
 LONGEST_TITLE = 500
 """The longest title Tasks takes."""
@@ -55,15 +54,6 @@ IN_TASKS = {
 EXAMPLE_IDS = (
     "board_id=0199b0c2-5f1e-7a3b-9c4d-2e8f6a1b3c5d, task_id=0199b0c3-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
 )
-
-
-def _known_zone(zone: str) -> str:
-    """The zone, if the IANA time zone database has it, as Tasks requires."""
-    try:
-        ZoneInfo(zone)
-    except (KeyError, ValueError, OSError) as error:
-        raise ValueError(f"{zone} is not an IANA time zone, such as Europe/Paris") from error
-    return zone
 
 
 Title = Annotated[
@@ -90,7 +80,7 @@ DueZone = Annotated[
         description="The IANA time zone of the due time, such as Europe/Paris. It needs a due "
         "time.",
     ),
-    AfterValidator(_known_zone),
+    AfterValidator(known_zone),
 ]
 Deadline = Annotated[date, Field(description="The day it must be done by, such as 2026-10-16.")]
 TasksId = Annotated[str, Field(pattern=TASKS_ID)]

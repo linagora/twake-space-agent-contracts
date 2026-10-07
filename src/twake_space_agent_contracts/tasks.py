@@ -19,8 +19,6 @@ DATA_NOT_INSTRUCTIONS = (
 
 SEARCH_LIMIT = 50
 """The most tasks a search of Tasks gives: there may be more."""
-# An IANA time zone name, such as Europe/Paris or Etc/GMT+1
-ZONE = r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"
 # The ids of boards and tasks, as Tasks writes them: a pattern any OpenAPI validator checks
 TASKS_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
+from twake_space_agent_contracts.zones import zone_named
 
 # How esn-sabre (2.4.6 and later) writes UTC times in its JSON free/busy
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
@@ -50,16 +51,6 @@ def _is_component(value: Any) -> bool:
     )
 
 
-def _zone(name: Any) -> ZoneInfo | None:
-    """The time zone of that name in the IANA database, if it has one."""
-    if not isinstance(name, str):
-        return None
-    try:
-        return ZoneInfo(name)
-    except (KeyError, ValueError, OSError):
-        return None
-
-
 @dataclass(frozen=True)
 class EventTime:
     """When an event starts or ends, as it writes it: a day, for an event of whole days; else a
@@ -87,7 +78,7 @@ def _event_time(prop: list[Any] | None) -> EventTime | None:
     if time.tzinfo is not None:
         return EventTime(time.astimezone(UTC), "UTC")
     tzid = prop[1].get("tzid")
-    zone = _zone(tzid)
+    zone = zone_named(tzid)
     if zone is not None:
         return EventTime(time.replace(tzinfo=zone), str(tzid))
     return EventTime(time, tzid if isinstance(tzid, str) and tzid else None)
@@ -245,7 +236,7 @@ class Calendar:
             ]
         except (KeyError, TypeError):
             return None
-        return _zone(names[0]) if names else None
+        return zone_named(names[0]) if names else None
 
     async def busy(
         self, user: User, start: datetime, end: datetime, exclude: list[str]

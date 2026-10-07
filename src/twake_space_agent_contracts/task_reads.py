@@ -12,7 +12,6 @@ from twake_space_agent_contracts.tasks import (
     DATA_NOT_INSTRUCTIONS,
     SEARCH_LIMIT,
     TASKS_ID,
-    ZONE,
     TaskList,
     Tasks,
     TaskSummary,
@@ -21,6 +20,7 @@ from twake_space_agent_contracts.tasks import (
     owner_not_member,
     task_not_found,
 )
+from twake_space_agent_contracts.zones import ZONE
 
 LONGEST_DESCRIPTION = 10_000
 LONGEST_COMMENT = 2_000
