@@ -4,8 +4,9 @@ which of those applications it publishes."""
 import os
 from dataclasses import dataclass, field
 
-# What the service published before PUBLISHED_APPS existed, and still publishes without it
-PUBLISHED_BY_DEFAULT = frozenset({"events", "calendar"})
+# What the service published before PUBLISHED_APPS existed, but for the events it no longer has,
+# and still publishes without it
+PUBLISHED_BY_DEFAULT = frozenset({"calendar"})
 
 
 @dataclass(frozen=True)

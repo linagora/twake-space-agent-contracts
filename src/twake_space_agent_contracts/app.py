@@ -1,4 +1,3 @@
-import os
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -6,7 +5,6 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI
-from psycopg_pool import AsyncConnectionPool
 
 from twake_space_agent_contracts import applications, documents, problems
 from twake_space_agent_contracts.caller import TokenVerifier, caller_dependency
@@ -54,22 +52,18 @@ class Contracts(FastAPI):
 
 
 def create_app(
-    database_url: str,
     settings: Settings,
     http: httpx.AsyncClient | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
     published = applications.published(settings.published_apps)
-    pool = AsyncConnectionPool(database_url, open=False)
     http = http or httpx.AsyncClient(timeout=10)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        await pool.open()
         try:
             yield
         finally:
-            await pool.close()
             await http.aclose()
 
     caller = caller_dependency(TokenVerifier(settings, http, clock))
@@ -79,7 +73,7 @@ def create_app(
         lifespan=lifespan,
     )
     problems.install(app)
-    context = applications.Context(settings, pool, http, caller, clock)
+    context = applications.Context(settings, http, caller, clock)
     for application in published:
         for router in application.routers(context):
             app.include_router(router)
@@ -91,4 +85,4 @@ def create_app_from_env() -> FastAPI:
     # Its settings and the tokens it handles stay the service's own: the processes it starts to
     # read documents may not inspect it
     documents.forbid_inspection()
-    return create_app(os.environ["DATABASE_URL"], Settings.from_env())
+    return create_app(Settings.from_env())

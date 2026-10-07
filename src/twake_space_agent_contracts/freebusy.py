@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from pydantic import AwareDatetime, BaseModel
 
-from twake_space_agent_contracts.calendar import BusySlot, Calendar
+from twake_space_agent_contracts.calendar import INVITATION_UID, BusySlot, Calendar
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.problems import invalid_request
 
@@ -52,8 +52,8 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             "deciding about, such as an invitation, by passing their UIDs as exclude: an "
             "invitation waiting for an answer is already in the user's calendar, so without "
             "exclude it makes the user look busy. free is true when no busy slot is left. "
-            "Example, for an invitation whose event has data.object.uid twake-space-e2e-a and "
-            "takes place from 17:00 to 18:00 in Paris: start=2026-10-13T17:00:00+02:00, "
+            "Example, for an invitation to the event of UID twake-space-e2e-a, which takes "
+            "place from 17:00 to 18:00 in Paris: start=2026-10-13T17:00:00+02:00, "
             "end=2026-10-13T18:00:00+02:00, exclude=twake-space-e2e-a."
         ),
     )
@@ -79,8 +79,7 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             # into a list for a schema of type array
             Query(
                 default_factory=list,
-                description="UIDs of the calendar events to leave out. For an invitation, its "
-                "UID is data.object.uid of the invitation event.",
+                description=f"UIDs of the calendar events to leave out. {INVITATION_UID}",
             ),
         ],
     ) -> FreeBusy:

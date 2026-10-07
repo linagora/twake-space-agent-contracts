@@ -22,7 +22,7 @@ On a Drive contract, APISIX also passes the token of the user's Drive instance, 
 
 A contract belongs to the application its id starts with, its domain, such as `calendar` for `calendar.freebusy.read.v1`. Each application is declared once, in [`applications.py`](src/twake_space_agent_contracts/applications.py): its domain, the words the harness names it with, and the routers of its contracts, one per contract.
 
-The service publishes only the applications `PUBLISHED_APPS` names, `events` and `calendar` when it is unset or empty: it serves their contracts and describes them in its OpenAPI document, while the paths of any other application answer 404 `not_found`, like a path the service never had. The operator keeps it equal to the applications APISIX routes, so that an application leaves the agents' tools when it leaves the gateway. A name the service does not know stops it from starting. `events`, the assistant's own feed, follows the setting like any other application.
+The service publishes only the applications `PUBLISHED_APPS` names, `calendar` when it is unset or empty: it serves their contracts and describes them in its OpenAPI document, while the paths of any other application answer 404 `not_found`, like a path the service never had. The operator keeps it equal to the applications APISIX routes, so that an application leaves the agents' tools when it leaves the gateway. A name the service does not know stops it from starting, `events` among them since [`events.read.v1` was retired](#eventsreadv1-retired).
 
 Before an assistant first reads in an application, and before it first writes there, the harness asks its owner, naming the application and saying what reading or writing covers there. It takes those words from the root of the OpenAPI document, in `x-twake-domains`, which holds the published applications only:
 
@@ -46,7 +46,7 @@ The words are in English and in French, addressed to the owner, and plain text o
 
 ### Adding an application
 
-An application comes as a module of its own, as Calendar does: its client, its `<APP>_URL` setting, its typed problems, its routers, one per contract, its tests at the HTTP boundary and its section below. It is declared by one entry of `APPLICATIONS`, in `applications.py`: its domain, its words, and a function that builds its routers from the service's settings, events database, HTTP client and caller dependency. The tests publish every declared application; a deployment publishes it once `PUBLISHED_APPS` names it.
+An application comes as a module of its own, as Calendar does: its client, its `<APP>_URL` setting, its typed problems, its routers, one per contract, its tests at the HTTP boundary and its section below. It is declared by one entry of `APPLICATIONS`, in `applications.py`: its domain, its words, and a function that builds its routers from the service's settings, HTTP client and caller dependency. The tests publish every declared application; a deployment publishes it once `PUBLISHED_APPS` names it.
 
 ### Putting an application in service
 
@@ -66,25 +66,20 @@ To switch an application off, take it out of `PUBLISHED_APPS`: its paths answer 
 Every contract keeps the rules of the capability catalog:
 
 - A `GET` contract reads, and any other writes. Every write declares in `x-twake-risk` whether it is `low`, which the owner's consent to write in its application covers, or `high`, which the owner confirms call by call; the harness takes a write that declares neither for a high one, and the tests refuse it.
-- Every operation's description ends with a worked call, its values in the exact format the gateway checks: `Example: event_id=f7c9….`, or `Example, <what it is an example of>: name=value, name=value.`, and `Example: (no parameters).` for an operation that takes none. A list gives its name once per value, and a body is written `body=<JSON>`. The tests check each value against the operation's schema in the document, as the gateway does.
+- Every operation's description ends with a worked call, its values in the exact format the gateway checks: `Example: email_id=0f9c….`, or `Example, <what it is an example of>: name=value, name=value.`, and `Example: (no parameters).` for an operation that takes none. A list gives its name once per value, and a body is written `body=<JSON>`. The tests check each value against the operation's schema in the document, as the gateway does.
 - The schema of a parameter or of a body is written whole in its operation, without a reference to the document's components: the harness gives it to the model as it is.
 - A contract that makes the application notify other people says so in its description, as `accept_invitation` does of the organizer.
 - Text other people wrote, which an agent reads as data and never as instructions, comes back in an `untrusted` object, separately from what the contract computed.
 - A write that can tell what a call would do without doing it declares `x-twake-preview: true`, and its owner reads that rather than the call when the harness asks them: see [Previews](#previews).
 
-### `events.read.v1`
+### `events.read.v1`, retired
 
-Reads the workplace events stored for the user the agent acts for: those whose targets name the user's email (`data.targets[].native_id`). An event sent to another address of the user, such as an alias, is not found.
+`read_event` and `list_events` read the workplace events stored for the user, which a Kafka bus brought and its storage wrote in the `workplace_events` table of a PostgreSQL database. Nothing writes that table since the bus was removed in October 2026: the harness now hears from RabbitMQ of what concerns an assistant, such as an invitation, with the UID of its event, which `accept_invitation` takes. The two contracts are gone from the service and from its OpenAPI document, and the service's only use of a database with them:
 
-| Operation | Request | Answer |
-|---|---|---|
-| `read_event` | `GET /contracts/v1/events/{event_id}` | the event, if the user is one of its targets |
-| `list_events` | `GET /contracts/v1/events?type=…&limit=…` | `{"events": [...]}`, the user's events newest first |
-
-- `limit` goes from 1 to 100 and is 20 by default.
-- Pass `type=com.twake.calendar.event.invited.v1` to list meeting invitations.
-- An event the user is not a target of answers exactly like an unknown one, so the contract never reveals that an event exists.
-- The title of the event's object, which its author wrote, comes back in `untrusted.title` rather than in `data.object`, where the rest is what the producer computed, such as the `uid` and the times of an invitation.
+- `events` is no longer an application of the service. It is not published whatever `PUBLISHED_APPS` says, as it was, and a setting that still names it stops the service from starting.
+- An operator takes `events` out of `PUBLISHED_APPS` with the new image, gives the OpenAPI document a new address, then removes the gateway's routes of `events`, as for [switching an application off](#putting-an-application-in-service).
+- The service reads neither `DATABASE_URL` nor any other setting of a database, and needs no user of the events database: a deployment can drop both, and the service ignores a `DATABASE_URL` it is still given.
+- `sql/workplace_events.sql`, the reference schema of the table it read, is gone.
 
 ### `calendar.freebusy.read.v1`
 
@@ -104,16 +99,18 @@ Accepts, as the user, an invitation the user received: only their own participat
 
 | Operation | Request | Answer |
 |---|---|---|
-| `accept_invitation` | `POST /contracts/v1/calendar/invitations/{event_id}/accept` | `{"event_id", "uid", "partstat": "ACCEPTED"}` |
+| `accept_invitation` | `POST /contracts/v1/calendar/invitations/accept` `{"uid"}` | `{"uid", "partstat": "ACCEPTED"}` |
 
-- `event_id` is the id of a stored invitation (`com.twake.calendar.event.invited.v1`) sent to the user; its `data.object.uid` names the calendar event.
+- `uid` is the UID of the calendar event the invitation is for, which the harness reads in the invitation esn-sabre publishes on RabbitMQ for each invitee, and gives the model with it. It comes in the body, which holds any text iCalendar allows in a UID, slashes included: the gateway routes a path parameter as one segment. The body takes no other field.
 - The service finds the user's own copy of the event with the JSON `REPORT /dav/calendars/<user id>.json` of esn-sabre on `{"uid"}`, sets `PARTSTAT=ACCEPTED` on the user's `ATTENDEE`, and puts the event back in jCal. esn-sabre then sends the iTIP reply to the organizer.
+- A user who is not invited, as their calendars have no copy of the event, as their copy does not list them as an attendee, or as they organize it, whom Twake Calendar lists among its attendees too, as its chair, is answered `invitation_not_found` exactly as for an unknown UID, before anything else is checked: the contract never reveals that an event exists, and the organizer's assistant cannot accept the meeting the organizer called.
 - Nothing else in the event changes: esn-sabre refuses an attendee who changes what the organizer set.
-- A recurring invitation is refused, since the stored invitation does not say which occurrence it is about: the user answers it in Calendar. So is a cancelled event, which stays in the user's calendar but whose organizer esn-sabre would not tell.
+- A recurring invitation is refused, since a UID names the whole series and not which of its occurrences the invitation is about: the user answers it in Calendar. So is a cancelled event, which stays in the user's calendar but whose organizer esn-sabre would not tell.
 - The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
 - Agents call it only once the user has said yes to this invitation; approval happens in the conversation for now.
 - It is a low-risk write (`x-twake-risk: low`): the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
 - It tells what it would do ([Previews](#previews)): the event's title, when it takes place and who organizes it, from the user's copy of the event, its times in the user's time zone. That zone is the one Calendar gives (`POST /api/configurations`, `core.datetime`), the deployment's when the user set none; without one the IANA database has, the times are the event's own, its zone named beside them. The digest covers the event as the user would accept it, where it is: a call made after the organizer changed it answers `changed_since_preview`.
+- It changed in place in October 2026, before anything used it in production, and stays `calendar.invitation.accept.v1`: it took the id of an invitation stored in the events database, in its path (`POST /contracts/v1/calendar/invitations/{event_id}/accept`), and answered `event_id` too. `invitation_not_in_calendar` and `not_an_attendee`, which it answered then, are `invitation_not_found` now.
 
 ### `calendar.event.create.v1`
 
@@ -521,9 +518,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 401 | `missing_drive_token` | a Drive contract without the user's Drive token |
 | 403 | `forbidden_role` | the user is a viewer of the board: they only read it |
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
-| 404 | `event_not_found` | no event with this id concerns the user |
-| 404 | `invitation_not_found` | no invitation with this id was sent to the user |
-| 404 | `invitation_not_in_calendar` | the user's calendars no longer have the invitation, which may have been deleted |
+| 404 | `invitation_not_found` | no invitation to an event of this UID was sent to the user: their calendars have no copy of the event, their copy does not list them as an attendee, or they organize it |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `chat_account_not_found` | Chat has no account for the user's email |
 | 404 | `room_not_found` | the user has joined no room with this id |
@@ -538,7 +533,6 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `contacts_user_not_found` | Contacts has no user with the user's email |
 | 404 | `address_book_not_found` | the user reads no address book with this id: neither their own, nor one shared with them, nor their domain's |
 | 404 | `contact_not_found` | the address book has no contact with this id |
-| 409 | `not_an_attendee` | the invitation in the user's calendar does not list the user as an attendee |
 | 409 | `changed_since_preview` | what the call acts on changed since its owner was shown what it would do: nothing was done |
 | 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series |
 | 409 | `invitation_cancelled` | the organizer cancelled the event |
@@ -582,14 +576,9 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 
 Routing errors, such as an unknown path, use the same format, with a `code` named after their HTTP status (`not_found`, `method_not_allowed`).
 
-## The table it reads
-
-[`sql/workplace_events.sql`](sql/workplace_events.sql) is the reference schema of `workplace_events`. Storage writes it from `twake.workplace.events.v1`, and storage's migration must create exactly this table and its indexes, including the one on the targets' emails the service searches by. The service only reads it, so give it a read-only user.
-
 ## Run
 
 ```sh
-DATABASE_URL=postgresql://reader:secret@localhost:5432/events \
 OIDC_ISSUER=https://sign-up.dev.twake.lin-saas.com/ \
 CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
   uv run uvicorn --factory twake_space_agent_contracts.app:create_app_from_env --port 8080
@@ -597,12 +586,11 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 
 | Variable | |
 |---|---|
-| `DATABASE_URL` | the events database, as a read-only user |
 | `OIDC_ISSUER` | the issuer of the users' tokens, exactly as in their `iss` claim |
 | `OIDC_AUDIENCE` | the audience the tokens must have, `twake-space-agents` by default |
 | `OIDC_JWKS_URL` | the issuer's signing keys, `<issuer>/oauth2/jwks` by default, where LemonLDAP-NG publishes them |
 | `CALENDAR_URL` | the Calendar side service, which Calendar and Contacts go through |
-| `PUBLISHED_APPS` | the applications the service publishes, by domain, comma separated: `events,calendar` when unset or empty (see [Applications](#applications)) |
+| `PUBLISHED_APPS` | the applications the service publishes, by domain, comma separated: `calendar` when unset or empty (see [Applications](#applications)) |
 | `CHAT_URL` | the gateway's outbound route to Synapse, which adds the token of the contracts' application service; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `CHAT_GATEWAY_KEY` | the key the gateway's outbound route to Synapse admits, so that only this service uses the application service's token: sent in `apikey` on each call to `CHAT_URL`, and to no other application; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `MATRIX_SERVER_NAME` | the name of Chat's homeserver, which ends its users' Matrix ids; needed once `PUBLISHED_APPS` names `chat`, and only then |
@@ -617,7 +605,7 @@ The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user
 
 ## Test
 
-The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, with esn-sabre's address books behind its `/dav` proxy and its search across them, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. The documents the fake cozy-stack serves are built in the tests, by python-docx, python-pptx and openpyxl, which only the tests use, or by hand, as are OpenDocument files, PDFs and the documents crafted against a reader, and each is read in its own process, as the service reads them. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
+The tests call the HTTP API, and need neither a database nor Docker. LemonLDAP-NG's signing keys, the Calendar side service, with esn-sabre's address books behind its `/dav` proxy and its search across them, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. The documents the fake cozy-stack serves are built in the tests, by python-docx, python-pptx and openpyxl, which only the tests use, or by hand, as are OpenDocument files, PDFs and the documents crafted against a reader, and each is read in its own process, as the service reads them. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
 
 ```sh
 uv run pytest

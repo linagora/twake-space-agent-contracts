@@ -101,7 +101,6 @@ async def test_a_reading_that_takes_more_memory_than_given_is_refused(
 SERVICE_STARTED = """
 import ctypes, os
 os.environ |= {
-    "DATABASE_URL": "postgresql://reader@localhost/events",
     "OIDC_ISSUER": "https://sign-up.test/",
     "CALENDAR_URL": "https://calendar.test",
 }
@@ -168,9 +167,10 @@ async def test_an_owner_has_one_document_read_at_a_time(monkeypatch: pytest.Monk
 async def test_a_reading_process_starts_with_nothing_of_the_service_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Where the service's settings are, such as the password of its database: the process starts
-    # without any environment, isolated, which also leaves out any setting of Python's own
-    monkeypatch.setenv("DATABASE_URL", "postgresql://reader:secret@db/events")
+    # Where the service's settings are, such as the key of the gateway's route to Synapse: the
+    # process starts without any environment, isolated, which also leaves out any setting of
+    # Python's own
+    monkeypatch.setenv("CHAT_GATEWAY_KEY", "key-of-the-contracts-consumer")
     started: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     start = asyncio.create_subprocess_exec
 

@@ -20,6 +20,12 @@ SABRE_TIME = "%Y%m%dT%H%M%SZ"
 RECURRENCE = {"rrule", "rdate", "recurrence-id"}
 # Who wrote the events the contracts add, as iCalendar asks every calendar to say
 PRODID = "-//Linagora//Twake Space agent contracts//EN"
+INVITATION_UID = (
+    "An invitation's UID is that of its calendar event, as the harness gives it with the "
+    "invitation."
+)
+"""Where agents find the UID of an invitation, which accept_invitation takes and read_freebusy
+may leave out."""
 
 
 class BusySlot(BaseModel):
@@ -193,8 +199,12 @@ class CalendarEvent:
 
     def accepted_by(self, email: str) -> "CalendarEvent | None":
         """The event with the participation of that user accepted, and nothing else changed;
-        None if it does not invite them. Addresses compare lowercased, as sabre's iTIP broker
-        compares them."""
+        None if it does not invite them: if it does not list them as an attendee, or if they
+        organize it, whom Twake Calendar lists among its attendees too, as its chair. Addresses
+        compare lowercased, as sabre's iTIP broker compares them."""
+        email = email.lower()
+        if (self.organizer[1] or "").lower() == email:
+            return None
         address = f"mailto:{email}"
         jcal = copy.deepcopy(self.jcal)
         invited = False

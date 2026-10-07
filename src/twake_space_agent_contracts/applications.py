@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass
 
 import httpx
 from fastapi import APIRouter
-from psycopg_pool import AsyncConnectionPool
 
 from twake_space_agent_contracts import (
     boards,
@@ -14,7 +13,6 @@ from twake_space_agent_contracts import (
     drive_create,
     drive_files,
     event_create,
-    events,
     freebusy,
     invitations,
     task_reads,
@@ -41,8 +39,6 @@ class Context:
     """What the routers of an application are built from."""
 
     settings: Settings
-    pool: AsyncConnectionPool
-    """The events database."""
     http: httpx.AsyncClient
     caller: CallerDependency
     clock: Callable[[], float]
@@ -83,7 +79,7 @@ def _calendar(context: Context) -> list[APIRouter]:
     calendar = Calendar(context.settings.calendar_url, context.http)
     return [
         freebusy.router(calendar, context.caller),
-        invitations.router(context.pool, calendar, context.caller),
+        invitations.router(calendar, context.caller),
         event_create.router(calendar, context.caller),
     ]
 
@@ -167,17 +163,6 @@ def _tasks(context: Context) -> list[APIRouter]:
 
 
 APPLICATIONS = (
-    Application(
-        domain="events",
-        name=Words(en="Workplace events", fr="Événements de l'espace de travail"),
-        read=Words(
-            en="read the events of your workplace that concern you, such as your invitations",
-            fr="lire les événements de ton espace de travail qui te concernent, comme tes"
-            " invitations",
-        ),
-        write=None,
-        routers=lambda context: [events.router(context.pool, context.caller)],
-    ),
     Application(
         domain="calendar",
         name=Words(en="Twake Calendar", fr="Twake Agenda"),
