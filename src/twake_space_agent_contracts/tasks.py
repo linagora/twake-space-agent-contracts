@@ -1,4 +1,4 @@
-"""Twake Tasks (0.1.1), called as the user with their own token: Tasks acts for the uuid of the
+"""Twake Tasks (0.2.10), called as the user with their own token: Tasks acts for the uuid of the
 token's user in their org_id, and shows them the boards of the projects they are a member of."""
 
 from collections.abc import Callable
@@ -326,8 +326,9 @@ class Tasks:
         """The boards of the projects the user is a member of: their Inbox, their favorite
         boards, then the others by name.
 
-        As opening the Tasks web app does, this sets up the user's Inbox if they have none, and
-        makes them a member of the projects they were invited to: never a read."""
+        As opening the Tasks web app does, this sets up the user's Inbox if they have none, makes
+        them a member of the projects they were invited to, and gives their memberships the name
+        they signed in with: never a read."""
         found = await self._get(user, "/api/boards")
         try:
             return [

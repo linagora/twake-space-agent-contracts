@@ -1868,11 +1868,18 @@ class TasksMember:
     user_id: str
     email: str
     role: str = "editor"
+    name: str | None = None
+    """The name they chose, else the one they last signed in with; None for someone who never
+    signed in. Tasks gives it with each person since 0.2.10."""
+
+    def person(self) -> dict[str, Any]:
+        """The member, as Tasks gives a person: an assignee, an author or a member of a board."""
+        return {"userId": self.user_id, "email": self.email, "name": self.name, "avatar": None}
 
 
 def tasks_member(uid: str, role: str = "editor") -> TasksMember:
     """The person of that uid, a member of a project, by the email of their token."""
-    return TasksMember(tasks_id(email_of(uid)), email_of(uid), role)
+    return TasksMember(tasks_id(email_of(uid)), email_of(uid), role, uid.capitalize())
 
 
 @dataclass
@@ -1932,7 +1939,7 @@ class TasksPerson:
 
 
 class FakeTasks:
-    """Twake Tasks 0.1.1, as the contracts call its REST API with the bearer's token.
+    """Twake Tasks 0.2.10, as the contracts call its REST API with the bearer's token.
 
     Tasks acts for the person of the token, by the uuid and org_id LemonLDAP-NG gives it, here
     derived from the token's subject. A board shows only to the members of its project, in their
@@ -2092,7 +2099,17 @@ class FakeTasks:
                 words.lower() in text.lower() for text in (task.title, task.description)
             )
 
-        return httpx.Response(200, json={"tasks": self._tasks_of(person, matches)[:SEARCH_LIMIT]})
+        found = self._tasks_of(person, matches)[:SEARCH_LIMIT]
+        # Since 0.2.10, the words of the description around them, for a title that lacks them
+        for item in found:
+            task = self.tasks[item["id"]]
+            at = task.description.lower().find(words.lower())
+            item["excerpt"] = (
+                task.description[max(0, at - 30) : at + len(words) + 60]
+                if at >= 0 and words.lower() not in task.title.lower()
+                else None
+            )
+        return httpx.Response(200, json={"tasks": found})
 
     def _board_read(self, path: str, person: TasksPerson) -> httpx.Response:
         found = re.fullmatch(r"/api/boards/([^/]+)(?:/tasks/([^/]+)/(description|comments))?", path)
@@ -2281,7 +2298,7 @@ class FakeTasks:
             "canceledAt": "2026-10-06T16:00:00.000Z" if task.state == "canceled" else None,
             # Someone who left the board stays assigned, but is not shown
             "assignees": [
-                {"userId": member.user_id, "email": member.email}
+                member.person()
                 for member in sorted(board.members, key=lambda member: member.email)
                 if member.user_id in assigned
             ],
@@ -2330,8 +2347,7 @@ class FakeTasks:
             "version": 1,
             "role": self._role(board, person),
             "members": [
-                {"userId": member.user_id, "email": member.email}
-                for member in sorted(board.members, key=lambda member: member.email)
+                member.person() for member in sorted(board.members, key=lambda member: member.email)
             ],
             "labels": [{"id": label, "name": name} for label, name in board.labels.items()],
             "sections": board.sections,

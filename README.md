@@ -362,10 +362,11 @@ Creates a text file in the user's own Drive, in a folder that nobody else sees.
 
 ### Tasks, as the user
 
-The Tasks contracts call the REST API of Twake Tasks 0.1.1 with the user's token. Tasks accepts it once the token broker's client has the audience `twaketasks` and LemonLDAP-NG gives Tasks the user's `uuid`, `org_id` and `sid`: Tasks then acts for the user's `uuid` in their `org_id`, and shows them the boards of the projects they are a member of. Tasks also refuses the token unless the `sub` LemonLDAP-NG gives its own client, `twaketasks-backend`, which introspects the token, is the one userinfo gives for the token broker's client: both clients must take the same identifier attribute. The service publishes the Tasks contracts once `PUBLISHED_APPS` names `tasks`, and then needs `TASKS_URL`: without it, it refuses to start.
+The Tasks contracts call the REST API of Twake Tasks 0.2.10 with the user's token. Tasks accepts it once the token broker's client has the audience `twaketasks` and LemonLDAP-NG gives Tasks the user's `uuid`, `org_id` and `sid`: Tasks then acts for the user's `uuid` in their `org_id`, and shows them the boards of the projects they are a member of. Tasks also refuses the token unless the `sub` LemonLDAP-NG gives its own client, `twaketasks-backend`, which introspects the token, is the one userinfo gives for the token broker's client: both clients must take the same identifier attribute. The service publishes the Tasks contracts once `PUBLISHED_APPS` names `tasks`, and then needs `TASKS_URL`: without it, it refuses to start.
 
 - A user whose token gives Tasks no `org_id` is a personal account for Tasks, which then shows them only what lies outside any organization: an organization's boards answer like unknown ones. Nothing in Tasks' answers tells the contracts which of the two the user is.
-- Tasks 0.1.1 lists the user's boards only with `GET /api/boards`, which, as opening its web app does, creates the user's Inbox if they have none and accepts their pending invitations to projects. Listing boards is therefore an act, which a read never does: `open_boards` does it, as a write.
+- Tasks 0.2.10 lists the user's boards only with `GET /api/boards`, which, as opening its web app does, creates the user's Inbox if they have none, accepts their pending invitations to projects and gives their memberships the name they signed in with. Listing boards is therefore an act, which a read never does: `open_boards` does it, as a write.
+- Since 0.2.10, Tasks gives each person, an assignee, the author of a comment or a member of a board, with the name they chose, and a search with the words of a description around those found. The contracts still tell people by the email they joined with, and pass neither on.
 
 ### `tasks.board.open.v1`
 
@@ -375,7 +376,7 @@ Opens Twake Tasks as the user, as its web app does when they open it, then lists
 |---|---|---|
 | `open_boards` | `POST /contracts/v1/tasks/boards/open?include_archived=…` | `{"boards": [...], "truncated"}`, the user's Inbox first, then their favorite boards, then by name |
 
-- The first time, Tasks sets up the user's Inbox; each time, it makes them a member of the projects they were invited to. It notifies nobody.
+- The first time, Tasks sets up the user's Inbox; each time, it makes them a member of the projects they were invited to, and shows the other members the name they signed in with. It notifies nobody.
 - It is a low-risk write (`x-twake-risk: low`): the user's own Inbox and the invitations made to them, which the owner's consent to write in Tasks covers without a confirmation each time. It takes no body.
 - Archived boards are left out unless `include_archived=true`. The list holds 100 boards at most.
 - Each board gives the user's `role` (`viewer`, `editor` or `admin`), whether it is their Inbox, its project's `project_id`, whether that project is a Twake Space's (`space`), and how many of its tasks are open. The names of boards and projects come under `untrusted`.
