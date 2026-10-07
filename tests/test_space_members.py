@@ -6,13 +6,26 @@ from typing import Any
 from httpx import AsyncClient, Response
 
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
-from tests.fakes import FakeBoundary, SpaceMembership, SpaceRoom, space_person
+from tests.fakes import FakeBoundary, SpaceGroupLink, SpaceMembership, SpaceRoom, space_person
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
 BOB = space_person("bob", "Bob Durand")
 JEANNE = space_person("jmartin", "Jeanne Martin")
 PAUL = space_person("pmartin")
+CAROL = space_person("carol", "Carol King")
+DESIGNERS = "c2a8e1f0-7b3d-4e9a-8f61-2d5b9c0e4a17"
+
+
+def with_designers(boundary: FakeBoundary) -> SpaceRoom:
+    """The space Design, which the group Designers is linked to, as editors, with Carol in it."""
+    room = boundary.space.space(
+        "Design",
+        {MMAUDET: "admin", ALICE: "admin", BOB: "viewer"},
+        groups=[SpaceGroupLink(DESIGNERS, "Designers", "editor", [CAROL])],
+    )
+    boundary.space.people(JEANNE, PAUL)
+    return room
 
 
 def design(boundary: FakeBoundary, role: str = "admin") -> SpaceRoom:
@@ -443,3 +456,36 @@ async def test_the_preview_of_twenty_people_of_long_names_stays_within_what_the_
     assert all(
         line.endswith(f"<person{number:02}@twake.test>") for number, line in enumerate(lines[1:])
     )
+
+
+async def test_the_role_of_a_member_through_a_linked_group_is_the_groups_to_change(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Space lists Carol as a member, but ldap-rest's member routes see the direct members alone
+    room = with_designers(boundary)
+
+    response = await change(client, room, CAROL.user_id, {"role": "viewer"})
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "group_member"
+    assert "through a linked group" in response.json()["detail"]
+    assert room.listed()[CAROL.user_id] == SpaceMembership(CAROL, "editor")
+
+
+async def test_a_member_another_admin_removed_meanwhile_is_not_found_whatever_groups_link(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # ldap-rest no longer has Bob, whom Space stops listing as it hears of it: he is gone, not a
+    # member through a group
+    room = with_designers(boundary)
+    boundary.space.failing = {"PATCH": (404, "MEMBER_NOT_FOUND")}
+
+    def removed() -> None:
+        del room.members[BOB.user_id]
+
+    boundary.space.while_writing = removed
+
+    response = await change(client, room, BOB.user_id, {"role": "editor"})
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "member_not_found"

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.previews import Previewing, digest_of
+from twake_space_agent_contracts.problems import Problem
 from twake_space_agent_contracts.space import (
     EXAMPLE_MEMBER,
     EXAMPLE_SPACE,
@@ -25,6 +26,7 @@ from twake_space_agent_contracts.space.backend import (
     Person,
     SpaceDetail,
     TwakeSpace,
+    group_member,
     member_exists,
     member_not_found,
     not_space_admin,
@@ -154,6 +156,17 @@ class NewRole(BaseModel):
     role: Role = Field(description=f"The member's role in the space: {ROLES}")
 
 
+async def _not_direct(
+    space: TwakeSpace, user: User, detail: SpaceDetail, user_id: str, problem: Problem
+) -> Problem:
+    """What a member that ldap-rest's member routes do not find answers: group_member when the
+    space, which links groups, lists them still, as their people; the problem as it is when the
+    member is gone."""
+    if detail.groups and (await space.space(user, detail.space_id)).member(user_id) is not None:
+        return group_member(detail.space_id, user_id)
+    return problem
+
+
 def _member(detail: SpaceDetail, user_id: str) -> Member:
     """The member of that user id, if the space has them."""
     member = detail.member(user_id)
@@ -171,7 +184,9 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         summary="Change the role of a member of one of the user's spaces in Twake Space",
         description=(
             "Changes the role of a member of a space where the user you act for is an admin, by "
-            f"the user_id read_space gives: {ROLES} Call it only once the user asked for this "
+            f"the user_id read_space gives: {ROLES} Someone the space lists through a linked "
+            "group has the group's role, which this does not change: it answers group_member. "
+            "Call it only once the user asked for this "
             "very change; they confirm each call. It answers the member, as read_space gives "
             f"them. {UNTRUSTED} Example, to let a member post: {EXAMPLE_MEMBER}, "
             'body={"role": "editor"}.'
@@ -199,7 +214,12 @@ def _update(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         preview.check(digest)
         if member.role == changed.role:
             return space_member(member, me)
-        await space.set_role(user, space_id, user_id, changed.role)
+        try:
+            await space.set_role(user, space_id, user_id, changed.role)
+        except Problem as problem:
+            if problem.code != "member_not_found":
+                raise
+            raise await _not_direct(space, user, detail, user_id, problem) from problem
         return space_member(replace(member, role=changed.role), me)
 
     return routes

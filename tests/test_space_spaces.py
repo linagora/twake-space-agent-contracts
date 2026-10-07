@@ -5,7 +5,7 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET
-from tests.fakes import FakeBoundary, SpacePerson, space_person, space_uuid
+from tests.fakes import FakeBoundary, SpaceGroupLink, SpacePerson, space_person, space_uuid
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
@@ -97,7 +97,7 @@ async def test_the_user_reads_a_space_with_its_members_and_what_its_apps_linked_
             # Still being prepared by Mail
             "mailbox": None,
         },
-        groups=[("0b5a6c8e-3c2b-4f5e-9d7a-1e2f3a4b5c6d", "Designers", "editor")],
+        groups=[SpaceGroupLink("0b5a6c8e-3c2b-4f5e-9d7a-1e2f3a4b5c6d", "Designers", "editor")],
     )
 
     response = await client.get(f"/contracts/v1/space/spaces/{design.id}", headers=AS_MMAUDET)

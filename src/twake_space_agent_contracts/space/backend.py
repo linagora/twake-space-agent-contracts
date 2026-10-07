@@ -107,6 +107,17 @@ def member_not_found(space_id: str, user_id: str) -> Problem:
     )
 
 
+def group_member(space_id: str, user_id: str) -> Problem:
+    return Problem(
+        status=409,
+        code="group_member",
+        title="Member through a group",
+        detail=f"Member {user_id} of space {space_id} is a member through a linked group, which"
+        " gives them their role: change the group's role in Twake Space, or take them out of the"
+        " group, instead. The contracts change the direct members of a space alone.",
+    )
+
+
 def last_admin(space_id: str) -> Problem:
     return Problem(
         status=409,

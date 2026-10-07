@@ -2557,13 +2557,24 @@ class SpaceMembership:
 
 
 @dataclass
+class SpaceGroupLink:
+    """A group of the organization linked to a space, whose people are its members with the
+    group's role, which ldap-rest's member routes do not see: only the group's link changes it."""
+
+    group_id: str
+    name: str
+    role: str
+    people: list[SpacePerson] = field(default_factory=list)
+
+
+@dataclass
 class SpaceRoom:
     """A space, as Twake Space copies it from the directory, with what its creator picked."""
 
     id: str
     name: str
     members: dict[str, SpaceMembership]
-    """Its members by user id."""
+    """Its direct members by user id, whom ldap-rest's member routes change."""
     organization: str = SPACE_ORGANIZATION
     description: str = ""
     created_at: str = "2026-10-01T08:00:00.000Z"
@@ -2572,8 +2583,21 @@ class SpaceRoom:
     resources: dict[str, str | None] = field(default_factory=dict)
     """The id of what each app linked to it, by kind: project, matrix_space, mailbox, calendar
     and drive; None while the app still prepares it."""
-    groups: list[tuple[str, str, str]] = field(default_factory=list)
-    """The groups linked to it: their id, name and role."""
+    groups: list[SpaceGroupLink] = field(default_factory=list)
+    """The groups linked to it, whose people are members too."""
+
+    def listed(self) -> dict[str, SpaceMembership]:
+        """Its members as Space lists them, by user id: its direct members and the people of its
+        linked groups, each with their strongest role, as ldap-rest resolves it."""
+        listed: dict[str, SpaceMembership] = {}
+        held = [*self.members.values()] + [
+            SpaceMembership(person, group.role) for group in self.groups for person in group.people
+        ]
+        for membership in held:
+            found = listed.get(membership.person.user_id)
+            if found is None or SPACE_ROLES.index(membership.role) > SPACE_ROLES.index(found.role):
+                listed[membership.person.user_id] = membership
+        return listed
 
 
 @dataclass
@@ -2628,7 +2652,14 @@ class FakeSpace:
     Twake Space acts for the person of the token, by the uuid and org_id LemonLDAP-NG gives it in
     userinfo, here derived from the token's subject: a space shows only to its members, in their
     organization, and any other answers 404 {"error": "not_found"}, as an unknown one does. Its
-    directory, ldap-rest's, finds the active people of the person's organization."""
+    directory, ldap-rest's, finds the active people of the person's organization.
+
+    A space lists its direct members and the people of its linked groups alike, but ldap-rest's
+    member routes see the direct members alone: a change of the role of someone the space lists
+    through a group answers 404 MEMBER_NOT_FOUND, which Space passes on, and their removal 204,
+    as Space takes MEMBER_NOT_FOUND for a removal another admin made first. The group keeps them
+    in, and the fake lists them as ldap-rest resolves them, though Space 0.1.9 stops listing them
+    until it hears of them again. Adding them makes them direct members."""
 
     def __init__(self) -> None:
         self.spaces: dict[str, SpaceRoom] = {}
@@ -2655,6 +2686,9 @@ class FakeSpace:
         self.failing: dict[str, tuple[int, str]] = {}
         """By method, the status and the error Space answers a write with, as when it fails, or
         when what the write acts on changed between two calls."""
+        self.while_writing: Callable[[], None] | None = None
+        """What happens in Space while it takes a write, if anything, as another admin's change
+        that it hears of then."""
         self.now = "2026-10-07T10:00:00.000Z"
         """When Space writes a post, or its edit."""
 
@@ -2727,7 +2761,8 @@ class FakeSpace:
             **more,
         )
         self.spaces[room.id] = room
-        self.people(*members, organization=room.organization)
+        people = [*members, *(person for group in room.groups for person in group.people)]
+        self.people(*people, organization=room.organization)
         return room
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -2759,6 +2794,8 @@ class FakeSpace:
         path = request.url.path
         if request.method != "GET":
             self.writes.append((request.method, path, json.loads(request.content or b"null")))
+            if self.while_writing is not None:
+                self.while_writing()
             if request.method in self.failing:
                 return _space_refusal(*self.failing[request.method])
         if request.method == "GET" and path == "/organization/members":
@@ -2811,12 +2848,20 @@ class FakeSpace:
             return _space_refusal(400, "invalid_request")
         if member_id is not None and not _is_uuid(member_id):
             return _space_refusal(400, "invalid_request")
-        if room.members[user_id].role != "admin":
+        if room.listed()[user_id].role != "admin":
             return _space_refusal(403, "not_space_admin")
         if method == "POST":
             return self._add_members(room, body)
-        if member_id not in room.members:
+        if member_id not in room.listed():
             return _space_refusal(404, "not_found")
+        # ldap-rest's member routes see the direct members alone: Space passes their refusal on
+        # for a change, and takes a removal for done
+        if member_id not in room.members:
+            return (
+                httpx.Response(204)
+                if method == "DELETE"
+                else _space_refusal(404, "MEMBER_NOT_FOUND")
+            )
         person, former = room.members[member_id].person, room.members[member_id].role
         admins = [key for key, held in room.members.items() if held.role == "admin"]
         if former == "admin" and admins == [member_id] and role != "admin":
@@ -2850,7 +2895,7 @@ class FakeSpace:
 
     def _post(self, room: SpaceRoom, user_id: str, body: Any) -> httpx.Response:
         """A new post of the person, an editor or an admin of the space."""
-        if room.members[user_id].role == "viewer":
+        if room.listed()[user_id].role == "viewer":
             return _space_refusal(403, "cannot_post")
         text = _post_body(body)
         if text is None:
@@ -2904,7 +2949,7 @@ class FakeSpace:
     def _reached(self, room_id: str, user_id: str, organization: str) -> SpaceRoom | None:
         """The space of that id, if the person is a member of it, in their organization."""
         room = self.spaces.get(room_id)
-        if room is None or room.organization != organization or user_id not in room.members:
+        if room is None or room.organization != organization or user_id not in room.listed():
             return None
         return room
 
@@ -2945,7 +2990,7 @@ class FakeSpace:
             {
                 "id": room.id,
                 "name": room.name,
-                "role": room.members[user_id].role,
+                "role": room.listed()[user_id].role,
                 "color": None,
                 "description": room.description,
                 "members": [
@@ -3039,7 +3084,7 @@ class FakeSpace:
         their display name or their username, null for someone outside the space."""
         if not isinstance(actor, dict) or actor.get("type") != "user":
             return actor
-        member = room.members.get(actor.get("id") or "")
+        member = room.listed().get(actor.get("id") or "")
         name = (member.person.display_name or member.person.username) if member else None
         return {"type": "user", "id": actor.get("id"), "name": name}
 
@@ -3052,14 +3097,14 @@ class FakeSpace:
             "color": None,
             "description": room.description,
             "apps": room.apps,
-            "role": room.members[user_id].role,
+            "role": room.listed()[user_id].role,
             "chat": True,
             "mail": True,
             "homeserverUrl": "https://matrix.twake.test",
             "members": [_member(membership) for membership in _by_username(room)],
             "groups": [
-                {"id": group_id, "name": name, "role": role}
-                for group_id, name, role in sorted(room.groups, key=lambda group: group[1])
+                {"id": group.group_id, "name": group.name, "role": group.role}
+                for group in sorted(room.groups, key=lambda group: group.name)
             ],
             # Each kind the deployment provides, with its id once its app linked one
             "resources": [{"kind": kind, "id": room.resources.get(kind)} for kind in SPACE_KINDS],
@@ -3113,8 +3158,8 @@ def _member(membership: SpaceMembership) -> dict[str, Any]:
 
 
 def _by_username(room: SpaceRoom) -> list[SpaceMembership]:
-    """The members of a space, by username, as Twake Space sorts them."""
-    return sorted(room.members.values(), key=lambda membership: membership.person.username)
+    """The members of a space as it lists them, by username, as Twake Space sorts them."""
+    return sorted(room.listed().values(), key=lambda membership: membership.person.username)
 
 
 class FakeBoundary:
