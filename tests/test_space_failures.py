@@ -15,6 +15,9 @@ SPACE = f"/contracts/v1/space/spaces/{space_id('Design')}"
 OPERATIONS = [
     pytest.param("GET", "/contracts/v1/space/spaces", {}, None, id="list_spaces"),
     pytest.param("GET", SPACE, {}, None, id="read_space"),
+    pytest.param(
+        "GET", "/contracts/v1/space/people", {"q": "martin"}, None, id="search_organization_people"
+    ),
 ]
 PARAMETERS = ("method", "path", "params", "body")
 
@@ -39,7 +42,7 @@ async def test_a_token_space_refuses_is_named_so(
 
     assert response.status_code == 502
     assert response.json()["code"] == "space_refused"
-    assert response.json()["detail"].startswith("Space answered 401 to GET /spaces")
+    assert response.json()["detail"].startswith("Space answered 401 to GET /")
 
 
 @pytest.mark.parametrize(PARAMETERS, OPERATIONS)

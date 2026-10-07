@@ -2380,11 +2380,13 @@ _CHANGES: dict[str, Callable[[Any], bool]] = {
 
 
 SPACE_ORGANIZATION = "linagora"
+"""The org_id LemonLDAP-NG gives Twake Space for the users of the tests, unless one sets another."""
 SPACE_APPS = ("chat", "tasks", "drive", "mail", "calendar")
 """The apps the deployment provides, by the tab each gives a space."""
 SPACE_KINDS = ("drive", "mailbox", "calendar", "matrix_space", "project")
 """The kind of what each app links to a space, in Space's order."""
-"""The org_id LemonLDAP-NG gives Twake Space for the users of the tests, unless one sets another."""
+DIRECTORY_PAGE = 20
+"""How many people a page of the organization's directory holds."""
 
 
 def space_id(name: str) -> str:
@@ -2434,10 +2436,13 @@ class FakeSpace:
 
     Twake Space acts for the person of the token, by the uuid and org_id LemonLDAP-NG gives it in
     userinfo, here derived from the token's subject: a space shows only to its members, in their
-    organization, and any other answers 404 {"error": "not_found"}, as an unknown one does."""
+    organization, and any other answers 404 {"error": "not_found"}, as an unknown one does. Its
+    directory, ldap-rest's, finds the active people of the person's organization."""
 
     def __init__(self) -> None:
         self.spaces: dict[str, SpaceRoom] = {}
+        self.directory: dict[str, tuple[SpacePerson, str]] = {}
+        """The active people of the organizations, by username, each with their org_id."""
         self.requests: list[tuple[str, str]] = []
         """The method and path of each request taken."""
         self.refused_tokens = False
@@ -2452,8 +2457,14 @@ class FakeSpace:
         """The org_id LemonLDAP-NG gives Space for each person, by email: SPACE_ORGANIZATION
         unless set, and None for a person it gives none, whom Space refuses."""
 
+    def people(self, *persons: SpacePerson, organization: str = SPACE_ORGANIZATION) -> None:
+        """Arranges people in the directory of the organization."""
+        for person in persons:
+            self.directory[person.username] = (person, organization)
+
     def space(self, name: str, members: dict[SpacePerson, str], **more: Any) -> SpaceRoom:
-        """Arranges a space of that name, with its members and their roles."""
+        """Arranges a space of that name, with its members and their roles, who are people of its
+        organization."""
         room = SpaceRoom(
             space_id(name),
             name,
@@ -2461,6 +2472,7 @@ class FakeSpace:
             **more,
         )
         self.spaces[room.id] = room
+        self.people(*members, organization=room.organization)
         return room
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -2480,23 +2492,65 @@ class FakeSpace:
                 headers={"www-authenticate": 'Bearer error="invalid_token"'},
             )
         # Every route wants a caller of an organization
-        if self.organizations.get(subject, SPACE_ORGANIZATION) is None:
+        organization = self.organizations.get(subject, SPACE_ORGANIZATION)
+        if organization is None:
             return httpx.Response(403, json={"error": "forbidden"})
         if isinstance(self.unexpected, str):
             return httpx.Response(200, text=self.unexpected)
         if self.unexpected is not None:
             return httpx.Response(200, json=self.unexpected)
         self.requests.append((request.method, request.url.path))
-        user_id = space_id(subject)
-        if request.method == "GET" and request.url.path == "/spaces":
-            return httpx.Response(200, json={"spaces": self._listed(user_id)})
-        found = re.fullmatch(r"/spaces/([^/]+)", request.url.path)
-        room = self.spaces.get(found[1]) if found else None
-        if room is None or user_id not in room.members:
-            return httpx.Response(404, json={"error": "not_found"})
-        return httpx.Response(200, json=self._space(room, user_id))
+        caller = (space_id(subject), organization)
+        path = request.url.path
+        if request.method == "GET" and path == "/organization/members":
+            return self._directory(request, organization)
+        if request.method == "GET" and path == "/spaces":
+            return httpx.Response(200, json={"spaces": self._listed(*caller)})
+        found = re.fullmatch(r"/spaces/([^/]+)", path)
+        room = self._reached(found[1], *caller) if found else None
+        if request.method != "GET" or room is None:
+            return _space_refusal(404, "not_found")
+        return httpx.Response(200, json=self._space(room, caller[0]))
 
-    def _listed(self, user_id: str) -> list[dict[str, Any]]:
+    def _reached(self, room_id: str, user_id: str, organization: str) -> SpaceRoom | None:
+        """The space of that id, if the person is a member of it, in their organization."""
+        room = self.spaces.get(room_id)
+        if room is None or room.organization != organization or user_id not in room.members:
+            return None
+        return room
+
+    def _directory(self, request: httpx.Request, organization: str) -> httpx.Response:
+        """The active people of the organization whose username, email or name holds the words
+        searched, if any, by pages."""
+        search = request.url.params.get("search")
+        page = request.url.params.get("page", "1")
+        if (search is not None and len(search.strip()) < 2) or not page.isdigit() or page == "0":
+            return _space_refusal(400, "invalid_request")
+        words = (search or "").strip().lower()
+        found = [
+            person
+            for person, held_in in self.directory.values()
+            if held_in == organization
+            and any(
+                words in (text or "").lower()
+                for text in (person.username, person.email, person.display_name)
+            )
+        ]
+        start = (int(page) - 1) * DIRECTORY_PAGE
+        return httpx.Response(
+            200,
+            json={
+                # ldap-rest leaves out the name of a person who has none
+                "members": [
+                    {"username": person.username, "email": person.email}
+                    | ({"displayName": person.display_name} if person.display_name else {})
+                    for person in found[start : start + DIRECTORY_PAGE]
+                ],
+                "hasNextPage": len(found) > start + DIRECTORY_PAGE,
+            },
+        )
+
+    def _listed(self, user_id: str, organization: str) -> list[dict[str, Any]]:
         """The spaces of the person, by name, as GET /spaces gives them."""
         return [
             {
@@ -2515,7 +2569,7 @@ class FakeSpace:
                 ],
             }
             for room in sorted(self.spaces.values(), key=lambda room: room.name)
-            if user_id in room.members
+            if self._reached(room.id, user_id, organization)
         ]
 
     def _space(self, room: SpaceRoom, user_id: str) -> dict[str, Any]:
@@ -2539,6 +2593,11 @@ class FakeSpace:
             # Each kind the deployment provides, with its id once its app linked one
             "resources": [{"kind": kind, "id": room.resources.get(kind)} for kind in SPACE_KINDS],
         }
+
+
+def _space_refusal(status: int, error: str) -> httpx.Response:
+    """Space's answer to a request it refuses."""
+    return httpx.Response(status, json={"error": error})
 
 
 def _member(person: SpacePerson, role: str) -> dict[str, Any]:

@@ -114,6 +114,15 @@ class SpaceDetail:
         return found[0] if len(found) == 1 else None
 
 
+@dataclass(frozen=True)
+class Person:
+    """A person of the organization, as its directory gives them."""
+
+    username: str
+    email: str
+    display_name: str | None
+
+
 def _member(item: Any) -> Member:
     """A member as Space gives them. Raises KeyError, TypeError or ValueError for any other
     form."""
@@ -133,12 +142,15 @@ class TwakeSpace:
         self._url = url
         self._http = http
 
-    async def _call(self, user: User, method: str, path: str) -> httpx.Response:
+    async def _call(
+        self, user: User, method: str, path: str, *, params: Any = None
+    ) -> httpx.Response:
         """Space's answer, once Space answered and took the user's token."""
         try:
             response = await self._http.request(
                 method,
                 self._url + path,
+                params=params,
                 headers={"Authorization": f"Bearer {user.token}", "Accept": "application/json"},
             )
         except httpx.HTTPError as error:
@@ -168,11 +180,18 @@ class TwakeSpace:
         except ValueError as error:
             raise _unavailable(f"Space did not answer {method} {path} in JSON.") from error
 
-    async def _get(self, user: User, path: str, *, missing_ok: bool = False) -> Any:
+    async def _get(
+        self,
+        user: User,
+        path: str,
+        params: dict[str, str | int] | None = None,
+        *,
+        missing_ok: bool = False,
+    ) -> Any:
         """Space's JSON answer; None when what is asked for is missing and missing_ok is set:
         Space answers 404 not_found for what does not exist and for what the user does not
         reach alike."""
-        response = await self._call(user, "GET", path)
+        response = await self._call(user, "GET", path, params=params)
         if missing_ok and response.status_code == 404 and _error_of(response) == "not_found":
             return None
         return self._json(response, "GET", path)
@@ -224,3 +243,24 @@ class TwakeSpace:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Space gave the space in an unexpected form.") from error
+
+    async def people(self, user: User, words: str | None, page: int) -> tuple[list[Person], bool]:
+        """The active people of the user's organization whose name, username or email holds the
+        words, if any, by pages of 20; whether more pages follow comes with them."""
+        params: dict[str, str | int] = {"page": page} | ({"search": words} if words else {})
+        found = await self._get(user, "/organization/members", params)
+        try:
+            people = [
+                Person(
+                    username=_text(person["username"]),
+                    email=_text(person["email"]),
+                    display_name=_optional_text(person.get("displayName")),
+                )
+                for person in found["members"]
+            ]
+            more = found["hasNextPage"]
+        except (KeyError, TypeError, AttributeError) as error:
+            raise _unavailable("Space gave the people in an unexpected form.") from error
+        if not isinstance(more, bool):
+            raise _unavailable("Space gave the people in an unexpected form.")
+        return people, more

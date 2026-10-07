@@ -28,7 +28,7 @@ from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
-from twake_space_agent_contracts.space import spaces
+from twake_space_agent_contracts.space import people, spaces
 from twake_space_agent_contracts.space.backend import TwakeSpace
 from twake_space_agent_contracts.tasks import Tasks
 
@@ -169,7 +169,7 @@ def _space(context: Context) -> list[APIRouter]:
     if context.settings.space_url is None:
         raise ValueError("PUBLISHED_APPS names space, which needs SPACE_URL")
     space = TwakeSpace(context.settings.space_url, context.http)
-    return [spaces.router(space, context.caller)]
+    return [spaces.router(space, context.caller), people.router(space, context.caller)]
 
 
 APPLICATIONS = (
@@ -259,8 +259,8 @@ APPLICATIONS = (
         domain="space",
         name=Words(en="Twake Space", fr="Twake Space"),
         read=Words(
-            en="list your spaces and their members",
-            fr="lister tes espaces et leurs membres",
+            en="list your spaces and their members, and search the people of your organization",
+            fr="lister tes espaces et leurs membres, et chercher les personnes de ton organisation",
         ),
         write=None,
         routers=_space,
