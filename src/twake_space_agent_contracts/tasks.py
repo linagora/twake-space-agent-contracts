@@ -19,6 +19,10 @@ DATA_NOT_INSTRUCTIONS = (
 
 SEARCH_LIMIT = 50
 """The most tasks a search of Tasks gives: there may be more."""
+# An IANA time zone name, such as Europe/Paris or Etc/GMT+1
+ZONE = r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"
+# The ids of boards and tasks, as Tasks writes them: a pattern any OpenAPI validator checks
+TASKS_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
 
 def _tasks_problem(code: str, title: str, detail: str) -> Problem:
@@ -27,6 +31,35 @@ def _tasks_problem(code: str, title: str, detail: str) -> Problem:
 
 def _unavailable(detail: str) -> Problem:
     return _tasks_problem("tasks_unavailable", "Tasks unavailable", detail)
+
+
+def board_not_found(board_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="board_not_found",
+        title="Board not found",
+        detail=f"No board {board_id} belongs to a project this user is a member of.",
+    )
+
+
+def task_not_found(board_id: str, task_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="task_not_found",
+        title="Task not found",
+        detail=f"Board {board_id} shows no task {task_id}: it may be archived or in the trash.",
+    )
+
+
+def owner_not_member(consequence: str) -> Problem:
+    """No member of the board, or more than one, joined with the user's email: what follows."""
+    return Problem(
+        status=409,
+        code="owner_not_member",
+        title="Owner not a member",
+        detail="No member of the board, or more than one, has the email of the user you act for:"
+        f" {consequence}.",
+    )
 
 
 class TaskText(BaseModel):
@@ -162,6 +195,37 @@ class Tasks:
         self._url = url
         self._http = http
 
+    async def _call(
+        self, user: User, method: str, path: str, *, params: Any = None, body: Any = None
+    ) -> httpx.Response:
+        """Tasks' answer, once Tasks answered and took the user's token."""
+        try:
+            response = await self._http.request(
+                method,
+                self._url + path,
+                params=params,
+                json=body,
+                headers={"Authorization": f"Bearer {user.token}", "Accept": "application/json"},
+            )
+        except httpx.HTTPError as error:
+            raise _unavailable(f"Tasks did not answer {method} {path}.") from error
+        if response.status_code == 401:
+            raise _tasks_problem(
+                "tasks_refused_token",
+                "Tasks refused the user's token",
+                f"Tasks answered 401 to {method} {path}.",
+            )
+        return response
+
+    def _json(self, response: httpx.Response, method: str, path: str) -> Any:
+        """Tasks' JSON answer, if it says yes."""
+        if not response.is_success:
+            raise _unavailable(f"Tasks answered {response.status_code} to {method} {path}.")
+        try:
+            return response.json()
+        except ValueError as error:
+            raise _unavailable(f"Tasks did not answer {method} {path}.") from error
+
     async def _get(
         self,
         user: User,
@@ -174,30 +238,12 @@ class Tasks:
         """Tasks' JSON answer; None when what is asked for is missing and missing_ok is set.
         A refused request raises `invalid` when given: Tasks checks a parameter the contract
         cannot."""
-        try:
-            response = await self._http.get(
-                self._url + path,
-                params=params,
-                headers={"Authorization": f"Bearer {user.token}", "Accept": "application/json"},
-            )
-        except httpx.HTTPError as error:
-            raise _unavailable(f"Tasks did not answer GET {path}.") from error
+        response = await self._call(user, "GET", path, params=params)
         if missing_ok and response.status_code == 404:
             return None
         if invalid is not None and response.status_code == 400:
             raise invalid
-        if response.status_code == 401:
-            raise _tasks_problem(
-                "tasks_refused_token",
-                "Tasks refused the user's token",
-                f"Tasks answered 401 to GET {path}.",
-            )
-        if not response.is_success:
-            raise _unavailable(f"Tasks answered {response.status_code} to GET {path}.")
-        try:
-            return response.json()
-        except ValueError as error:
-            raise _unavailable(f"Tasks did not answer GET {path}.") from error
+        return self._json(response, "GET", path)
 
     def _tasks(self, found: Any, whose: Whose) -> list[TaskSummary]:
         try:
