@@ -391,13 +391,40 @@ class FakeSynapse:
 
 CORE = "urn:ietf:params:jmap:core"
 MAIL = "urn:ietf:params:jmap:mail"
+SUBMISSION = "urn:ietf:params:jmap:submission"
 SHARES = "urn:apache:james:params:jmap:mail:shares"
+# The capability a method needs beyond core and mail, as James checks it
+NEEDS = {"Identity/get": SUBMISSION}
 
 MMAUDET = email_of("mmaudet")
 # mmaudet's own mailboxes, as TMail creates them
 INBOX = "mbx-inbox"
 TRASH = "mbx-trash"
 SPAM = "mbx-spam"
+# Not there unless a test puts them there
+DRAFTS = "mbx-drafts"
+SENT = "mbx-sent"
+
+# What Email/set takes of an email it creates, as James does, but for attachments and headers
+CREATION = {
+    "mailboxIds",
+    "messageId",
+    "references",
+    "inReplyTo",
+    "from",
+    "to",
+    "cc",
+    "bcc",
+    "sender",
+    "replyTo",
+    "subject",
+    "sentAt",
+    "keywords",
+    "receivedAt",
+    "htmlBody",
+    "textBody",
+    "bodyValues",
+}
 
 
 def account_of(username: str) -> str:
@@ -473,7 +500,9 @@ class FakeTMail:
     first, then theirs, the primary one. Mailbox/get and Email/query keep to the user's own
     mailboxes unless the request uses the shares capability; Email/get and Thread/get give any
     email the user may read, in a mailbox shared with them too. Email/query takes one condition,
-    sorts by receivedAt, newest first, and refuses what it does not know.
+    sorts by receivedAt, newest first, and refuses what it does not know. Identity/get, which
+    needs the submission capability, gives the addresses the user sends from. Email/set creates
+    emails in the user's own mailboxes only, and refuses what it does not know.
     """
 
     def __init__(self) -> None:
@@ -490,6 +519,14 @@ class FakeTMail:
         }
         self.emails: dict[str, dict[str, Any]] = {}
         """Emails by id, as JMAP gives them, with the text of their only part as body."""
+        self.identities: dict[str, list[dict[str, Any]]] = {
+            MMAUDET: [{"id": "identity-mmaudet", "name": "Michel-Marie", "email": MMAUDET}]
+        }
+        """The identities of each user, by username, as Identity/get gives them."""
+        self.created: list[str] = []
+        """The ids of the emails Email/set created, in order."""
+        self.refused_creation: str | None = None
+        """The error Email/set answers to a creation instead, such as overQuota."""
         self.usernames: dict[str, str] = {}
         """The username TMail finds for a token's subject, when it is not that subject."""
         self.delegations: dict[str, list[str]] = {}
@@ -521,6 +558,9 @@ class FakeTMail:
             "preview": "Hello, here is the budget",
             "hasAttachment": False,
             "body": "Hello,\n\nhere is the budget.",
+            "messageId": [f"{email_id}@twake.test"],
+            "inReplyTo": None,
+            "references": None,
         } | jmap
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -547,9 +587,11 @@ class FakeTMail:
             for owner in self.delegations.get(username, [])
         } | {account_of(username): {"name": username, "isPersonal": True, "isReadOnly": False}}
         session = {
-            "capabilities": {CORE: {}, MAIL: {}, SHARES: {}},
+            "capabilities": {CORE: {}, MAIL: {}, SUBMISSION: {}, SHARES: {}},
             "accounts": accounts,
-            "primaryAccounts": {CORE: account_of(username), MAIL: account_of(username)},
+            "primaryAccounts": {
+                capability: account_of(username) for capability in (CORE, MAIL, SUBMISSION)
+            },
             "username": username,
             # TMail's public address, which the contracts do not go through
             "apiUrl": "https://jmap.public.test/jmap",
@@ -572,6 +614,8 @@ class FakeTMail:
                     raise MethodError("accountNotFound")
                 if name == self.failing_method:
                     raise MethodError("serverFail")
+                if NEEDS.get(name, CORE) not in request["using"]:
+                    raise MethodError("unknownMethod")
                 result = self._method(name, owner, self._resolved(arguments, results), shares)
             except MethodError as error:
                 responses.append(["error", {"type": str(error)}, call_id])
@@ -607,6 +651,10 @@ class FakeTMail:
             return answer | self._emails(owner, arguments)
         if name == "Thread/get":
             return answer | self._threads(owner, arguments)
+        if name == "Identity/get":
+            return answer | self._identities(owner, arguments)
+        if name == "Email/set":
+            return answer | self._set(owner, arguments)
         raise MethodError("unknownMethod")
 
     def _readable(self, email: dict[str, Any], owner: str, shares: bool = True) -> bool:
@@ -710,6 +758,80 @@ class FakeTMail:
             ],
             "notFound": [thread_id for thread_id, email_ids in threads.items() if not email_ids],
         }
+
+    def _identities(self, owner: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        properties = ["id", *(arguments.get("properties") or ["name", "email"])]
+        return {
+            "list": [
+                {key: identity[key] for key in properties}
+                for identity in self.identities.get(owner, [])
+            ],
+            "notFound": [],
+        }
+
+    def _set(self, owner: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Email/set, which creates emails only here."""
+        if set(arguments) != {"accountId", "create"}:
+            raise MethodError("invalidArguments")
+        created: dict[str, Any] = {}
+        not_created: dict[str, Any] = {}
+        for creation_id, email in arguments["create"].items():
+            refusal = self.refused_creation or self._creation_refusal(owner, email)
+            if refusal is not None:
+                not_created[creation_id] = {"type": refusal}
+                continue
+            email_id = f"created-{len(self.created) + 1}"
+            [part] = email["textBody"]
+            body = email["bodyValues"][part["partId"]]["value"]
+            self.emails[email_id] = {
+                "id": email_id,
+                "threadId": f"thread-{email_id}",
+                "keywords": {},
+                "receivedAt": "2026-10-07T10:00:00Z",
+                "from": None,
+                "to": None,
+                "cc": None,
+                "replyTo": None,
+                "subject": "",
+                "preview": body[:256],
+                "hasAttachment": False,
+                "messageId": [f"{email_id}@twake.test"],
+                "inReplyTo": None,
+                "references": None,
+            } | {key: email[key] for key in email.keys() - {"textBody", "bodyValues"}}
+            self.emails[email_id]["body"] = body
+            self.created.append(email_id)
+            created[creation_id] = {
+                "id": email_id,
+                "blobId": f"blob-{email_id}",
+                "threadId": f"thread-{email_id}",
+                "size": len(body.encode()),
+            }
+        return {
+            "oldState": "0",
+            "newState": "1",
+            "created": created or None,
+            "notCreated": not_created or None,
+        }
+
+    def _creation_refusal(self, owner: str, email: dict[str, Any]) -> str | None:
+        """Why James would not create this email, or None: a property it does not take, a
+        mailbox that is not the user's own, or a text body other than one text/plain part."""
+        mailboxes = email.get("mailboxIds") or {}
+        parts = email.get("textBody") or []
+        if (
+            not set(email) <= CREATION
+            or not mailboxes
+            or any(
+                mailbox not in self.mailboxes or self.mailboxes[mailbox].owner != owner
+                for mailbox in mailboxes
+            )
+            or len(parts) != 1
+            or parts[0].get("type") != "text/plain"
+            or parts[0].get("partId") not in (email.get("bodyValues") or {})
+        ):
+            return "invalidArguments"
+        return None
 
 
 ROOT_ID = "io.cozy.files.root-dir"

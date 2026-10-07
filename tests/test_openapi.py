@@ -239,6 +239,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "list_my_tasks": ["tasks.task.read.v1"],
         "search_tasks": ["tasks.task.read.v1"],
         "read_task": ["tasks.task.read.v1"],
+        "create_reply_draft": ["mail.draft.create.v1"],
     }
 
 
@@ -274,6 +275,31 @@ async def test_list_parameters_are_plain_arrays_the_gateway_can_check(client: As
     assert lists, "no list parameter found"
     for name, schema in lists.items():
         assert schema.get("type") == "array", f"{name}: {schema}"
+
+
+async def test_the_schemas_agents_are_given_hold_no_reference(client: AsyncClient) -> None:
+    # The harness gives the model the schema of each parameter and of the body as it finds them in
+    # an operation: a reference to the document's components would reach the model unresolved
+    document = (await client.get("/openapi.json")).json()
+
+    schemas = {
+        f"{operation['operationId']}.{name}": schema
+        for _, _, operation in operations_of(document)
+        for name, schema in [
+            *(
+                (parameter["name"], parameter["schema"])
+                for parameter in operation.get("parameters", [])
+            ),
+            *(
+                [("body", operation["requestBody"]["content"]["application/json"]["schema"])]
+                if "requestBody" in operation
+                else []
+            ),
+        ]
+    }
+
+    assert any(name.endswith(".body") for name in schemas), "no body found"
+    assert [name for name, schema in schemas.items() if "$ref" in json.dumps(schema)] == []
 
 
 async def test_each_published_application_is_named_in_plain_words(client: AsyncClient) -> None:
