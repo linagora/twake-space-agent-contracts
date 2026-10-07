@@ -109,7 +109,7 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
         book_id: BookId, contact_id: ContactId, user: Annotated[User, Depends(caller)]
     ) -> Contact:
         book = await contacts.book(user, book_id)
-        card = await contacts.card(user, book, contact_id)
+        card = await contacts.contact(user, book, contact_id)
         if card is None:
             raise contact_not_found(book_id, contact_id)
         return contact_of(card)

@@ -15,7 +15,8 @@ UNTRUSTED = (
 )
 
 EXAMPLE_IDS = (
-    "book_id=6650a1b2c3d4e5f6a7b8c9d0~contacts, contact_id=0b5a6c8e-3c2b-4f5e-9d7a-1e2f3a4b5c6d"
+    "book_id=6650a1b2c3d4e5f6a7b8c9d0~contacts, "
+    "contact_id=MGI1YTZjOGUtM2MyYi00ZjVlLTlkN2EtMWUyZjNhNGI1YzZkLnZjZg"
 )
 """An address book and a contact, as the reads give them, for the worked calls."""
 
@@ -31,7 +32,7 @@ ContactId = Annotated[
     str,
     Path(
         pattern=CONTACT_ID,
-        description="The contact_id of the contact, as search_contacts gives it.",
+        description="The contact_id of the contact, as search_contacts gives it: an opaque id.",
     ),
 ]
 

@@ -14,6 +14,7 @@ from tests.fakes import (
     READ_WRITE_ACCESS,
     FakeAddressBook,
     FakeBoundary,
+    contact_id,
     jcard,
 )
 
@@ -35,12 +36,14 @@ JEAN = jcard(
 
 
 async def delete(
-    client: AsyncClient, book_id: str, contact_id: str, *headers: dict[str, str]
+    client: AsyncClient, book_id: str, card: str, *headers: dict[str, str]
 ) -> Response:
-    """The call as the harness sends it, with what it adds to ask for a preview, if anything."""
+    """The call as the harness sends it, with what it adds to ask for a preview, if anything, on
+    the contact of the card of that name, but for its .vcf."""
     sent = AS_MMAUDET | {name: value for more in headers for name, value in more.items()}
+    contact = contact_id(f"{card}.vcf")
     return await client.delete(
-        f"/contracts/v1/contacts/address-books/{book_id}/contacts/{contact_id}", headers=sent
+        f"/contracts/v1/contacts/address-books/{book_id}/contacts/{contact}", headers=sent
     )
 
 
@@ -61,7 +64,10 @@ async def test_a_contact_is_deleted_for_good_and_answered_as_it_was(
 
     assert response.status_code == 200, response.text
     answer: dict[str, Any] = response.json()
-    assert (answer["book_id"], answer["contact_id"]) == (f"{OWN}~contacts", JEAN_ID)
+    assert (answer["book_id"], answer["contact_id"]) == (
+        f"{OWN}~contacts",
+        contact_id(f"{JEAN_ID}.vcf"),
+    )
     assert answer["untrusted"]["name"] == "Jean Dupont"
     assert answer["untrusted"]["emails"][0] == {
         "address": "jean.dupont@example.com",

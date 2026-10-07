@@ -329,6 +329,17 @@ READ_ACCESS, READ_WRITE_ACCESS, ADMINISTRATION_ACCESS = 2, 3, 5
 INVITE_NORESPONSE, INVITE_ACCEPTED, INVITE_DECLINED = 1, 2, 3
 
 
+def contact_id(card_name: str) -> str:
+    """The id the contracts give the contact whose card has that name: the name in base64url,
+    without padding."""
+    return base64.urlsafe_b64encode(card_name.encode()).decode().rstrip("=")
+
+
+def card_name(contact_id: str) -> str:
+    """The name of the card of the contact of that id."""
+    return base64.urlsafe_b64decode(contact_id + "=" * (-len(contact_id) % 4)).decode()
+
+
 def jcard(uid: str, name: str | None, *properties: list[Any], version: str = "4.0") -> list[Any]:
     """A contact in jCard, as esn-sabre gives it: its version, its UID and its formatted name, if
     any, then the given properties."""

@@ -15,6 +15,7 @@ from tests.fakes import (
     READ_WRITE_ACCESS,
     FakeAddressBook,
     FakeBoundary,
+    contact_id,
     jcard,
 )
 
@@ -46,12 +47,13 @@ NEW_PHONE = [{"number": "+33 6 98 76 54 32", "type": "cell"}]
 
 
 async def update(
-    client: AsyncClient, book_id: str, contact_id: str, *headers: dict[str, str], **body: Any
+    client: AsyncClient, book_id: str, card: str, *headers: dict[str, str], **body: Any
 ) -> Response:
-    """The call as the harness sends it, with what it adds to ask for a preview, if anything."""
+    """The call as the harness sends it, with what it adds to ask for a preview, if anything, on
+    the contact of the card of that name, but for its .vcf."""
     sent = AS_MMAUDET | {name: value for more in headers for name, value in more.items()}
     return await client.patch(
-        f"/contracts/v1/contacts/address-books/{book_id}/contacts/{contact_id}",
+        f"/contracts/v1/contacts/address-books/{book_id}/contacts/{contact_id(card + '.vcf')}",
         json=body,
         headers=sent,
     )
@@ -77,7 +79,10 @@ async def test_only_the_fields_given_change(client: AsyncClient, boundary: FakeB
 
     assert response.status_code == 200, response.text
     answer = response.json()
-    assert (answer["book_id"], answer["contact_id"]) == (f"{OWN}~contacts", JEAN_ID)
+    assert (answer["book_id"], answer["contact_id"]) == (
+        f"{OWN}~contacts",
+        contact_id(f"{JEAN_ID}.vcf"),
+    )
     assert answer["untrusted"]["phones"] == [{"number": "+33 6 98 76 54 32", "type": "cell"}]
     assert answer["untrusted"]["organization"] == "Acme"
     assert boundary.contacts.writes == [("PUT", f"/addressbooks/{OWN}/contacts/{JEAN_ID}.vcf")]

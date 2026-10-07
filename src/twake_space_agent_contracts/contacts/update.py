@@ -65,10 +65,10 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
         book = await contacts.book(user, book_id)
         if not book.writable:
             raise read_only(book)
-        card = await contacts.card(user, book, contact_id)
+        card = await contacts.contact(user, book, contact_id)
         if card is None:
             raise contact_not_found(book_id, contact_id)
-        after = Card(book, contact_id, changed(card.jcard, fields))
+        after = Card(book, card.name, changed(card.jcard, fields))
         # Refused before the owner is asked: Contacts would not take it
         sent(after.jcard)
         # What the owner allows: the contact as it is. The proxy of the side service forwards
@@ -81,7 +81,7 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
         if after.jcard == card.jcard:
             return contact_of(card)
         await contacts.put(user, after)
-        written_now = await contacts.card(user, book, contact_id)
+        written_now = await contacts.card(user, book, card.name)
         if written_now is None:
             raise unavailable("Contacts did not keep the contact it was given.")
         return contact_of(written_now)

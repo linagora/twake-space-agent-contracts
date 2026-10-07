@@ -12,6 +12,7 @@ from tests.fakes import (
     MMAUDET_DOMAIN_ID,
     READ_WRITE_ACCESS,
     FakeBoundary,
+    contact_id,
     jcard,
 )
 
@@ -39,9 +40,14 @@ JEAN = jcard(
 )
 
 
-async def read(client: AsyncClient, book_id: str, contact_id: str) -> Response:
+async def read(client: AsyncClient, book_id: str, card: str) -> Response:
+    """The contact of the card of that name, but for its .vcf, in the book."""
+    return await read_id(client, book_id, contact_id(f"{card}.vcf"))
+
+
+async def read_id(client: AsyncClient, book_id: str, contact: str) -> Response:
     return await client.get(
-        f"/contracts/v1/contacts/address-books/{book_id}/contacts/{contact_id}",
+        f"/contracts/v1/contacts/address-books/{book_id}/contacts/{contact}",
         headers=AS_MMAUDET,
     )
 
@@ -73,7 +79,7 @@ async def test_a_contact_is_read_with_what_people_wrote_under_untrusted(
     assert response.status_code == 200, response.text
     assert response.json() == {
         "book_id": f"{OWN}~contacts",
-        "contact_id": JEAN_ID,
+        "contact_id": contact_id(f"{JEAN_ID}.vcf"),
         "kind": "personal",
         "writable": True,
         "truncated": False,
@@ -232,7 +238,7 @@ async def test_a_book_of_someone_else_answers_like_an_unknown_one(
     )
 
 
-async def test_a_contact_id_esn_sabre_would_rewrite_is_never_read(
+async def test_a_card_esn_sabre_would_rewrite_the_name_of_is_never_read(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
     # esn-sabre removes .json from wherever a URL holds it: ann.json would read ann
@@ -246,18 +252,39 @@ async def test_a_contact_id_esn_sabre_would_rewrite_is_never_read(
 
 
 @pytest.mark.parametrize(
-    ("book_id", "contact_id"),
+    ("book_id", "contact"),
     [
-        pytest.param(f"{OWN}~contacts", ".hidden", id="a contact id that starts with a dot"),
+        pytest.param(f"{OWN}~contacts", f"{JEAN_ID}.vcf", id="the name of a card"),
         pytest.param(f"{OWN}~contacts", "a b", id="a contact id with a space"),
-        pytest.param("contacts", JEAN_ID, id="a book id without its home"),
-        pytest.param(f"{OWN}~my book", JEAN_ID, id="a book id with a space"),
+        pytest.param("contacts", contact_id(f"{JEAN_ID}.vcf"), id="a book id without its home"),
+        pytest.param(f"{OWN}~my book", contact_id(f"{JEAN_ID}.vcf"), id="a book id with a space"),
     ],
 )
 async def test_ids_outside_their_form_are_refused(
-    client: AsyncClient, boundary: FakeBoundary, book_id: str, contact_id: str
+    client: AsyncClient, boundary: FakeBoundary, book_id: str, contact: str
 ) -> None:
-    response = await read(client, book_id, contact_id)
+    response = await read_id(client, book_id, contact)
 
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    "contact",
+    [
+        pytest.param("AAAA", id="no name"),
+        pytest.param("_w", id="no text"),
+        pytest.param(contact_id("ann.vcf")[:-1] + "h", id="the name of a card, written otherwise"),
+        pytest.param(contact_id("../ann.vcf"), id="a path"),
+        pytest.param(contact_id("ann.json.vcf"), id="a name esn-sabre would rewrite"),
+    ],
+)
+async def test_an_id_the_contracts_never_give_is_not_found(
+    client: AsyncClient, boundary: FakeBoundary, contact: str
+) -> None:
+    boundary.contacts.owners().cards["ann.vcf"] = jcard("ann", "Ann Lee")
+
+    response = await read_id(client, f"{OWN}~contacts", contact)
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "contact_not_found"

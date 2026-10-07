@@ -44,7 +44,7 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
         book = await contacts.book(user, book_id)
         if not book.writable:
             raise read_only(book)
-        card = await contacts.card(user, book, contact_id)
+        card = await contacts.contact(user, book, contact_id)
         if card is None:
             raise contact_not_found(book_id, contact_id)
         # What the owner allows: the contact as it is. The proxy of the side service forwards

@@ -4,6 +4,8 @@ side service's search across several of them.
 
 The proxy forwards neither If-Match nor If-None-Match: no write of a card can be conditional."""
 
+import base64
+import binascii
 import json
 import re
 from dataclasses import dataclass
@@ -32,11 +34,11 @@ NAME = r"[A-Za-z0-9._~-]{1,200}"
 """The names of the address books the contracts take: those the search of Contacts takes, plain
 segments of a path."""
 BOOK_ID = rf"^{HOME}{SEPARATOR}{NAME}$"
-CONTACT_ID = r"^[A-Za-z0-9][A-Za-z0-9._~@+=-]{0,199}$"
-"""The name of a contact's card in its address book, without its extension: what the Contacts web
-app and CardDAV clients name cards with, letters, digits and a few signs."""
+CONTACT_ID = r"^[A-Za-z0-9_-]{1,400}$"
+"""The id of a contact: the name of its card in its address book, which whoever wrote the card
+chose, in base64url without padding, so that it carries no text a reader would take for words."""
 CARD = ".vcf"
-"""The extension of a card's name."""
+"""The extension the contracts give the names of the cards they write."""
 REWRITTEN = ".json"
 """What esn-sabre removes from wherever a URL holds it: a name that holds it cannot be reached."""
 JCARD = "application/vcard+json"
@@ -242,14 +244,24 @@ def _rank(book: Book) -> int:
     return 0 if book.default else RANKS[book.kind]
 
 
+def _encoded(card_name: str) -> str:
+    return base64.urlsafe_b64encode(card_name.encode()).decode().rstrip("=")
+
+
 @dataclass(frozen=True)
 class Card:
-    """A contact in one of the books the user reads, by its id there, in jCard: the vCard of RFC
-    6350 in JSON (RFC 7095), each property its name, its parameters, its type and its values."""
+    """A contact in one of the books the user reads, by the name of its card there, in jCard: the
+    vCard of RFC 6350 in JSON (RFC 7095), each property its name, its parameters, its type and its
+    values."""
 
     book: Book
-    contact_id: str
+    name: str
     jcard: list[Any]
+
+    @property
+    def contact_id(self) -> str:
+        """Its id, as the contracts give it."""
+        return _encoded(self.name)
 
 
 def is_jcard(value: Any) -> bool:
@@ -271,11 +283,23 @@ def is_jcard(value: Any) -> bool:
 
 
 def contact_id_of(card_name: str) -> str | None:
-    """The id of a contact by the name of its card; None for a card the contracts cannot name."""
-    contact_id = card_name.removesuffix(CARD)
-    if contact_id == card_name or REWRITTEN in contact_id:
+    """The id of a contact by the name of its card; None for a card no path can name: one whose
+    name holds .json, which esn-sabre removes from wherever a URL holds it, or no name at all."""
+    if card_name in ("", ".", "..") or "/" in card_name or REWRITTEN in card_name:
         return None
+    contact_id = _encoded(card_name)
     return contact_id if re.fullmatch(CONTACT_ID, contact_id) else None
+
+
+def card_name_of(contact_id: str) -> str | None:
+    """The name of the card of a contact by its id; None for an id the contracts never give."""
+    try:
+        written = base64.urlsafe_b64decode(contact_id + "=" * (-len(contact_id) % 4))
+        card_name = written.decode()
+    except (binascii.Error, UnicodeDecodeError):
+        return None
+    # The id of that name, written as the contracts write it, and no other
+    return card_name if contact_id_of(card_name) == contact_id else None
 
 
 def sent(jcard: list[Any]) -> bytes:
@@ -286,8 +310,8 @@ def sent(jcard: list[Any]) -> bytes:
     return body
 
 
-def _card_path(book: Book, contact_id: str) -> str:
-    return f"/dav/addressbooks/{book.home}/{book.name}/{quote(contact_id + CARD, safe='')}"
+def _card_path(book: Book, card_name: str) -> str:
+    return f"/dav/addressbooks/{book.home}/{book.name}/{quote(card_name, safe='')}"
 
 
 class Contacts:
@@ -418,19 +442,27 @@ class Contacts:
         cards = []
         for href, data in hits:
             path = re.fullmatch(rf"(?:.*/)?addressbooks/({HOME})/([^/]+)/([^/]+)", href)
-            book = located.get((path[1], path[2])) if path else None
-            contact_id = contact_id_of(path[3]) if path else None
-            if book is not None and contact_id is not None and is_jcard(data):
-                cards.append(Card(book, contact_id, data))
+            if path is None:
+                continue
+            book, card_name = located.get((path[1], path[2])), path[3]
+            if book is not None and contact_id_of(card_name) is not None and is_jcard(data):
+                cards.append(Card(book, card_name, data))
         return cards, len(hits) < limit
 
-    async def card(self, user: User, book: Book, contact_id: str) -> Card | None:
-        """The contact of that id in the book, in jCard of vCard 4.0; None if the book holds
-        none, or if the user cannot read it there."""
+    async def contact(self, user: User, book: Book, contact_id: str) -> Card | None:
+        """The contact of that id in the book, in jCard of vCard 4.0; None for an id the
+        contracts never give, if the book holds no such contact, or if the user cannot read it
+        there."""
+        card_name = card_name_of(contact_id)
+        return None if card_name is None else await self.card(user, book, card_name)
+
+    async def card(self, user: User, book: Book, card_name: str) -> Card | None:
+        """The card of that name in the book, in jCard of vCard 4.0; None if the book holds none,
+        or if the user cannot read it there."""
         # esn-sabre would read another card than the one named
-        if REWRITTEN in contact_id:
+        if contact_id_of(card_name) is None:
             return None
-        path = _card_path(book, contact_id)
+        path = _card_path(book, card_name)
         response = await self._request(
             user, "GET", path, accept=JCARD, passing=frozenset({403, 404})
         )
@@ -442,7 +474,7 @@ class Contacts:
             raise unavailable(f"Contacts did not answer GET {path} in jCard.") from error
         if not is_jcard(jcard):
             raise unavailable("Contacts gave the contact in an unexpected form.")
-        return Card(book, contact_id, jcard)
+        return Card(book, card_name, jcard)
 
     async def put(self, user: User, card: Card) -> None:
         """Writes the card at its place, a new one or in place of the one there. The proxy
@@ -450,7 +482,7 @@ class Contacts:
         response = await self._request(
             user,
             "PUT",
-            _card_path(card.book, card.contact_id),
+            _card_path(card.book, card.name),
             content=sent(card.jcard),
             headers={"Content-Type": JCARD},
             passing=frozenset({403, 413}),
@@ -464,7 +496,7 @@ class Contacts:
         """Deletes the card, for good: esn-sabre keeps no trash. The proxy forwards no If-Match:
         the delete cannot be conditional, so it follows the read at once. False when the book no
         longer holds the card."""
-        path = _card_path(card.book, card.contact_id)
+        path = _card_path(card.book, card.name)
         response = await self._request(user, "DELETE", path, passing=frozenset({403, 404}))
         if response.status_code == 403:
             raise read_only(card.book)
@@ -482,7 +514,7 @@ class Contacts:
             if problem.code != "contacts_unavailable":
                 raise
             unconfirmed = problem
-        added = await self.card(user, card.book, card.contact_id)
+        added = await self.card(user, card.book, card.name)
         if added is None:
             raise unconfirmed or unavailable("Contacts did not keep the contact it was given.")
         return added

@@ -15,6 +15,7 @@ from tests.fakes import (
     READ_ACCESS,
     READ_WRITE_ACCESS,
     FakeBoundary,
+    contact_id,
     email_of,
     jcard,
 )
@@ -296,7 +297,8 @@ async def test_a_book_listed_in_another_users_home_is_refused(
 
     books = listed(await list_books(client))
     read = await client.get(
-        f"/contracts/v1/contacts/address-books/{ALICE_CALENDAR_ID}~team/contacts/bob",
+        f"/contracts/v1/contacts/address-books/{ALICE_CALENDAR_ID}~team/contacts/"
+        f"{contact_id('bob.vcf')}",
         headers=AS_MMAUDET,
     )
 

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.contacts import UNTRUSTED
 from twake_space_agent_contracts.contacts.carddav import (
+    CARD,
     SEARCHED,
     Book,
     Card,
@@ -110,17 +111,19 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
         if not book.writable:
             raise read_only(book)
         uid = _uid(user.email, fields)
-        card = Card(book, uid, new_card(uid, fields))
+        card = Card(book, f"{uid}{CARD}", new_card(uid, fields))
         # Refused before the owner is asked: Contacts would not take it
         sent(card.jcard)
         text, _ = fields_of(card.jcard)
         # The proxy of the side service forwards no If-None-Match: the contact is looked for
         # first, so that a call made again neither adds it twice nor writes over what the user
         # changed since
-        found = await contacts.card(user, book, uid)
+        found = await contacts.card(user, book, card.name)
         if found is not None and fields_of(found.jcard)[0] != text:
             raise contact_exists(
-                book, uid, "The same call added this contact before, which was changed since"
+                book,
+                card.contact_id,
+                "The same call added this contact before, which was changed since",
             )
         emails = [email["address"] for email in fields["emails"]]
         if found is None and emails:
@@ -132,7 +135,7 @@ def router(contacts: Contacts, caller: CallerDependency) -> APIRouter:
                     "The user's address book has a contact with one of these emails already",
                 )
         # What the owner allows: the contact, by its UID, as the book holds it, if at all
-        digest = digest_of(book.book_id, uid, found.jcard if found is not None else None)
+        digest = digest_of(book.book_id, card.name, found.jcard if found is not None else None)
         if preview.asked:
             if found is not None:
                 return preview.answer(added(text, preview.language), digest)

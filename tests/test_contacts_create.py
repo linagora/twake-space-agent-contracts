@@ -6,7 +6,15 @@ import pytest
 from httpx import AsyncClient, Response
 
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
-from tests.fakes import ALICE_CALENDAR_ID, MMAUDET_CALENDAR_ID, READ_ACCESS, FakeBoundary, jcard
+from tests.fakes import (
+    ALICE_CALENDAR_ID,
+    MMAUDET_CALENDAR_ID,
+    READ_ACCESS,
+    FakeBoundary,
+    card_name,
+    contact_id,
+    jcard,
+)
 
 OWN = MMAUDET_CALENDAR_ID
 DEFAULT_BOOK = f"{OWN}~contacts"
@@ -37,9 +45,9 @@ async def create(client: AsyncClient, *headers: dict[str, str], **body: Any) -> 
     return await client.post("/contracts/v1/contacts/contacts", json=body, headers=sent)
 
 
-def stored(boundary: FakeBoundary, contact_id: str) -> dict[str, list[list[Any]]]:
-    """The properties of a card of the owner's default book, by name."""
-    card = boundary.contacts.owners().cards[f"{contact_id}.vcf"]
+def stored(boundary: FakeBoundary, contact: str) -> dict[str, list[list[Any]]]:
+    """The properties of the card of a contact of the owner's default book, by name."""
+    card = boundary.contacts.owners().cards[card_name(contact)]
     properties: dict[str, list[list[Any]]] = {}
     for prop in card[1]:
         properties.setdefault(prop[0], []).append(prop)
@@ -53,10 +61,11 @@ async def test_a_contact_is_added_to_the_users_default_address_book(
 
     assert response.status_code == 201, response.text
     created = response.json()
-    contact_id = created["contact_id"]
+    contact = created["contact_id"]
+    uid = card_name(contact).removesuffix(".vcf")
     assert created == {
         "book_id": DEFAULT_BOOK,
-        "contact_id": contact_id,
+        "contact_id": contact,
         "kind": "personal",
         "writable": True,
         "truncated": False,
@@ -83,11 +92,11 @@ async def test_a_contact_is_added_to_the_users_default_address_book(
             "birthday": "1980-05-17",
         },
     }
-    assert boundary.contacts.writes == [("PUT", f"/addressbooks/{OWN}/contacts/{contact_id}.vcf")]
-    card = stored(boundary, contact_id)
+    assert boundary.contacts.writes == [("PUT", f"/addressbooks/{OWN}/contacts/{uid}.vcf")]
+    card = stored(boundary, contact)
     # A vCard 4.0 as the Contacts web app writes one: its job title in ROLE, which it shows
     assert card["version"] == [["version", {}, "text", "4.0"]]
-    assert card["uid"] == [["uid", {}, "text", contact_id]]
+    assert card["uid"] == [["uid", {}, "text", uid]]
     assert card["fn"] == [["fn", {}, "text", "Jeanne Martin"]]
     assert card["n"] == [["n", {}, "text", ["Martin", "Jeanne", "", "", ""]]]
     assert card["email"] == [["email", {"type": "work"}, "text", "jeanne.martin@example.com"]]
@@ -172,7 +181,7 @@ async def test_a_contact_with_an_email_the_address_book_has_already_is_refused(
     assert response.status_code == 409
     problem = response.json()
     assert problem["code"] == "contact_exists"
-    assert (problem["book_id"], problem["contact_id"]) == (DEFAULT_BOOK, "jm")
+    assert (problem["book_id"], problem["contact_id"]) == (DEFAULT_BOOK, contact_id("jm.vcf"))
     assert boundary.contacts.writes == []
 
 
@@ -204,16 +213,16 @@ async def test_the_contact_the_same_call_added_then_changed_is_not_added_again(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
     first = await create(client, given_name="Jeanne", family_name="Martin")
-    contact_id = first.json()["contact_id"]
+    contact = first.json()["contact_id"]
     # The user gives her a phone in Contacts
-    boundary.contacts.owners().cards[f"{contact_id}.vcf"][1].append(
+    boundary.contacts.owners().cards[card_name(contact)][1].append(
         ["tel", {}, "text", "0612345678"]
     )
 
     again = await create(client, given_name="Jeanne", family_name="Martin")
 
     assert again.status_code == 409
-    assert (again.json()["code"], again.json()["contact_id"]) == ("contact_exists", contact_id)
+    assert (again.json()["code"], again.json()["contact_id"]) == ("contact_exists", contact)
     assert len(boundary.contacts.writes) == 1
 
 
