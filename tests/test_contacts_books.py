@@ -274,3 +274,31 @@ async def test_an_address_book_contacts_gives_no_link_to_is_left_out(
 
     assert response.status_code == 200, response.text
     assert response.json() == {"address_books": []}
+
+
+async def test_a_book_listed_in_another_users_home_is_refused(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The owner's home lists, as its own, a book of Alice's home
+    contacts, hers = (
+        {
+            "_links": {"self": {"href": f"/addressbooks/{home}/{name}.json"}},
+            "dav:name": name,
+            "dav:acl": ["dav:read", "dav:write"],
+            "dav:share-access": 1,
+        }
+        for home, name in ((OWN, "contacts"), (ALICE_CALENDAR_ID, "team"))
+    )
+    listing = {"_embedded": {"dav:addressbook": [contacts, hers]}}
+    boundary.contacts.answers[f"/dav/addressbooks/{OWN}.json"] = httpx.Response(200, json=listing)
+    team = boundary.contacts.book(ALICE_CALENDAR_ID, "team")
+    team.cards["bob.vcf"] = jcard("bob", "Bob Martin")
+
+    books = listed(await list_books(client))
+    read = await client.get(
+        f"/contracts/v1/contacts/address-books/{ALICE_CALENDAR_ID}~team/contacts/bob",
+        headers=AS_MMAUDET,
+    )
+
+    assert list(books) == [f"{OWN}~contacts"]
+    assert (read.status_code, read.json()["code"]) == (404, "address_book_not_found")

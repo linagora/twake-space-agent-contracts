@@ -266,3 +266,32 @@ async def test_contacts_found_in_an_unexpected_form_are_a_problem(
 
     assert response.status_code == 502
     assert response.json()["code"] == "contacts_unavailable"
+
+
+async def test_a_contact_found_outside_the_books_searched_is_left_out(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Contacts answers a contact of a book the contract did not search, someone else's
+    answer = {
+        "_embedded": {
+            "dav:item": [
+                {
+                    "_links": {"self": {"href": f"/addressbooks/{OWN}/contacts/jean.vcf"}},
+                    "etag": '"1"',
+                    "data": contact("jean", "Jean Dupont"),
+                },
+                {
+                    "_links": {
+                        "self": {"href": f"/addressbooks/{ALICE_CALENDAR_ID}/private/bob.vcf"}
+                    },
+                    "etag": '"2"',
+                    "data": contact("bob", "Bernard Dupont"),
+                },
+            ]
+        }
+    }
+    boundary.contacts.answers["/contacts/api/"] = httpx.Response(200, json=answer)
+
+    response = await search(client, "dupont")
+
+    assert found(response) == [(f"{OWN}~contacts", "jean")]
