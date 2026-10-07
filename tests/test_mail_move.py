@@ -176,11 +176,23 @@ async def test_an_email_outside_the_users_own_mailboxes_is_not_found(
     assert writes(boundary) == []
 
 
+WRITTEN = "it holds what the user writes and sends"
+
+
 @pytest.mark.parametrize(
-    "mailbox_id", ["mbx-drafts", "mbx-sent", "mbx-outbox", "mbx-templates", TRASH, SPAM]
+    ("mailbox_id", "why"),
+    [
+        pytest.param("mbx-drafts", WRITTEN, id="drafts"),
+        pytest.param("mbx-sent", WRITTEN, id="sent"),
+        pytest.param("mbx-outbox", WRITTEN, id="outbox"),
+        pytest.param("mbx-templates", WRITTEN, id="templates"),
+        pytest.param(TRASH, "trash_email puts emails there", id="trash"),
+        # TMail would report it as spam to the filter all users share: report_spam's, not a move's
+        pytest.param(SPAM, "which takes report_spam, a high-risk contract", id="spam"),
+    ],
 )
 async def test_an_email_is_not_moved_to_a_special_mailbox(
-    client: AsyncClient, boundary: FakeBoundary, mailbox_id: str
+    client: AsyncClient, boundary: FakeBoundary, mailbox_id: str, why: str
 ) -> None:
     for role in ("drafts", "sent", "outbox", "templates"):
         boundary.tmail.mailboxes[f"mbx-{role}"] = own_mailbox(role.title(), role)
@@ -190,6 +202,7 @@ async def test_an_email_is_not_moved_to_a_special_mailbox(
 
     assert response.status_code == 409
     assert response.json()["code"] == "mailbox_forbidden"
+    assert why in response.json()["detail"]
     assert writes(boundary) == []
 
 
@@ -203,13 +216,20 @@ async def test_an_email_is_not_moved_to_a_special_mailbox(
 async def test_an_email_in_spam_is_not_taken_out_of_it(
     client: AsyncClient, boundary: FakeBoundary, operation: str, body: dict[str, str] | None
 ) -> None:
-    # Taking an email out of spam tells TMail it is not spam: the user does that in Twake Mail
+    # TMail would report it as ham to the filter all users share: report_not_spam's, not a move's
     boundary.tmail.deliver("email-1", SPAM)
 
     response = await post(client, "email-1", operation, body)
 
     assert response.status_code == 409
-    assert response.json()["code"] == "email_in_spam"
+    assert response.json() == problem(
+        "email_in_spam",
+        "Email in spam",
+        409,
+        "The email is in spam: TMail would report it as not spam to the spam filter that all"
+        " users share, which takes report_not_spam, a high-risk contract not offered yet, rather"
+        " than a move. trash_email can still put it in the trash, which reports nothing.",
+    )
     assert writes(boundary) == []
 
 

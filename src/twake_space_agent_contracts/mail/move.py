@@ -19,9 +19,22 @@ from twake_space_agent_contracts.mail.tmail import (
 )
 from twake_space_agent_contracts.problems import Problem
 
-# The special mailboxes an email is not moved to: trash_email puts an email in the trash, and the
-# user moves emails to the others in Twake Mail
-SPECIAL = {"drafts", "sent", "outbox", "templates", "trash", *SPAM_ROLES}
+# What TMail does with an email moved into spam or out of it: it reports it to the rspamd filter
+# that all users share, as spam or as ham. That is for report_spam and report_not_spam, later
+# contracts of high risk, and never for a move
+SHARED_FILTER = "the spam filter that all users share"
+SPECIAL = {
+    **dict.fromkeys(
+        ("drafts", "sent", "outbox", "templates"), "it holds what the user writes and sends"
+    ),
+    "trash": "trash_email puts emails there",
+    **dict.fromkeys(
+        SPAM_ROLES,
+        f"TMail would report it as spam to {SHARED_FILTER}, which takes report_spam, a"
+        " high-risk contract not offered yet",
+    ),
+}
+"""The special mailboxes an email is not moved to, by role, and why."""
 
 
 class Destination(BaseModel):
@@ -74,14 +87,15 @@ class Destination(BaseModel):
 
 
 def out_of_spam(placement: Placement) -> None:
-    """Refuses to take an email out of spam, which tells TMail that it is not spam."""
+    """Refuses to move an email out of spam, which TMail would report as ham."""
     if placement.in_spam:
         raise Problem(
             status=409,
             code="email_in_spam",
             title="Email in spam",
-            detail="The email is in spam: taking it out tells Mail that it is not spam, which the"
-            " user does in Twake Mail. trash_email can still put it in the trash.",
+            detail=f"The email is in spam: TMail would report it as not spam to {SHARED_FILTER},"
+            " which takes report_not_spam, a high-risk contract not offered yet, rather than a"
+            " move. trash_email can still put it in the trash, which reports nothing.",
         )
 
 
@@ -115,12 +129,12 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         out_of_spam(placement)
         mailbox = destination.mailbox(placement)
         if mailbox.role in SPECIAL:
-            how = "trash_email puts emails there" if mailbox.role == "trash" else "the user does"
             raise Problem(
                 status=409,
                 code="mailbox_forbidden",
                 title="Mailbox forbidden",
-                detail=f"An email is not moved to the {mailbox.role} mailbox: {how}.",
+                detail=f"An email is not moved to the {mailbox.role} mailbox: "
+                f"{SPECIAL[mailbox.role]}.",
             )
         return await tmail.move(user, placement, mailbox)
 

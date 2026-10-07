@@ -223,8 +223,8 @@ The mail contracts go through TMail's JMAP API as the user, with their token:
 
 - `move_email` takes the mailbox by `mailbox_id`, its id as `list_mailboxes` gives it, or by `mailbox_name`, its name whatever its case, from 1 to 200 characters: exactly one of them, as the schema of its body says, so that the gateway refuses a body that names none or both. A name that several of the user's mailboxes have is refused (`mailbox_ambiguous`) rather than guessed.
 - `archive_email` takes the mailbox whose role is `archive`: without one, nothing is moved (`mailbox_not_found`), nor with several (`mailbox_ambiguous`).
-- `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam (`mailbox_forbidden`): `trash_email` puts it in the trash, and the user moves emails to the others in Twake Mail.
-- Neither takes an email out of spam (`email_in_spam`): that tells TMail the email is not spam, which only the user does. `trash_email` still can.
+- `move_email` does not move an email to drafts, sent, outbox, templates, trash or spam (`mailbox_forbidden`): the first four hold what the user writes and sends, `trash_email` puts emails in the trash, and TMail reports an email moved into spam to the rspamd filter that all users share, which is for `report_spam`, a later high-risk contract.
+- Neither takes an email out of spam (`email_in_spam`): TMail reports an email moved out of spam as ham to that shared filter, which is for `report_not_spam`, a later high-risk contract, not for a move. `trash_email` still can, since a move to the trash reports nothing.
 - `Mailbox/get` and `Email/get` find the user's mailboxes and those the email is in, then `Email/set` patches its `mailboxIds`: the email leaves the user's other mailboxes, while a mailbox of someone else that is shared with the user keeps it.
 - Both are low-risk writes (`x-twake-risk: low`): the email can be moved back.
 
