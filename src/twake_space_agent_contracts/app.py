@@ -8,7 +8,7 @@ import httpx
 from fastapi import FastAPI
 from psycopg_pool import AsyncConnectionPool
 
-from twake_space_agent_contracts import applications, problems
+from twake_space_agent_contracts import applications, documents, problems
 from twake_space_agent_contracts.caller import TokenVerifier, caller_dependency
 from twake_space_agent_contracts.settings import Settings
 
@@ -88,4 +88,7 @@ def create_app(
 
 def create_app_from_env() -> FastAPI:
     """Entry point for uvicorn --factory, configured by the environment."""
+    # Its settings and the tokens it handles stay the service's own: the processes it starts to
+    # read documents may not inspect it
+    documents.forbid_inspection()
     return create_app(os.environ["DATABASE_URL"], Settings.from_env())

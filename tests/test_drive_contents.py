@@ -15,13 +15,14 @@ async def read_content(client: AsyncClient, file_id: str, **params: Any) -> Resp
 async def test_a_text_file_comes_as_untrusted_text(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
-    content = "# Réunion\n\tpoint 1\r\n\x1b[2Jfin\x00".encode()
+    content = "# Réunion\n\tpoint 1\r\n\x1b[2Jfin\x00\rhidden".encode()
     boundary.drive.add(text_file("notes", "notes.md", content=content, mime="text/markdown"))
 
     response = await read_content(client, "notes")
 
     assert response.status_code == 200, response.text
-    # Without the control characters, but for tabs and line breaks
+    # Without the control characters, but for tabs and line breaks, which come as line feeds: a
+    # carriage return alone would have a terminal write what follows over the line
     assert response.json() == {
         "id": "notes",
         "size": len(content),
@@ -29,7 +30,7 @@ async def test_a_text_file_comes_as_untrusted_text(
         "untrusted": {
             "name": "notes.md",
             "mime": "text/markdown",
-            "content": "# Réunion\n\tpoint 1\r\n[2Jfin",
+            "content": "# Réunion\n\tpoint 1\n[2Jfin\nhidden",
         },
     }
 
@@ -87,12 +88,12 @@ async def test_max_bytes_out_of_range_is_an_invalid_request(
 @pytest.mark.parametrize(
     ("name", "mime"),
     [
-        ("report.pdf", "application/pdf"),
-        ("budget.ods", "application/vnd.oasis.opendocument.spreadsheet"),
+        ("report.doc", "application/msword"),
+        ("photo.jpg", "image/jpeg"),
         ("meeting.cozy-note", "text/vnd.cozy.note+markdown"),
         ("notes.bin", "application/x-read-me-to-the-assistant"),
     ],
-    ids=["a PDF", "a spreadsheet", "a note", "a type its uploader made up"],
+    ids=["an older Word document", "an image", "a note", "a type its uploader made up"],
 )
 async def test_a_file_that_is_not_text_is_not_extracted(
     client: AsyncClient, boundary: FakeBoundary, name: str, mime: str

@@ -292,7 +292,7 @@ The Drive contracts act in the user's cozy-stack instance, which accepts only it
 - An instance is one name under `DRIVE_INSTANCE_DOMAIN`, such as `alice.<domain>`. Without an instance, or with any other host, such as an address or a host of another domain, a Drive contract answers `drive_instance_unknown`, and the Drive token goes nowhere. Without a Drive token, it answers `missing_drive_token`.
 - The service calls the instance over HTTPS, with the Drive token as a bearer token: it must reach the users' instances. What is in the trash, or out of the token's reach, answers exactly like what does not exist.
 - The contracts need no more of the Drive token than `io.cozy.files:GET,POST`: `GET` on all the user's files, to read them, their index of recent files and their links, and `POST`, to create a file. A token without `POST` finds every folder out of its reach: `create_file` answers `folder_not_found`.
-- Names, paths, types and contents come in an `untrusted` object, apart from what the contract computed: the user wrote them, or anyone who shared a file with them, and the type of a file is the one its uploader declared. They come without control characters, but for the tabs and line breaks of a text.
+- Names, paths, types and contents come in an `untrusted` object, apart from what the contract computed: the user wrote them, or anyone who shared a file with them, and the type of a file is the one its uploader declared. They come without control characters, but for the tabs and line breaks of a text, each line break a line feed: a carriage return alone would have a terminal write what follows it over the line.
 - `web_url` opens the item in the Drive web app, for the user: on `<name>-drive.<domain>` when the stack serves its apps on flat subdomains, as its capabilities say, else on `drive.<instance>`.
 - Lists hold 1 to 100 items, 20 by default. When `next_cursor` is not null, more follow: pass it as `cursor`.
 - Its words in `x-twake-domains` say what reading and writing cover there.
@@ -316,15 +316,33 @@ Reads the user's files and folders, as they see them in Drive.
 
 ### `drive.content.read.v1`
 
-Reads the text of one of the user's files.
+Reads the text of one of the user's files, such as to summarise it: a text as it is, a document as text laid out the same whatever application wrote it.
 
 | Operation | Request | Answer |
 |---|---|---|
 | `read_file_content` | `GET /contracts/v1/drive/contents/{file_id}?max_bytes=…` | `{"id", "size", "truncated", "untrusted": {"name", "mime", "content"}}` |
 
-- Only text is read: `text/*`, JSON, XML and YAML. Any other file, such as a PDF, an office document or a note, answers `content_not_extractable`.
-- At most `max_bytes` bytes are read from the stack, 65,536 by default and 262,144 at most, and `truncated` tells that the file is longer. A character cut at the end is left out, and bytes that are not UTF-8 are replaced.
-- A file encrypted on the user's devices answers `file_encrypted`; one the antivirus found infected, or whose download it blocks, `file_blocked`.
+A text, `text/*`, JSON, XML or YAML, comes as it is: at most `max_bytes` bytes are read from the stack, 65,536 by default and 262,144 at most, and `truncated` tells that the file is longer. A character cut at the end is left out, and bytes that are not UTF-8 are replaced.
+
+A document of one of these types, as its uploader declared it, comes as this text:
+
+| Type | `content` |
+|---|---|
+| Word (`docx`), OpenDocument text (`odt`) | its paragraphs in order, its headings marked as in Markdown (`# Title`, `## Section`), from their outline level or their style, its list items after a dash, two spaces further for each list they are nested in, and its tables as rows of cells parted by tabs, between blank lines |
+| PowerPoint (`pptx`), OpenDocument presentation (`odp`) | slide by slide, each under a heading that numbers it and gives its title, such as `# Slide 2: Roadmap`, and says `(hidden)` of a slide the slide show skips, then the text of its other shapes in their order, its tables as rows, and its speaker notes under `## Notes`; a slide without text by its heading alone |
+| Excel (`xlsx`), OpenDocument spreadsheet (`ods`) | sheet by sheet, each under a heading that numbers it and gives its name, such as `# Sheet 1: Budget`, and says `(hidden)` of a hidden sheet, then a line for each row that holds values, its values parted by tabs from the first column: the values last computed, never the formulas, a number up to 15 digits, a date as `2026-10-01 14:30`, whatever language showed them. Only the first 1,000 rows that hold values and the first 50 columns of a sheet are read, as a line between brackets under its heading says |
+| PDF | page by page, each under a heading such as `# Page 3`, the text of its text layer, as pypdf extracts it, a page without text, such as a scanned one, by its heading alone. Only the first 200 pages are read, as a first line between brackets says |
+
+- What a reader does not see where it sits is left out: text deleted under tracked changes, field codes, the copies Office writes for older readers, footnotes, comments, the readings set above words (ruby), and what a slide's master fills in, such as its number. Headers, footers and charts are not read either.
+- The text comes without Unicode's control and format characters, invisible or bidirectional, which a reader does not see either, but for its tabs and line feeds.
+- `max_bytes` bounds the text that comes back, in UTF-8, a character cut at the end left out, and `truncated` tells that the document holds more: its text was cut there, or the reading stopped at one of its bounds. The reading process gives `max_bytes` characters at most: it cuts the line that goes beyond them, however long, and stops, so that a long document is read no further than asked. The service reads no more of its answer than those characters take once JSON escapes them, and 4 KiB besides, and cuts the text at `max_bytes` characters before cleaning it.
+- A document is downloaded whole, 20 MiB at most, and read in a process of its own: an owner has one document read at a time, all owners two, and a request waits for its turn 10 seconds at most, past which it answers 503 `reading_busy`. The process gets the document on its standard input and nothing of the service's environment, and the service, marked as not dumpable, keeps its environment and its memory from it too: whatever a document crafted against a parser makes it do happens there, within 160 MiB of address space, past which an allocation fails and the document answers `content_not_extractable`. Once started, the process takes some 60 MiB, and up to some 80 MiB while it reads the longest texts: two processes and the service stay well within the 512 MiB of a pod.
+- A zip's XML parts are parsed by Python's own zip and XML modules as they unpack, letting go of what each reader is done with, and refused if they declare a document type, where XML bombs and external entities hide, or nest their elements more than 500 deep. PDFs are read with pypdf, which runs no other program.
+- The reading stops after 10 seconds, and gives the text it read, `truncated`, ending with a line between brackets that says why; the service stops a process that has not answered after 15 seconds, and the kernel one that ran 20 seconds on a processor.
+- A document over 20 MiB answers 413 `file_too_large`, before any download when the stack's size says so, as does a document whose zip lists more than 10,000 files, unpacks into more than 256 MiB, or holds a file of more than 1 MiB compressed over 100 times, as a zip bomb does. A zip that compresses a file otherwise than stored or deflated, as Office and LibreOffice do, or of the ZIP64 format, for zips beyond 65,535 files or 4 GiB, is not unpacked: it answers `content_not_extractable`.
+- A file encrypted on the user's devices answers 409 `file_encrypted`, as does a document protected by a password: Office keeps such a document in a compound file, LibreOffice says so in its manifest, and a PDF needs its password to open. A PDF its owner only restricts, such as from being printed, opens without one, and is read.
+- A file of another type, such as a note, an image or an older Office document, answers 415 `content_not_extractable`, as does a document that is damaged or not of its type, a PDF that holds no text, as a scanned one, and a document that gave no text in the time or the memory its reading has: the detail says which, and never what the file holds.
+- A file the antivirus found infected, or whose download it blocks, answers `file_blocked`.
 - The service reads the file with `POST /files/_all_docs`, then its content with `GET /files/download/{file_id}`.
 
 ### `drive.file.create.v1`
@@ -463,7 +481,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `invitation_cancelled` | the organizer cancelled the event |
 | 409 | `identity_ambiguous` | the Chat account named after the user's email does not list that email |
 | 409 | `room_encrypted` | the room is encrypted, so its messages cannot be read; `room` gives what it shows of itself |
-| 409 | `file_encrypted` | the file is encrypted on the user's devices |
+| 409 | `file_encrypted` | the file is encrypted on the user's devices, or the document is protected by a password |
 | 409 | `file_blocked` | the antivirus of the user's Drive blocks the file |
 | 409 | `folder_shared` | the folder is shared with other people, or lies in a shared folder |
 | 409 | `event_exists` | the user's calendar has an event of this title at these times already, with other details: nothing was changed |
@@ -477,7 +495,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `trash_ambiguous` | several of the user's mailboxes have the role trash, which no contract chooses among: the user keeps a single one in Twake Mail |
 | 409 | `mailbox_forbidden` | `move_email` and `move_emails` do not move an email to drafts, sent, outbox, templates, trash or spam |
 | 409 | `email_in_spam` | the email is in spam, which only `trash_email` and `trash_emails` take it out of; the code of an email refused when several are moved at once |
-| 415 | `content_not_extractable` | the file is not text |
+| 413 | `file_too_large` | the document takes more than the 20 MiB the service reads, or more than it reads once uncompressed |
+| 415 | `content_not_extractable` | the file is neither text nor a document the service reads, or the document is damaged, holds no text, as a scanned PDF, or gave none in the time or the memory its reading has |
 | 429 | `chat_rate_limited` | Chat limits the requests made as the user; `retry_after_ms` says when to try again, when Chat says it |
 | 502 | `calendar_refused` | Calendar refused the user's token |
 | 502 | `calendar_unavailable` | Calendar did not answer, or answered in an unexpected form |
@@ -492,6 +511,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 502 | `tasks_unavailable` | Tasks did not answer, or answered in an unexpected form |
 | 502 | `task_created_partially` | Tasks created the task, then failed to set its priority or due date: `board_id`, `task_id` and `key` name it |
 | 503 | `keys_unavailable` | the signing keys of LemonLDAP-NG could not be fetched, and none are held |
+| 503 | `reading_busy` | the service reads as many documents as it may at once, or one of the user's, and none ended in the 10 seconds a request waits: try again in a few seconds |
 
 Routing errors, such as an unknown path, use the same format, with a `code` named after their HTTP status (`not_found`, `method_not_allowed`).
 
@@ -530,7 +550,7 @@ The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user
 
 ## Test
 
-The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
+The tests call the HTTP API against a real PostgreSQL that they start with Docker. LemonLDAP-NG's signing keys, the Calendar side service, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. The documents the fake cozy-stack serves are built in the tests, by python-docx, python-pptx and openpyxl, which only the tests use, or by hand, as are OpenDocument files, PDFs and the documents crafted against a reader, and each is read in its own process, as the service reads them. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
 
 ```sh
 uv run pytest
