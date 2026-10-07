@@ -65,7 +65,8 @@ def forbidden_role(board_id: str) -> Problem:
         status=403,
         code="forbidden_role",
         title="Role forbids writing",
-        detail=f"The user is a viewer of board {board_id}: they only read it.",
+        detail=f"The user is a viewer of board {board_id}: they only read it, and comment on its"
+        " tasks with comment_on_task.",
     )
 
 

@@ -46,6 +46,8 @@ async def test_a_viewer_writes_nothing(
 
     assert response.status_code == 403
     assert response.json()["code"] == "forbidden_role"
+    # What a viewer still does, as in Tasks
+    assert "comment_on_task" in response.json()["detail"]
     assert boundary.tasks.writes == []
 
 
