@@ -6,6 +6,7 @@ import sys
 import time
 import tracemalloc
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 from openpyxl import Workbook
@@ -162,3 +163,26 @@ async def test_an_owner_has_one_document_read_at_a_time(monkeypatch: pytest.Monk
 
     held.set()
     await first
+
+
+async def test_a_reading_process_starts_with_nothing_of_the_service_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Where the service's settings are, such as the password of its database: the process starts
+    # without any environment, isolated, which also leaves out any setting of Python's own
+    monkeypatch.setenv("DATABASE_URL", "postgresql://reader:secret@db/events")
+    started: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    start = asyncio.create_subprocess_exec
+
+    async def recorded(*command: Any, **options: Any) -> asyncio.subprocess.Process:
+        started.append((command, options))
+        return await start(*command, **options)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", recorded)
+
+    text = await Reader().read("docx", word(lambda document: document.add_paragraph("Plans")), 99)
+
+    assert text.text == "Plans"
+    [(command, options)] = started
+    assert options["env"] == {}
+    assert command[:2] == (sys.executable, "-I")
