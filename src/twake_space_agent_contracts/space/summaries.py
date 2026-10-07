@@ -37,6 +37,7 @@ class _Words:
     add: str
     left: str
     unchanged: str
+    through_groups: str
     roles: dict[str, str]
     """Each role, for several people."""
     role: dict[str, str]
@@ -71,6 +72,9 @@ _WORDS: dict[Language, _Words] = {
         add="Ajouter à {space}, comme {roles}, ces personnes, qui en voient alors tout le"
         " contenu :",
         left="Déjà membres, laissés tels quels :",
+        through_groups="Déjà membres, peut-être par un groupe lié : ceci en fait des membres"
+        " directs, comme {roles}, et n'ajoute personne si l'un d'eux est membre direct d'un autre"
+        " rôle :",
         unchanged="Rien ne change dans {space} : ces personnes y sont déjà {roles} :",
         roles={"viewer": "lecteurs", "editor": "éditeurs", "admin": "administrateurs"},
         role={"viewer": "lecteur", "editor": "éditeur", "admin": "administrateur"},
@@ -113,6 +117,8 @@ _WORDS: dict[Language, _Words] = {
         delete="Delete {item} from the feed of {space}, for good, with its reactions",
         add="Add to {space}, as {roles}, these people, who then see all it holds:",
         left="Members already, left as they are:",
+        through_groups="Members already, maybe through a linked group: this makes them direct"
+        " members, as {roles}, and adds nobody if one of them is a direct member of another role:",
         unchanged="Nothing changes in {space}: these people are {roles} there already:",
         roles={"viewer": "viewers", "editor": "editors", "admin": "admins"},
         role={"viewer": "viewer", "editor": "editor", "admin": "admin"},
@@ -290,39 +296,63 @@ def deleting(item: FeedItem, me: str | None, space: str | None, language: Langua
     return _with_text(head, item.body, language)
 
 
-def _person_line(found: Person, room: int, language: Language) -> str:
+def _person_line(found: Person, after: str, room: int, language: Language) -> str:
     """A person on a line of its own after a tab, by their name and their email, as previews lay
-    people out, within `room` of the summary: a name that would take more is cut, the email
-    kept whole."""
+    people out, then `after`, within `room` of the summary: a name that would take more is cut,
+    the email kept whole."""
     shown = person(found.display_name, found.email, language) or one_line(found.username)
-    if shown_size("\t" + shown) <= room:
-        return "\t" + shown
+    if shown_size("\t" + shown + after) <= room:
+        return "\t" + shown + after
     # What the layout puts around a name: its quotation marks, and the email
-    around = shown_size("\t" + (person("…", found.email, language) or "")) - shown_size("…")
-    name = fitted(one_line(found.display_name), max(room - around, shown_size("…")))
-    return "\t" + (person(name, found.email, language) or one_line(found.username))
+    around = shown_size("\t" + (person("…", found.email, language) or "") + after)
+    name = fitted(one_line(found.display_name), max(room - around + shown_size("…"), 1))
+    return "\t" + (person(name, found.email, language) or one_line(found.username)) + after
 
 
-def _people(people: list[Person], room: int, language: Language) -> list[str]:
-    """People, each on a line of its own, each within `room` of the summary."""
-    return [_person_line(found, room, language) for found in people]
+def _people(
+    people: list[Person], room: int, language: Language, roles: list[str] | None = None
+) -> list[str]:
+    """People, each on a line of its own, with their role when given, each within `room` of the
+    summary."""
+    words = _WORDS[language]
+    afters = [f" ({words.role[role]})" for role in roles] if roles else [""] * len(people)
+    return [
+        _person_line(found, after, room, language)
+        for found, after in zip(people, afters, strict=True)
+    ]
 
 
 def adding_members(
-    space: str | None, role: str, added: list[Person], left: list[Person], language: Language
+    space: str | None,
+    role: str,
+    added: list[Person],
+    listed: list[tuple[Person, str]],
+    groups: bool,
+    language: Language,
 ) -> str:
     """What adding people to a space does, as the owner reads it: whom it takes in and as what,
-    and who are members already, or that nothing changes. Each person takes an equal share of
-    what the summary leaves."""
+    and who the space lists already: left as they are, or, when it links groups, made direct
+    members; or that nothing changes. Each person takes an equal share of what the summary
+    leaves."""
     words = _WORDS[language]
     named = {"space": space_named(space, language), "roles": words.roles[role]}
-    heads = [words.add.format(**named), words.left] if added else [words.unchanged.format(**named)]
-    room = (BUDGET - shown_size("\n".join(heads))) // max(len(added) + len(left), 1) - 1
-    if not added:
-        return "\n".join([heads[0], *_people(left, room, language)])
-    lines = [heads[0], *_people(added, room, language)]
-    if left:
-        lines += [words.left, *_people(left, room, language)]
+    people = [found for found, _ in listed]
+    if groups:
+        heads = [words.add.format(**named)] if added else []
+        heads += [words.through_groups.format(**named)] if listed else []
+    elif added:
+        heads = [words.add.format(**named), words.left]
+    else:
+        heads = [words.unchanged.format(**named)]
+    room = (BUDGET - shown_size("\n".join(heads))) // max(len(added) + len(listed), 1) - 1
+    roles = [held for _, held in listed] if groups else None
+    lines = []
+    if added:
+        lines += [words.add.format(**named), *_people(added, room, language)]
+    if listed and groups:
+        lines += [words.through_groups.format(**named), *_people(people, room, language, roles)]
+    elif listed:
+        lines += [words.left if added else heads[0], *_people(people, room, language)]
     return "\n".join(lines)
 
 

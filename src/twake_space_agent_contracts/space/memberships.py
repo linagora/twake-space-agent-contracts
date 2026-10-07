@@ -105,7 +105,10 @@ def _add(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
             "Adds people of the organization of the user you act for, by the usernames "
             "search_organization_people gives, to a space where the user is an admin, all with "
             f"one role, {MOST_PEOPLE} at most: they see the space, its feed and what its apps "
-            "hold, such as its chat room, tasks and files. Call it only once the user asked to "
+            "hold, such as its chat room, tasks and files. Someone the space lists through a "
+            "linked group becomes a direct member, with this role; a direct member of another "
+            "role answers member_exists, and nobody is added: update_space_member changes their "
+            "role. Call it only once the user asked to "
             "add these very people; they confirm each call. It answers the space, as read_space "
             f"gives it. {UNTRUSTED} Example, to add a colleague who will post: {EXAMPLE_SPACE}, "
             'body={"usernames": ["jmartin"], "role": "editor"}.'
@@ -124,27 +127,49 @@ def _add(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         detail = await _administered(space, user, space_id)
         people = await _people(space, user, new.usernames)
         members = {member.username.lower(): member for member in detail.members}
-        already = [members[key] for person in people if (key := person.username.lower()) in members]
-        # Space would refuse them, as ldap-rest does: their role is changed, not added again
-        others = [member for member in already if member.role != new.role]
-        if others:
-            raise member_exists(space_id, others)
         added = [person for person in people if person.username.lower() not in members]
-        left = [person for person in people if person.username.lower() in members]
-        # What the owner allows: the people, and who of them are members already
+        listed = [person for person in people if person.username.lower() in members]
+        roles = [members[person.username.lower()].role for person in listed]
+        others = [members[person.username.lower()] for person in listed]
+        others = [member for member in others if member.role != new.role]
+        groups = bool(detail.groups)
+        # A space without linked groups lists its direct members alone, whom ldap-rest refuses
+        # with another role: their role is changed, not added again
+        if others and not groups:
+            raise member_exists(space_id, others)
+        # One with linked groups may list people through them, whom ldap-rest, which sees the
+        # direct members alone, makes direct members: they are added too
+        sent = added + listed if groups else added
+        # What the owner allows: the people, and who of them the space lists, as what
         digest = digest_of(
             space_id,
             new.role,
             sorted([person.username.lower(), person.email] for person in added),
-            sorted([person.username.lower(), person.email] for person in left),
+            sorted(
+                [person.username.lower(), person.email, role]
+                for person, role in zip(listed, roles, strict=True)
+            ),
         )
         if preview.asked:
-            summary = adding_members(detail.name, new.role, added, left, preview.language)
+            summary = adding_members(
+                detail.name,
+                new.role,
+                added,
+                list(zip(listed, roles, strict=True)),
+                groups,
+                preview.language,
+            )
             return preview.answer(summary, digest)
         preview.check(digest)
-        if not added:
+        if not sent:
             return space_of(detail, user)
-        await space.add_members(user, space_id, [person.username for person in added], new.role)
+        try:
+            await space.add_members(user, space_id, [person.username for person in sent], new.role)
+        except Problem as problem:
+            # Some of those the space lists are direct members of another role
+            if problem.code != "member_exists":
+                raise
+            raise member_exists(space_id, others) from problem
         return space_of(await space.space(user, space_id), user)
 
     return routes

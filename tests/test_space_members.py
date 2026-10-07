@@ -543,3 +543,67 @@ async def test_the_preview_of_a_removal_warns_that_a_linked_group_keeps_its_peop
         "Sauf si elle en est membre par un groupe lié, et le reste tant que le groupe est lié et"
         " qu'elle en fait partie."
     )
+
+
+async def test_adding_a_member_through_a_linked_group_makes_them_a_direct_member(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # ldap-rest's member routes see the direct members alone: it adds Carol as one, whose
+    # strongest role the space then lists
+    room = with_designers(boundary)
+
+    response = await add(client, room, {"usernames": ["carol"], "role": "admin"})
+
+    assert response.status_code == 200, response.text
+    assert room.members[CAROL.user_id] == SpaceMembership(CAROL, "admin")
+    assert [
+        (member["username"], member["role"])
+        for member in response.json()["members"]
+        if member["username"] == "carol"
+    ] == [("carol", "admin")]
+    assert boundary.space.writes == [
+        ("POST", f"/spaces/{room.id}/members", {"usernames": ["carol"], "role": "admin"})
+    ]
+
+
+async def test_a_direct_member_of_another_role_in_a_space_with_groups_adds_nobody(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The contract cannot tell Bob, a direct member, from someone the space lists through a
+    # group: ldap-rest refuses him, and nobody is added
+    room = with_designers(boundary)
+
+    response = await add(client, room, {"usernames": ["jmartin", "bob"], "role": "editor"})
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "member_exists"
+    assert response.json()["members"] == [{"user_id": BOB.user_id, "role": "viewer"}]
+    assert JEANNE.user_id not in room.listed()
+    assert room.members[BOB.user_id] == SpaceMembership(BOB, "viewer")
+
+
+async def test_the_preview_tells_that_adding_makes_members_through_a_group_direct_ones(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    room = with_designers(boundary)
+    body = {"usernames": ["jmartin", "carol"], "role": "admin"}
+
+    english = await add(client, room, body, asking_preview("en"))
+    french = await add(client, room, body, asking_preview("fr"))
+
+    assert preview_of(english)[0] == (
+        "Add to the space “Design”, as admins, these people, who then see all it holds:\n"
+        "\t“Jeanne Martin” <jmartin@twake.test>\n"
+        "Members already, maybe through a linked group: this makes them direct members, as"
+        " admins, and adds nobody if one of them is a direct member of another role:\n"
+        "\t“Carol King” <carol@twake.test> (editor)"
+    )
+    assert preview_of(french)[0] == (
+        "Ajouter à l'espace « Design », comme administrateurs, ces personnes, qui en voient alors"
+        " tout le contenu :\n"
+        "\t« Jeanne Martin » <jmartin@twake.test>\n"
+        "Déjà membres, peut-être par un groupe lié : ceci en fait des membres directs, comme"
+        " administrateurs, et n'ajoute personne si l'un d'eux est membre direct d'un autre rôle :\n"
+        "\t« Carol King » <carol@twake.test> (éditeur)"
+    )
+    assert boundary.space.writes == []

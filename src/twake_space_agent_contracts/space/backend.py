@@ -89,9 +89,9 @@ def member_exists(space_id: str, members: "list[Member]") -> Problem:
         status=409,
         code="member_exists",
         title="Member exists",
-        detail=f"Some of these people are members of space {space_id} already, with another"
-        " role, which update_space_member changes: nobody was added. members names them, when"
-        " the contract tells.",
+        detail=f"Some of these people are direct members of space {space_id} already, with"
+        " another role, which update_space_member changes: nobody was added. members names those"
+        " the space lists with another role, when the contract tells.",
         extensions={
             "members": [{"user_id": member.user_id, "role": member.role} for member in members]
         },
