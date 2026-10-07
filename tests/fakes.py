@@ -2431,6 +2431,52 @@ class SpaceRoom:
     """The groups linked to it: their id, name and role."""
 
 
+@dataclass
+class SpaceCard:
+    """A card of a space's feed: the latest activity of an app on one object, which keeps the
+    place of the object's first."""
+
+    id: str
+    space: str
+    category: str
+    """files, events, activities or messages."""
+    type: str
+    """The type of the latest activity's event."""
+    actor: Any
+    """Who made the latest activity, as Space stores them: {"type": "user", "id", "email"}, the id
+    null for someone outside the space, {"type": "token", "id", "name"}, {"type": "deleted_user"},
+    or None for no one in particular."""
+    object: dict[str, Any]
+    preview: str | None
+    state: Any
+    time: str
+    updated_at: str
+
+
+@dataclass
+class SpacePost:
+    """A post a member wrote in a space's feed."""
+
+    id: str
+    space: str
+    author: str | None
+    """The user id of its author; None once their account is deleted."""
+    body: str
+    time: str
+    edited_at: str | None = None
+
+
+@dataclass(frozen=True)
+class SpaceReaction:
+    """A person's reaction to an item of a space's feed."""
+
+    item: str
+    user_id: str
+    key: str
+    created_at: int
+    """The order reactions were added in."""
+
+
 class FakeSpace:
     """The Twake Space backend 0.1.9, as the contracts call its REST API with the bearer's token.
 
@@ -2456,6 +2502,63 @@ class FakeSpace:
         self.organizations: dict[str, str | None] = {}
         """The org_id LemonLDAP-NG gives Space for each person, by email: SPACE_ORGANIZATION
         unless set, and None for a person it gives none, whom Space refuses."""
+        self.cards: dict[str, SpaceCard] = {}
+        self.posts: dict[str, SpacePost] = {}
+        self.reactions: list[SpaceReaction] = []
+
+    def card(
+        self,
+        room: SpaceRoom,
+        category: str,
+        type: str,
+        *,
+        actor: SpacePerson | dict[str, Any] | None,
+        object: dict[str, Any],
+        time: str,
+        updated_at: str | None = None,
+        preview: str | None = None,
+        state: Any = None,
+    ) -> SpaceCard:
+        """Arranges a card in the feed of the space, by a person, or by an actor as Space stores
+        it."""
+        stored = (
+            {"type": "user", "id": actor.user_id, "email": actor.email}
+            if isinstance(actor, SpacePerson)
+            else actor
+        )
+        card = SpaceCard(
+            space_id(f"card {room.id} {object['id']}"),
+            room.id,
+            category,
+            type,
+            stored,
+            object,
+            preview,
+            {} if state is None else state,
+            time,
+            updated_at or time,
+        )
+        self.cards[card.id] = card
+        return card
+
+    def post(
+        self, room: SpaceRoom, author: SpacePerson | None, body: str, *, time: str, **more: Any
+    ) -> SpacePost:
+        """Arranges a post in the feed of the space, by its author, None once deleted."""
+        post = SpacePost(
+            space_id(f"post {room.id} {time} {body}"),
+            room.id,
+            author.user_id if author else None,
+            body,
+            time,
+            **more,
+        )
+        self.posts[post.id] = post
+        return post
+
+    def react(self, item: SpaceCard | SpacePost, person: SpacePerson, key: str) -> None:
+        """Arranges a reaction of the person to the item."""
+        self.reactions.append(SpaceReaction(item.id, person.user_id, key, len(self.reactions)))
 
     def people(self, *persons: SpacePerson, organization: str = SPACE_ORGANIZATION) -> None:
         """Arranges people in the directory of the organization."""
@@ -2506,11 +2609,25 @@ class FakeSpace:
             return self._directory(request, organization)
         if request.method == "GET" and path == "/spaces":
             return httpx.Response(200, json={"spaces": self._listed(*caller)})
-        found = re.fullmatch(r"/spaces/([^/]+)", path)
+        found = re.fullmatch(r"/spaces/([^/]+)(/.*)?", path)
         room = self._reached(found[1], *caller) if found else None
-        if request.method != "GET" or room is None:
+        if room is None:
             return _space_refusal(404, "not_found")
-        return httpx.Response(200, json=self._space(room, caller[0]))
+        assert found is not None
+        rest = found[2] or ""
+        if request.method == "GET" and rest == "":
+            return httpx.Response(200, json=self._space(room, caller[0]))
+        if request.method == "GET" and rest == "/feed":
+            return self._feed(room, request.url.params)
+        item = re.fullmatch(r"/feed/items/([^/]+)", rest)
+        if request.method == "GET" and item:
+            shown = self._item(room, item[1])
+            return (
+                _space_refusal(404, "not_found")
+                if shown is None
+                else httpx.Response(200, json=shown)
+            )
+        return _space_refusal(404, "not_found")
 
     def _reached(self, room_id: str, user_id: str, organization: str) -> SpaceRoom | None:
         """The space of that id, if the person is a member of it, in their organization."""
@@ -2572,6 +2689,88 @@ class FakeSpace:
             if self._reached(room.id, user_id, organization)
         ]
 
+    def _feed(self, room: SpaceRoom, params: httpx.QueryParams) -> httpx.Response:
+        """A page of the feed of the space, newest first, as GET /spaces/:id/feed gives it."""
+        category = params.get("category")
+        limit = params.get("limit", "20")
+        before = _feed_cursor(params["before"]) if "before" in params else None
+        if (
+            category not in (None, "messages", "files", "activities", "events")
+            or not limit.isdigit()
+            or not 1 <= int(limit) <= 50
+            or before is False
+        ):
+            return _space_refusal(400, "invalid_request")
+        rows = [
+            (card.time, card.id)
+            for card in self.cards.values()
+            if card.space == room.id and category in (None, card.category)
+        ]
+        # A post is a message: other categories hold cards only
+        if category in (None, "messages"):
+            rows += [(post.time, post.id) for post in self.posts.values() if post.space == room.id]
+        rows = sorted((row for row in rows if before is None or row < before), reverse=True)
+        shown = rows[: int(limit)]
+        more = len(rows) > int(limit)
+        return httpx.Response(
+            200,
+            json={
+                "items": [self._item(room, item_id) for _, item_id in shown],
+                "next": _feed_cursor_of(*shown[-1]) if more else None,
+            },
+        )
+
+    def _item(self, room: SpaceRoom, item_id: str) -> dict[str, Any] | None:
+        """An item of the feed of the space, as Space serializes it; None for any other."""
+        reactions: dict[str, list[str]] = {}
+        for reaction in sorted(self.reactions, key=lambda reaction: reaction.created_at):
+            if reaction.item == item_id:
+                reactions.setdefault(reaction.key, []).append(reaction.user_id)
+        common = {
+            "id": item_id,
+            "reactions": [{"key": key, "userIds": users} for key, users in reactions.items()],
+        }
+        card = self.cards.get(item_id)
+        if card is not None and card.space == room.id:
+            return common | {
+                "kind": "card",
+                "category": card.category,
+                "time": card.time,
+                "updatedAt": card.updated_at,
+                "type": card.type,
+                "actor": self._named(room, card.actor),
+                "object": {
+                    "type": card.object["type"],
+                    "id": card.object["id"],
+                    "title": card.object["title"],
+                    "container": card.object.get("container"),
+                },
+                "preview": card.preview,
+                "state": card.state,
+            }
+        post = self.posts.get(item_id)
+        if post is not None and post.space == room.id:
+            author = {"type": "user", "id": post.author} if post.author else None
+            return common | {
+                "kind": "post",
+                "category": "messages",
+                "time": post.time,
+                "updatedAt": post.edited_at or post.time,
+                "author": self._named(room, author) or {"type": "deleted_user"},
+                "body": post.body,
+                "editedAt": post.edited_at,
+            }
+        return None
+
+    def _named(self, room: SpaceRoom, actor: Any) -> Any:
+        """An actor as Space gives it: a user by their id and the name the space knows them by,
+        their display name or their username, null for someone outside the space."""
+        if not isinstance(actor, dict) or actor.get("type") != "user":
+            return actor
+        member = room.members.get(actor.get("id") or "")
+        name = (member[0].display_name or member[0].username) if member else None
+        return {"type": "user", "id": actor.get("id"), "name": name}
+
     def _space(self, room: SpaceRoom, user_id: str) -> dict[str, Any]:
         """A space of the person, as GET /spaces/:id gives it."""
         return {
@@ -2593,6 +2792,22 @@ class FakeSpace:
             # Each kind the deployment provides, with its id once its app linked one
             "resources": [{"kind": kind, "id": room.resources.get(kind)} for kind in SPACE_KINDS],
         }
+
+
+def _feed_cursor_of(time: str, item_id: str) -> str:
+    """The cursor of the page that follows an item, as Space writes it."""
+    return base64.urlsafe_b64encode(f"{time}|{item_id}".encode()).decode().rstrip("=")
+
+
+def _feed_cursor(cursor: str) -> tuple[str, str] | Literal[False]:
+    """The time and id of the item a cursor follows; False for a cursor Space did not write."""
+    try:
+        time, item_id = (
+            base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode().split("|")
+        )
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return (time, item_id)
 
 
 def _space_refusal(status: int, error: str) -> httpx.Response:

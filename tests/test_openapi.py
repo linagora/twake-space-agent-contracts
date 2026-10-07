@@ -263,6 +263,8 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "list_spaces": ["space.spaces.read.v1"],
         "read_space": ["space.spaces.read.v1"],
         "search_organization_people": ["space.people.read.v1"],
+        "list_feed_items": ["space.feed.read.v1"],
+        "read_feed_item": ["space.feed.read.v1"],
     }
 
 

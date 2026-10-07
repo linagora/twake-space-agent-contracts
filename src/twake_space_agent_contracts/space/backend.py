@@ -3,12 +3,12 @@ of the token's user in their org_id, and shows them the spaces they are a member
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from twake_space_agent_contracts.caller import User
-from twake_space_agent_contracts.problems import Problem
+from twake_space_agent_contracts.problems import Problem, invalid_request
 
 # The ids of spaces, people and items of a feed, as Space writes them: a pattern any OpenAPI
 # validator checks
@@ -123,6 +123,119 @@ class Person:
     display_name: str | None
 
 
+ActorKind = Literal["user", "token", "deleted_user"]
+ItemKind = Literal["card", "post"]
+
+
+@dataclass(frozen=True)
+class Actor:
+    """Who made the latest activity of a card, or wrote a post, as Space names them."""
+
+    kind: ActorKind
+    user_id: str | None
+    """A user's id, as Space knows the members of the space; None for someone outside it, or for
+    any other kind."""
+    name: str | None
+    """The name the space knows a user by, the name of a token; None for anyone else."""
+
+
+@dataclass(frozen=True)
+class Reaction:
+    key: str
+    user_ids: tuple[str, ...]
+    """Who reacted so, in the order they did."""
+
+
+@dataclass(frozen=True)
+class FeedItem:
+    """An item of a space's feed: a card, the latest activity of an app on one object, or a post
+    of a member. What people wrote comes as they wrote it."""
+
+    item_id: str
+    kind: ItemKind
+    category: str
+    time: datetime
+    updated_at: datetime
+    by: Actor | None
+    reactions: tuple[Reaction, ...]
+    event_type: str | None = None
+    object_type: str | None = None
+    object_id: str | None = None
+    title: str | None = None
+    container_kind: str | None = None
+    container_id: str | None = None
+    preview: str | None = None
+    state: Any = None
+    """What the app tells of the object, such as an event's times, as the app sent it."""
+    body: str | None = None
+    edited_at: datetime | None = None
+
+
+def _actor(value: Any) -> Actor | None:
+    """An actor as Space gives it. Raises KeyError, TypeError or ValueError for any other form."""
+    if value is None:
+        return None
+    kind = _text(value["type"])
+    if kind == "user":
+        return Actor("user", _optional_text(value["id"]), _optional_text(value["name"]))
+    if kind == "token":
+        return Actor("token", None, _text(value["name"]))
+    if kind == "deleted_user":
+        return Actor("deleted_user", None, None)
+    raise ValueError(f"an actor of an unknown type: {kind}")
+
+
+def _time(value: Any) -> datetime:
+    return datetime.fromisoformat(_text(value))
+
+
+def _feed_item(value: Any) -> FeedItem:
+    """An item as Space serializes it. Raises KeyError, TypeError or ValueError for any other
+    form."""
+    item_id = _text(value["id"])
+    category = _text(value["category"])
+    time, updated_at = _time(value["time"]), _time(value["updatedAt"])
+    reactions = tuple(
+        Reaction(_text(reaction["key"]), tuple(_text(user) for user in reaction["userIds"]))
+        for reaction in value["reactions"]
+    )
+    kind = value["kind"]
+    if kind == "post":
+        edited = value["editedAt"]
+        return FeedItem(
+            item_id,
+            "post",
+            category,
+            time,
+            updated_at,
+            by=_actor(value["author"]),
+            reactions=reactions,
+            body=_text(value["body"]),
+            edited_at=None if edited is None else _time(edited),
+        )
+    if kind != "card":
+        raise ValueError(f"an item of an unknown kind: {kind}")
+    found = value["object"]
+    container = found["container"]
+    return FeedItem(
+        item_id,
+        "card",
+        category,
+        time,
+        updated_at,
+        by=_actor(value["actor"]),
+        reactions=reactions,
+        event_type=_text(value["type"]),
+        object_type=_text(found["type"]),
+        object_id=_text(found["id"]),
+        title=_text(found["title"]),
+        container_kind=None if container is None else _text(container["kind"]),
+        container_id=None if container is None else _text(container["id"]),
+        preview=_optional_text(value["preview"]),
+        state=value["state"],
+    )
+
+
 def _member(item: Any) -> Member:
     """A member as Space gives them. Raises KeyError, TypeError or ValueError for any other
     form."""
@@ -187,13 +300,17 @@ class TwakeSpace:
         params: dict[str, str | int] | None = None,
         *,
         missing_ok: bool = False,
+        invalid: Problem | None = None,
     ) -> Any:
         """Space's JSON answer; None when what is asked for is missing and missing_ok is set:
         Space answers 404 not_found for what does not exist and for what the user does not
-        reach alike."""
+        reach alike. A refused request raises `invalid` when given: Space checks a parameter
+        the contract cannot."""
         response = await self._call(user, "GET", path, params=params)
         if missing_ok and response.status_code == 404 and _error_of(response) == "not_found":
             return None
+        if invalid is not None and response.status_code == 400:
+            raise invalid
         return self._json(response, "GET", path)
 
     async def spaces(self, user: User) -> list[SpaceSummary]:
@@ -264,3 +381,49 @@ class TwakeSpace:
         if not isinstance(more, bool):
             raise _unavailable("Space gave the people in an unexpected form.")
         return people, more
+
+    async def feed(
+        self,
+        user: User,
+        space_id: str,
+        *,
+        category: str | None,
+        limit: int,
+        before: str | None,
+    ) -> tuple[list[FeedItem], str | None]:
+        """A page of the feed of the space, newest first, and the cursor of the next one; None
+        after the last."""
+        params: dict[str, str | int] = {"limit": limit}
+        if category is not None:
+            params["category"] = category
+        if before is not None:
+            params["before"] = before
+        found = await self._get(
+            user,
+            f"/spaces/{space_id}/feed",
+            params,
+            missing_ok=True,
+            invalid=invalid_request(
+                "before: Space does not know this cursor: pass the next a list_feed_items answer"
+                " gave."
+            ),
+        )
+        if found is None:
+            raise space_not_found(space_id)
+        try:
+            items = [_feed_item(item) for item in found["items"]]
+            following = _optional_text(found["next"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Space gave the feed in an unexpected form.") from error
+        return items, following
+
+    async def item(self, user: User, space_id: str, item_id: str) -> FeedItem | None:
+        """The item of the feed of the space; None if the feed has no such item, or if the
+        space is not the user's."""
+        found = await self._get(user, f"/spaces/{space_id}/feed/items/{item_id}", missing_ok=True)
+        if found is None:
+            return None
+        try:
+            return _feed_item(found)
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Space gave the item in an unexpected form.") from error

@@ -11,6 +11,7 @@ from tests.fakes import FakeBoundary, space_id, space_person
 
 MMAUDET = space_person("mmaudet")
 SPACE = f"/contracts/v1/space/spaces/{space_id('Design')}"
+ITEM = f"{SPACE}/feed/items/{space_id('Hello')}"
 # Each operation's method, path, query and body
 OPERATIONS = [
     pytest.param("GET", "/contracts/v1/space/spaces", {}, None, id="list_spaces"),
@@ -18,6 +19,8 @@ OPERATIONS = [
     pytest.param(
         "GET", "/contracts/v1/space/people", {"q": "martin"}, None, id="search_organization_people"
     ),
+    pytest.param("GET", f"{SPACE}/feed", {}, None, id="list_feed_items"),
+    pytest.param("GET", ITEM, {}, None, id="read_feed_item"),
 ]
 PARAMETERS = ("method", "path", "params", "body")
 

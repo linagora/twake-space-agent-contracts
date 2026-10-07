@@ -1,6 +1,7 @@
 """Twake Space: the contracts on the user's spaces, their feeds and their members, through the
 Twake Space backend, as the user."""
 
+import re
 from typing import Annotated
 
 from fastapi import Path
@@ -17,8 +18,20 @@ UNTRUSTED = (
 EXAMPLE_SPACE = "space_id=3b9e2c71-5d4a-4f0e-9c8b-1a2d6e7f8091"
 """A space, as list_spaces gives it, for the worked calls."""
 
+EXAMPLE_ITEM = (
+    "space_id=3b9e2c71-5d4a-4f0e-9c8b-1a2d6e7f8091, item_id=9d1c7a52-0b3e-4f6a-8c2d-5e4f3a2b1c0d"
+)
+"""An item of the feed of a space, as list_feed_items gives it, for the worked calls."""
+
 SpaceId = Annotated[
     str, Path(pattern=SPACE_ID, description="The space_id of the space, as list_spaces gives it.")
+]
+ItemId = Annotated[
+    str,
+    Path(
+        pattern=SPACE_ID,
+        description="The item_id of the item of the feed, as list_feed_items gives it.",
+    ),
 ]
 
 
@@ -26,3 +39,11 @@ def line(text: str | None, longest: int) -> str | None:
     """Words someone wrote, as the contracts give them back: on one line, without what a reader
     does not see, cut after `longest` characters; None for none."""
     return " ".join(seen(text or "").split())[:longest] or None
+
+
+def paragraphs(text: str | None, longest: int) -> str | None:
+    """Text someone wrote on several lines, as the contracts give it back: without what a reader
+    does not see, the blanks inside and at the end of its lines and its runs of blank lines, cut
+    after `longest` characters; None for none."""
+    lines = (" ".join(part.split()) for part in seen(text or "").splitlines())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()[:longest] or None
