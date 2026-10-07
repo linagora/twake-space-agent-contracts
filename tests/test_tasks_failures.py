@@ -23,7 +23,17 @@ OPERATIONS = [
     ),
     pytest.param("GET", "/contracts/v1/tasks/search", {"q": "release"}, None, id="search_tasks"),
     pytest.param("GET", TASK, {}, None, id="read_task"),
+    pytest.param(
+        "POST",
+        f"/contracts/v1/tasks/boards/{BOARD}/tasks",
+        {},
+        {"title": "Plan the launch"},
+        id="create_task",
+    ),
+    pytest.param("PATCH", TASK, {}, {"priority": 1}, id="update_task"),
+    pytest.param("POST", f"{TASK}/complete", {}, None, id="complete_task"),
 ]
+WRITES = [each for each in OPERATIONS if each.id in ("create_task", "update_task", "complete_task")]
 PARAMETERS = ("method", "path", "params", "body")
 
 
@@ -115,8 +125,28 @@ async def test_only_open_boards_opens_tasks(
     body: Any,
 ) -> None:
     # Tasks lists boards only as opening its web app does, which sets up the Inbox and accepts
-    # invitations: a read never does, as the harness runs reads in turns an event started
+    # invitations: a read never acts for the user, and a write does only what it says
     response = await client.request(method, path, params=params, json=body, headers=AS_MMAUDET)
 
     assert response.status_code < 500, response.text
     assert "/api/boards" not in [asked for asked, _ in boundary.tasks.requests]
+
+
+@pytest.mark.parametrize(PARAMETERS, WRITES)
+async def test_a_write_tasks_fails_is_a_bad_gateway(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    method: str,
+    path: str,
+    params: dict[str, str],
+    body: Any,
+) -> None:
+    # Tasks shows the board, then fails the write itself: a new task was not created
+    boundary.tasks.failing = {method: 503}
+
+    response = await client.request(method, path, params=params, json=body, headers=AS_MMAUDET)
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "tasks_unavailable"
+    written, at, _ = boundary.tasks.writes[0]
+    assert response.json()["detail"] == f"Tasks answered 503 to {written} {at}."

@@ -62,6 +62,33 @@ def owner_not_member(consequence: str) -> Problem:
     )
 
 
+def forbidden_role(board_id: str) -> Problem:
+    return Problem(
+        status=403,
+        code="forbidden_role",
+        title="Role forbids writing",
+        detail=f"The user is a viewer of board {board_id}: they only read it.",
+    )
+
+
+def board_archived(board_id: str) -> Problem:
+    return Problem(
+        status=409,
+        code="board_archived",
+        title="Board archived",
+        detail=f"Board {board_id} is archived: nothing changes on it until it is restored.",
+    )
+
+
+def _error_of(response: httpx.Response) -> str | None:
+    """The code Tasks names its refusal with, in {"error": code}."""
+    try:
+        found = response.json()
+    except ValueError:
+        return None
+    return str(found.get("error")) if isinstance(found, dict) else None
+
+
 class BoardText(BaseModel):
     """What members wrote: the names of the board and of its project."""
 
@@ -179,9 +206,14 @@ class BoardContent:
 
     board_id: str
     name: str
+    role: str
+    """The user's: viewer, editor or admin."""
+    inbox: bool
+    archived: bool
     members: list[tuple[str, str]]
     """The members of its project: their user id, and the email they joined with, lowercased."""
     sections: dict[str, Section]
+    """In their order on the board."""
     tasks: dict[str, Any]
     """Its tasks as Tasks gives them, by id."""
 
@@ -272,6 +304,26 @@ class Tasks:
             raise invalid
         return self._json(response, "GET", path)
 
+    async def _write(
+        self, user: User, method: str, board_id: str, task_id: str | None, body: Any, then: str = ""
+    ) -> Any:
+        """Tasks' JSON answer to a write on the board's tasks, or on one task and what `then`
+        names of it; None for an answer without content."""
+        path = f"/api/boards/{board_id}/tasks" + (f"/{task_id}{then}" if task_id else "")
+        response = await self._call(user, method, path, body=body)
+        # Gone, or no longer the user's, since the contract read the board
+        if response.status_code == 404:
+            raise task_not_found(board_id, task_id) if task_id else board_not_found(board_id)
+        if response.status_code == 403:
+            raise forbidden_role(board_id)
+        error = _error_of(response)
+        if response.status_code == 409 and error == "archived":
+            raise board_archived(board_id)
+        # Tasks checks what the contract cannot, such as how deep subtasks nest
+        if response.status_code == 400:
+            raise invalid_request(f"Tasks refused {method} {path}: {error}.")
+        return None if response.status_code == 204 else self._json(response, method, path)
+
     async def boards(self, user: User) -> list[Board]:
         """The boards of the projects the user is a member of: their Inbox, their favorite
         boards, then the others by name.
@@ -346,6 +398,9 @@ class Tasks:
             return BoardContent(
                 board_id=str(found["id"]),
                 name=str(found["name"]),
+                role=str(found["role"]),
+                inbox=found["inbox"] is True,
+                archived=found["archived"] is True,
                 members=[
                     (str(member["userId"]), str(member["email"]).lower())
                     for member in found["members"]
@@ -369,6 +424,40 @@ class Tasks:
         if not isinstance(markdown, str):
             raise _unavailable("Tasks gave the description in an unexpected form.")
         return markdown
+
+    async def create_task(
+        self,
+        user: User,
+        board_id: str,
+        title: str,
+        *,
+        section_id: str | None,
+        parent_id: str | None,
+    ) -> tuple[str, str]:
+        """Creates a task at the end of the section, outside sections when section_id is None,
+        or at the end of the parent's subtasks: its id and key."""
+        where = {"sectionId": section_id} if parent_id is None else {"parentId": parent_id}
+        created = await self._write(user, "POST", board_id, None, where | {"title": title})
+        try:
+            return str(created["id"]), str(created["key"])
+        except (KeyError, TypeError) as error:
+            raise _unavailable("Tasks gave the new task in an unexpected form.") from error
+
+    async def edit_task(
+        self, user: User, board_id: str, task_id: str, changes: dict[str, Any]
+    ) -> None:
+        """Changes the task's fields, named as Tasks names them."""
+        await self._write(user, "PATCH", board_id, task_id, changes)
+
+    async def complete_task(self, user: User, board_id: str, task_id: str) -> None:
+        """Completes a task outside sections, which moves a recurring one to its next due date
+        instead."""
+        await self._write(user, "POST", board_id, task_id, {"state": "completed"}, "/complete")
+
+    async def move_task(self, user: User, board_id: str, task_id: str, section_id: str) -> None:
+        """Moves a task to the end of a section: to a completed one, this completes it, or moves
+        a recurring one to its next due date instead."""
+        await self._write(user, "POST", board_id, task_id, {"sectionId": section_id}, "/move")
 
     async def comments(self, user: User, board_id: str, task_id: str) -> list[Comment] | None:
         """The task's comments, oldest first; None if the board has no such task."""

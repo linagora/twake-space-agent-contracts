@@ -1384,6 +1384,10 @@ class FakeTasks:
 
     Boards are listed only as opening the web app lists them, which first sets up the person's
     Inbox if they have none, and makes them a member of the projects they were invited to.
+
+    An editor or an admin of a board that is not archived creates a task, changes its fields,
+    completes it outside sections, and moves it to a section. A field Tasks would ignore is
+    refused here, so that a contract never sends one.
     """
 
     def __init__(self) -> None:
@@ -1401,6 +1405,14 @@ class FakeTasks:
         """Whether Tasks answers in a form the contracts do not know."""
         self.requests: list[tuple[str, dict[str, str]]] = []
         """The paths asked, with their query."""
+        self.writes: list[tuple[str, str, Any]] = []
+        """The writes received, in order: method, path and JSON body, refused ones included."""
+        self.failing: dict[str, int] = {}
+        """By method, the error status Tasks answers with, as when it fails, or when the board
+        changes, between two calls."""
+        self.unreadable_after_write = False
+        """Whether Tasks answers 503 to a read once it took a write, as when it fails right after
+        one."""
 
     def board(self, name: str, key_prefix: str, *members: TasksMember, **more: Any) -> TasksBoard:
         """Arranges a board of that name, with the members of its project."""
@@ -1430,10 +1442,19 @@ class FakeTasks:
         if self.unexpected:
             return httpx.Response(200, json={"items": []})
         self.requests.append((request.url.path, dict(request.url.params)))
+        if request.method != "GET":
+            self.writes.append(
+                (request.method, request.url.path, json.loads(request.content or b"null"))
+            )
+        if request.method in self.failing:
+            status = self.failing[request.method]
+            return httpx.Response(status, json={"error": _ERRORS[status]})
+        if self.unreadable_after_write and request.method == "GET" and self.writes:
+            return httpx.Response(503, json={"error": "unavailable"})
         person = TasksPerson(tasks_id(subject), self.organizations.get(subject, "linagora"))
         params = request.url.params
         if request.method != "GET":
-            return httpx.Response(404)
+            return self._write(request.method, request.url.path, self.writes[-1][2], person)
         if request.url.path == "/api/boards":
             self._welcome(person, subject)
             listed = sorted(
@@ -1528,6 +1549,132 @@ class FakeTasks:
         if found[3] == "description":
             return httpx.Response(200, json={"markdown": task.description, "version": 0})
         return httpx.Response(200, json={"comments": task.comments})
+
+    def _write(self, method: str, path: str, body: Any, person: TasksPerson) -> httpx.Response:
+        found = re.fullmatch(r"/api/boards/([^/]+)/tasks(?:/([^/]+)(?:/(complete|move))?)?", path)
+        board = self.boards.get(found[1]) if found else None
+        role = self._role(board, person) if board else None
+        if found is None or board is None or role is None:
+            return httpx.Response(404, json={"error": "not_found"})
+        if role == "viewer":
+            return httpx.Response(403, json={"error": "forbidden"})
+        if board.archived:
+            return httpx.Response(409, json={"error": "archived"})
+        if not isinstance(body, dict):
+            return _refused("invalid_request")
+        if found[2] is None:
+            return self._create(board, body) if method == "POST" else httpx.Response(404)
+        # Unlike the board, writes reach an archived or trashed task too
+        task = self.tasks.get(found[2])
+        if task is None or task.board != board.id:
+            return httpx.Response(404, json={"error": "not_found"})
+        match method, found[3]:
+            case "PATCH", None:
+                return self._edit(task, body)
+            case "POST", "complete":
+                return self._complete(task, body)
+            case "POST", "move":
+                return self._move(task, board, body)
+        return httpx.Response(404)
+
+    def _create(self, board: TasksBoard, body: dict[str, Any]) -> httpx.Response:
+        # A task in a section, outside sections when sectionId is null, or a subtask
+        if set(body) not in ({"sectionId", "title"}, {"parentId", "title"}):
+            return _refused("invalid_request")
+        title = body["title"].strip() if isinstance(body["title"], str) else ""
+        if not 1 <= len(title) <= 500:
+            return _refused("invalid_request")
+        sections = {section["id"]: section for section in board.sections}
+        section_id = body.get("sectionId")
+        if section_id is not None and section_id not in sections:
+            return _refused("invalid_section")
+        parent = self.tasks.get(body["parentId"]) if "parentId" in body else None
+        if "parentId" in body and (parent is None or parent.board != board.id):
+            return _refused("invalid_parent")
+        if parent is not None and self._depth(parent) >= 4:
+            return _refused("too_deep")
+        category = sections[section_id]["category"] if section_id else None
+        task = self.task(
+            board,
+            title,
+            section_id=section_id,
+            parent_id=parent.id if parent else None,
+            state=category if category in ("completed", "canceled") else "open",
+        )
+        return httpx.Response(
+            201,
+            json={
+                "id": task.id,
+                "key": f"{board.key_prefix}-{task.number}",
+                "title": task.title,
+                "sectionId": task.section_id,
+            },
+        )
+
+    def _depth(self, task: TasksTask) -> int:
+        """How many tasks the chain from this one up to its topmost parent holds."""
+        depth = 1
+        while task.parent_id is not None:
+            task = self.tasks[task.parent_id]
+            depth += 1
+        return depth
+
+    def _edit(self, task: TasksTask, body: dict[str, Any]) -> httpx.Response:
+        if (
+            not body
+            or not set(body) <= set(_CHANGES)
+            or not all(_CHANGES[name](value) for name, value in body.items())
+        ):
+            return _refused("invalid_request")
+        if body.get("dueZone") is not None and body["dueZone"] not in TASKS_ZONES:
+            return _refused("invalid_request")
+        # Clearing the due date clears its time and its recurrence, and clearing the time its zone
+        due_date = body.get("dueDate", task.due_date)
+        due_time = None if due_date is None else body.get("dueTime", task.due_time)
+        if body.get("dueTime") and due_date is None:
+            return _refused("invalid_dates")
+        task.title = body.get("title", task.title).strip()
+        task.priority = body.get("priority", task.priority)
+        task.deadline = body.get("deadline", task.deadline)
+        task.due_zone = None if due_time is None else body.get("dueZone", task.due_zone)
+        task.due_date, task.due_time = due_date, due_time
+        if due_date is None:
+            task.recurrence = None
+        return httpx.Response(204)
+
+    def _recur(self, task: TasksTask) -> bool:
+        """Moves a recurring task to its next due date, as completing it does: False for any
+        other task."""
+        if task.recurrence is None or task.due_date is None:
+            return False
+        days = {"days": 1, "weeks": 7}[task.recurrence["unit"]] * task.recurrence["every"]
+        task.due_date = (date.fromisoformat(task.due_date) + timedelta(days=days)).isoformat()
+        return True
+
+    def _complete(self, task: TasksTask, body: dict[str, Any]) -> httpx.Response:
+        if set(body) != {"state"} or body["state"] not in ("completed", "canceled", None):
+            return _refused("invalid_request")
+        # A task in a section completes by moving to a completed section
+        if task.section_id is not None:
+            return _refused("invalid_section")
+        if body["state"] == "completed" and self._recur(task):
+            return httpx.Response(204)
+        task.state = body["state"] or "open"
+        return httpx.Response(204)
+
+    def _move(self, task: TasksTask, board: TasksBoard, body: dict[str, Any]) -> httpx.Response:
+        sections = {section["id"]: section for section in board.sections}
+        if "sectionId" not in body or not set(body) <= {"sectionId", "afterId", "beforeId"}:
+            return _refused("invalid_request")
+        section_id = body["sectionId"]
+        if (section_id is not None and section_id not in sections) or task.parent_id is not None:
+            return _refused("invalid_section")
+        category = sections[section_id]["category"] if section_id else None
+        if category == "completed" and self._recur(task):
+            return httpx.Response(204)
+        task.section_id = section_id
+        task.state = category if category in ("completed", "canceled") else "open"
+        return httpx.Response(204)
 
     def _tasks_of(
         self, person: TasksPerson, which: Callable[[TasksTask, TasksBoard], bool]
@@ -1639,6 +1786,37 @@ class FakeTasks:
 
 def _assigned(task: TasksTask, person: TasksPerson) -> bool:
     return any(member.user_id == person.user_id for member in task.assignees)
+
+
+# The error Tasks names each status of a refused write with
+_ERRORS = {403: "forbidden", 404: "not_found", 409: "archived", 503: "unavailable"}
+
+
+def _refused(error: str) -> httpx.Response:
+    """Tasks' answer to a request it refuses."""
+    return httpx.Response(400, json={"error": error})
+
+
+def _is_date(value: Any) -> bool:
+    try:
+        return isinstance(value, str) and date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
+def _is_time(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value) is not None
+
+
+# What each field of a task that the contracts change takes, null clearing it but the title
+_CHANGES: dict[str, Callable[[Any], bool]] = {
+    "title": lambda value: isinstance(value, str) and 1 <= len(value.strip()) <= 500,
+    "priority": lambda value: value is None or (type(value) is int and 1 <= value <= 4),
+    "dueDate": lambda value: value is None or _is_date(value),
+    "dueTime": lambda value: value is None or _is_time(value),
+    "dueZone": lambda value: value is None or isinstance(value, str),
+    "deadline": lambda value: value is None or _is_date(value),
+}
 
 
 class FakeBoundary:

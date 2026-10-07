@@ -17,6 +17,7 @@ from twake_space_agent_contracts import (
     freebusy,
     invitations,
     task_reads,
+    task_writes,
 )
 from twake_space_agent_contracts.calendar import Calendar
 from twake_space_agent_contracts.caller import CallerDependency
@@ -137,7 +138,11 @@ def _tasks(context: Context) -> list[APIRouter]:
     if context.settings.tasks_url is None:
         raise ValueError("PUBLISHED_APPS names tasks, which needs TASKS_URL")
     tasks = Tasks(context.settings.tasks_url, context.http)
-    return [boards.router(tasks, context.caller), task_reads.router(tasks, context.caller)]
+    return [
+        boards.router(tasks, context.caller),
+        task_reads.router(tasks, context.caller),
+        *task_writes.routers(tasks, context.caller),
+    ]
 
 
 APPLICATIONS = (
@@ -209,7 +214,12 @@ APPLICATIONS = (
             en="list, search and read your tasks",
             fr="lister, chercher et lire tes tâches",
         ),
-        write=Words(en="open your boards", fr="ouvrir tes tableaux"),
+        write=Words(
+            en="open your boards, create tasks in them, and edit and complete their tasks, which"
+            " emails the people who follow those tasks",
+            fr="ouvrir tes tableaux, y créer des tâches, modifier et terminer leurs tâches, ce qui"
+            " prévient par mail ceux qui les suivent",
+        ),
         routers=_tasks,
     ),
 )
