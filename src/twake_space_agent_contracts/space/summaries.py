@@ -233,15 +233,22 @@ def deleting(item: FeedItem, me: str | None, space: str | None, language: Langua
     return _with_text(head, item.body, language)
 
 
+def _person_line(found: Person, room: int, language: Language) -> str:
+    """A person on a line of its own after a tab, by their name and their email, as previews lay
+    people out, within `room` of the summary: a name that would take more is cut, the email
+    kept whole."""
+    shown = person(found.display_name, found.email, language) or one_line(found.username)
+    if shown_size("\t" + shown) <= room:
+        return "\t" + shown
+    # What the layout puts around a name: its quotation marks, and the email
+    around = shown_size("\t" + (person("…", found.email, language) or "")) - shown_size("…")
+    name = fitted(one_line(found.display_name), max(room - around, shown_size("…")))
+    return "\t" + (person(name, found.email, language) or one_line(found.username))
+
+
 def _people(people: list[Person], room: int, language: Language) -> list[str]:
-    """People, each on a line of its own after a tab, by their name and their email, each line
-    within `room` of the summary: a name that would take more is cut."""
-    lines = []
-    for found in people:
-        marks = shown_size("\t" + quoted("", language) + f" <{one_line(found.email, 320)}>")
-        name = fitted(one_line(found.display_name), max(room - marks, shown_size("…")))
-        lines.append("\t" + (person(name, found.email, language) or one_line(found.username)))
-    return lines
+    """People, each on a line of its own, each within `room` of the summary."""
+    return [_person_line(found, room, language) for found in people]
 
 
 def adding_members(
