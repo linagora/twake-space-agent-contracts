@@ -12,7 +12,7 @@ from twake_space_agent_contracts.previews import Preview, Previewing, digest_of
 from twake_space_agent_contracts.problems import invalid_request
 from twake_space_agent_contracts.space import EXAMPLE_ITEM, UNTRUSTED, ItemId, SpaceId
 from twake_space_agent_contracts.space.backend import FeedItem, TwakeSpace, feed_item_not_found
-from twake_space_agent_contracts.space.feed import SpaceFeedItem, feed_item
+from twake_space_agent_contracts.space.feed import LONGEST_KEY, SpaceFeedItem, feed_item
 from twake_space_agent_contracts.space.summaries import reacting, unreacting
 
 OFFERED = (
@@ -24,8 +24,6 @@ OFFERED = (
     "\N{PERSON WITH FOLDED HANDS}",
 )
 """The reactions the Space web app offers in its feed."""
-LONGEST_KEY = 16
-"""The longest reaction Space takes, in characters."""
 
 Key = Annotated[str, Field(min_length=1, max_length=LONGEST_KEY)]
 
