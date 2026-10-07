@@ -1,11 +1,13 @@
 """Twake Contacts, through the Calendar side service as the user, with their own token: the address
-books of esn-sabre, in its JSON dialect of CardDAV, behind the side service's /dav proxy.
+books of esn-sabre, in its JSON dialect of CardDAV, behind the side service's /dav proxy, and the
+side service's search across several of them.
 
 The proxy forwards neither If-Match nor If-None-Match: no write of a card can be conditional."""
 
 import re
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 
@@ -29,8 +31,15 @@ NAME = r"[A-Za-z0-9._~-]{1,200}"
 """The names of the address books the contracts take: those the search of Contacts takes, plain
 segments of a path."""
 BOOK_ID = rf"^{HOME}{SEPARATOR}{NAME}$"
+CONTACT_ID = r"^[A-Za-z0-9][A-Za-z0-9._~@+=-]{0,199}$"
+"""The name of a contact's card in its address book, without its extension: what the Contacts web
+app and CardDAV clients name cards with, letters, digits and a few signs."""
+CARD = ".vcf"
+"""The extension of a card's name."""
 REWRITTEN = ".json"
 """What esn-sabre removes from wherever a URL holds it: a name that holds it cannot be reached."""
+JCARD = "application/vcard+json"
+"""What esn-sabre gives a card in, converted to vCard 4.0, and takes one in."""
 
 # What the user's own home lists: their books, the delegations they accepted (invite status 2),
 # and their subscriptions, with how many contacts each shows
@@ -57,6 +66,25 @@ def unavailable(detail: str) -> Problem:
 
 def _refused(detail: str) -> Problem:
     return _contacts_problem("contacts_refused", "Contacts refused the user's token", detail)
+
+
+def book_not_found(book_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="address_book_not_found",
+        title="Address book not found",
+        detail=f"The user reads no address book {book_id}: list_address_books gives those they"
+        " read.",
+    )
+
+
+def contact_not_found(book_id: str, contact_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="contact_not_found",
+        title="Contact not found",
+        detail=f"Address book {book_id} has no contact {contact_id}.",
+    )
 
 
 def _user_not_found() -> Problem:
@@ -166,6 +194,46 @@ def _rank(book: Book) -> int:
     return 0 if book.default else RANKS[book.kind]
 
 
+@dataclass(frozen=True)
+class Card:
+    """A contact in one of the books the user reads, by its id there, in jCard: the vCard of RFC
+    6350 in JSON (RFC 7095), each property its name, its parameters, its type and its values."""
+
+    book: Book
+    contact_id: str
+    jcard: list[Any]
+
+
+def is_jcard(value: Any) -> bool:
+    """Whether a value is a card in jCard, each property a name, parameters, a type and values."""
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and value[0] == "vcard"
+        and isinstance(value[1], list)
+        and all(
+            isinstance(prop, list)
+            and len(prop) >= 4
+            and isinstance(prop[0], str)
+            and isinstance(prop[1], dict)
+            and isinstance(prop[2], str)
+            for prop in value[1]
+        )
+    )
+
+
+def contact_id_of(card_name: str) -> str | None:
+    """The id of a contact by the name of its card; None for a card the contracts cannot name."""
+    contact_id = card_name.removesuffix(CARD)
+    if contact_id == card_name or REWRITTEN in contact_id:
+        return None
+    return contact_id if re.fullmatch(CONTACT_ID, contact_id) else None
+
+
+def _card_path(book: Book, contact_id: str) -> str:
+    return f"/dav/addressbooks/{book.home}/{book.name}/{quote(contact_id + CARD, safe='')}"
+
+
 class Contacts:
     """Twake Contacts, through the Calendar side service, called as the user with their own
     token."""
@@ -252,6 +320,73 @@ class Contacts:
                 listed += [(item, domain_id, True) for item in _items(found)]
         books = [book for item, home, domain in listed if (book := _book(item, home, domain))]
         return sorted(books, key=_rank)
+
+    async def book(self, user: User, book_id: str) -> Book:
+        """The address book of that id, if the user reads it: one that list_address_books gives.
+        Any other, someone else's they were not given or one that does not exist, is not
+        found."""
+        owner = await self.owner(user)
+        for book in await self.books(user, owner):
+            if book.book_id == book_id:
+                return book
+        raise book_not_found(book_id)
+
+    async def search(
+        self, user: User, books: list[Book], pattern: str, limit: int
+    ) -> tuple[list[Card], bool]:
+        """The contacts of these books whose vCard text matches the regular expression, as the
+        side service's search finds them: the first `limit`, in each book by the names of their
+        cards, then the books in order, in jCard as the book keeps them; one outside these books,
+        or that the contracts cannot name, is left out. Whether Contacts found fewer than
+        `limit`, all there are, comes with them."""
+        if not books:
+            return [], True
+        found = await self._json(
+            user,
+            "POST",
+            "/contacts/api/contacts/search",
+            params={"limit": str(limit), "offset": "0"},
+            json={
+                "query": pattern,
+                "addressBooks": [
+                    {"userId": book.home, "addressBookId": book.name} for book in books
+                ],
+            },
+        )
+        try:
+            items = found["_embedded"]["dav:item"]
+            hits = [(_href(item), item["data"]) for item in items]
+        except (KeyError, TypeError, AttributeError) as error:
+            raise unavailable("Contacts gave the contacts found in an unexpected form.") from error
+        located = {(book.home, book.name): book for book in books}
+        cards = []
+        for href, data in hits:
+            path = re.fullmatch(rf"(?:.*/)?addressbooks/({HOME})/([^/]+)/([^/]+)", href)
+            book = located.get((path[1], path[2])) if path else None
+            contact_id = contact_id_of(path[3]) if path else None
+            if book is not None and contact_id is not None and is_jcard(data):
+                cards.append(Card(book, contact_id, data))
+        return cards, len(hits) < limit
+
+    async def card(self, user: User, book: Book, contact_id: str) -> Card | None:
+        """The contact of that id in the book, in jCard of vCard 4.0; None if the book holds
+        none, or if the user cannot read it there."""
+        # esn-sabre would read another card than the one named
+        if REWRITTEN in contact_id:
+            return None
+        path = _card_path(book, contact_id)
+        response = await self._request(
+            user, "GET", path, accept=JCARD, passing=frozenset({403, 404})
+        )
+        if not response.is_success:
+            return None
+        try:
+            jcard = response.json()
+        except ValueError as error:
+            raise unavailable(f"Contacts did not answer GET {path} in jCard.") from error
+        if not is_jcard(jcard):
+            raise unavailable("Contacts gave the contact in an unexpected form.")
+        return Card(book, contact_id, jcard)
 
 
 def _items(found: Any) -> list[Any]:
