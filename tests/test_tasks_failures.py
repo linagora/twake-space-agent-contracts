@@ -42,6 +42,9 @@ OPERATIONS = [
     pytest.param("POST", f"{TASK}/complete", {}, None, id="complete_task"),
     pytest.param("DELETE", TASK, {}, None, id="delete_task"),
     pytest.param("POST", f"{TASK}/comments", {}, {"body": "Soon?"}, id="comment_on_task"),
+    pytest.param(
+        "PUT", f"{TASK}/assignees", {}, {"assignees": ["mmaudet@twake.test"]}, id="assign_task"
+    ),
 ]
 # Every write but open_boards, which only reads boards from Tasks
 WRITES = [each for each in OPERATIONS if each.values[0] != "GET" and each.id != "open_boards"]

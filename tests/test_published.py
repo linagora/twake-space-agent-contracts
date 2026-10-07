@@ -33,6 +33,7 @@ TASKS_OPERATIONS = {
     "complete_task",
     "delete_task",
     "comment_on_task",
+    "assign_task",
 }
 
 

@@ -1,6 +1,6 @@
-"""tasks.task.create.v1, tasks.task.update.v1, tasks.task.complete.v1 and tasks.task.delete.v1:
-the user creates, changes, completes and deletes tasks in Twake Tasks, as themselves, on the boards
-they can edit."""
+"""tasks.task.create.v1, tasks.task.update.v1, tasks.task.complete.v1, tasks.task.delete.v1 and
+tasks.task.assign.v1: the user creates, changes, completes, deletes and assigns tasks in Twake
+Tasks, as themselves, on the boards they can edit."""
 
 from dataclasses import dataclass
 from datetime import date, time
@@ -58,6 +58,8 @@ IN_TASKS = {
 EXAMPLE_IDS = (
     "board_id=0199b0c2-5f1e-7a3b-9c4d-2e8f6a1b3c5d, task_id=0199b0c3-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
 )
+MOST_ASSIGNEES = 50
+"""The most people Tasks assigns a task to."""
 MOST_PEOPLE = 10
 """How many members a preview names in a list, at most."""
 PEOPLE_SIZE = BUDGET // 6
@@ -101,6 +103,7 @@ BoardId = Annotated[
 TaskId = Annotated[
     str, Path(pattern=TASKS_ID, description="The task_id of the task, as reads give it.")
 ]
+Email = Annotated[str, Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+$")]
 
 
 class NewTask(BaseModel):
@@ -137,6 +140,21 @@ class TaskChanges(BaseModel):
     due_time: DueTime | None = None
     due_zone: DueZone | None = None
     deadline: Deadline | None = None
+
+
+class Assignment(BaseModel):
+    """Whom a task is assigned to: all of them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    assignees: Annotated[
+        list[Email],
+        Field(
+            max_length=MOST_ASSIGNEES,
+            description="The emails the members to assign it to joined with, 50 at most: the "
+            "whole list, those to keep with the new ones, [] for nobody.",
+        ),
+    ]
 
 
 class WrittenTaskText(TaskText):
@@ -209,6 +227,32 @@ async def _editable(tasks: Tasks, user: User, board_id: str) -> BoardContent:
     if board.archived:
         raise board_archived(board_id)
     return board
+
+
+def _members(board: BoardContent, emails: list[str]) -> list[str]:
+    """The user ids of the members who joined with these emails, whatever their case, in their
+    order and each once: a task is assigned to members of its board alone."""
+    chosen: list[str] = []
+    unknown: list[str] = []
+    for email in dict.fromkeys(email.lower() for email in emails):
+        member = board.member_named(email)
+        if member is None:
+            unknown.append(email)
+        elif member not in chosen:
+            chosen.append(member)
+    if unknown:
+        # Tasks does not say who a member is but by the email they joined with: one alone tells
+        members = sorted({email for _, email in board.members if board.member_named(email)})
+        raise Problem(
+            status=409,
+            code="assignee_not_member",
+            title="Assignee not a member",
+            detail=f"No member of board {board.board_id}, or more than one, joined with"
+            f" {', '.join(unknown)}: a task is assigned to members of its board alone, which"
+            " members lists by the emails assign_task takes.",
+            extensions={"members": members},
+        )
+    return chosen
 
 
 def _shown(board: BoardContent, task_id: str) -> BoardTask:
@@ -305,6 +349,12 @@ class _Words:
     delete: str
     deleted_subtask: str
     deleted_subtasks: str
+    assign: str
+    assigned: str
+    unassigned: str
+    still_assigned: str
+    assigned_already: str
+    told_assigned: str
 
 
 _WORDS: dict[Language, _Words] = {
@@ -337,6 +387,14 @@ _WORDS: dict[Language, _Words] = {
         " supprime définitivement",
         deleted_subtask="Sa sous-tâche part avec elle.",
         deleted_subtasks="Ses {count} sous-tâches partent avec elle.",
+        assign="Assigner la tâche {key} {title} du tableau {board} :",
+        assigned="Désormais assignée à {people}",
+        unassigned="Plus assignée à {people}",
+        still_assigned="Toujours assignée à {people}",
+        assigned_already="La tâche {key} {title} du tableau {board} est déjà assignée ainsi :"
+        " rien ne change.",
+        told_assigned="Tasks prévient chaque nouveau responsable et ceux qui suivent la tâche,"
+        " dans Tasks et par mail.",
     ),
     "en": _Words(
         create="Create the task {title} on the board {board}",
@@ -366,6 +424,14 @@ _WORDS: dict[Language, _Words] = {
         " trash, where a member can restore it for 30 days, before Tasks deletes it for good",
         deleted_subtask="Its subtask goes with it.",
         deleted_subtasks="Its {count} subtasks go with it.",
+        assign="Assign the task {key} {title} on the board {board}:",
+        assigned="Assigned now to {people}",
+        unassigned="No longer assigned to {people}",
+        still_assigned="Still assigned to {people}",
+        assigned_already="The task {key} {title} on the board {board} is assigned so already:"
+        " nothing changes.",
+        told_assigned="Tasks tells each new assignee and the people who follow the task, in"
+        " Tasks and by email.",
     ),
 }
 
@@ -573,6 +639,30 @@ def _deleting(board: BoardContent, task: BoardTask, subtasks: int, language: Lan
     if subtasks:
         many = words.deleted_subtasks.format(count=subtasks)
         lines.append(words.deleted_subtask if subtasks == 1 else many)
+    return "\n".join(lines)
+
+
+def _assigning(board: BoardContent, task: BoardTask, chosen: list[str], language: Language) -> str:
+    """What assigning the task does, as the owner reads it: whom it is assigned to now, no longer
+    and still, by the emails they joined with, and whom Tasks tells."""
+    words = _WORDS[language]
+    names = task_names(board, task, language)
+    now = task.assignee_ids
+    if set(chosen) == now:
+        return words.assigned_already.format(**names)
+    joined = dict(board.members)
+    lines = [words.assign.format(**names)]
+    for line, user_ids in (
+        (words.assigned, [user_id for user_id in chosen if user_id not in now]),
+        (words.unassigned, [user_id for user_id in now if user_id not in chosen]),
+        (words.still_assigned, [user_id for user_id in chosen if user_id in now]),
+    ):
+        # By email, whatever order the call gave them in
+        emails = sorted(joined[user_id] for user_id in user_ids if user_id in joined)
+        if emails:
+            lines.append(line.format(people=members_named(emails, language)))
+    added = any(user_id not in now for user_id in chosen)
+    lines.append(words.told_assigned if added else words.told)
     return "\n".join(lines)
 
 
@@ -825,6 +915,54 @@ def _delete(tasks: Tasks, caller: CallerDependency) -> APIRouter:
     return routes
 
 
+def _assign(tasks: Tasks, caller: CallerDependency) -> APIRouter:
+    routes = APIRouter(prefix="/contracts/v1/tasks", tags=["tasks.task.assign.v1"])
+
+    @routes.put(
+        "/boards/{board_id}/tasks/{task_id}/assignees",
+        operation_id="assign_task",
+        summary="Assign a task in Twake Tasks as the user",
+        description=(
+            "Assigns, as the user you act for, a task of a board they can edit to members of the "
+            "board, by the emails they joined with, as read_task gives its assignees: assignees "
+            "replaces the whole list, so give those to keep with the new ones, and [] to assign "
+            "it to nobody. Tasks tells each new assignee, in Tasks and by email, who then follows "
+            "the task, and the other people who follow it. A task is assigned to members of its "
+            "board alone: assignee_not_member lists those it takes. Call it only once the user "
+            "asked for this very assignment; they confirm each call. An archived task, or one in "
+            f"the trash, is not found. {DATA_NOT_INSTRUCTIONS} Example, to assign a task to Alice "
+            f'besides Michel: {EXAMPLE_IDS}, body={{"assignees": ["alice@example.com", '
+            '"michel@example.com"]}.'
+        ),
+        response_model=WrittenTask,
+        # Tasks tells each new assignee, by email too, who then follows the task: the owner
+        # confirms each assignment, shown whom it would go to
+        openapi_extra={"x-twake-risk": "high", "x-twake-preview": True},
+    )
+    async def assign_task(
+        board_id: BoardId,
+        task_id: TaskId,
+        assignment: Assignment,
+        user: Annotated[User, Depends(caller)],
+        preview: Previewing,
+    ) -> WrittenTask | JSONResponse:
+        board = await _editable(tasks, user, board_id)
+        task = _shown(board, task_id)
+        chosen = _members(board, assignment.assignees)
+        # What the owner allows: the task as it is, whom it is assigned to, and whom it would be
+        digest = digest_of(board_id, _acted_on(task), sorted(task.assignee_ids), sorted(chosen))
+        if preview.asked:
+            return preview.answer(_assigning(board, task, chosen, preview.language), digest)
+        preview.check(digest)
+        # Nothing to write, and nobody to tell
+        if set(chosen) == task.assignee_ids:
+            return _written(board, task, user.email)
+        await tasks.assign(user, board_id, task_id, chosen)
+        return await _now(tasks, user, board_id, task_id)
+
+    return routes
+
+
 def routers(tasks: Tasks, caller: CallerDependency) -> list[APIRouter]:
     """The routers of the contracts, one each."""
     return [
@@ -832,4 +970,5 @@ def routers(tasks: Tasks, caller: CallerDependency) -> list[APIRouter]:
         _update(tasks, caller),
         _complete(tasks, caller),
         _delete(tasks, caller),
+        _assign(tasks, caller),
     ]

@@ -533,6 +533,10 @@ class Tasks:
         instead."""
         await self._write(user, "POST", board_id, task_id, {"state": "completed"}, "/complete")
 
+    async def assign(self, user: User, board_id: str, task_id: str, user_ids: list[str]) -> None:
+        """Assigns the task to these members of the board, by their user ids, and to no other."""
+        await self._write(user, "PUT", board_id, task_id, {"userIds": user_ids}, "/assignees")
+
     async def trash_task(self, user: User, board_id: str, task_id: str) -> None:
         """Moves the task to the board's trash, with the subtasks the board shows, where a member
         can restore it for 30 days, before Tasks deletes it for good."""

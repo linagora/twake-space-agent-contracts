@@ -227,11 +227,11 @@ APPLICATIONS = (
             fr="lister tes projets, et lister, chercher et lire tes tâches",
         ),
         write=Words(
-            en="open your boards, create projects and tasks, edit, complete and comment on tasks,"
-            " which emails the people who follow them, and delete tasks",
-            fr="ouvrir tes tableaux, créer des projets et des tâches, modifier, terminer et"
-            " commenter des tâches, ce qui prévient par mail ceux qui les suivent, et supprimer"
-            " des tâches",
+            en="open your boards, create projects and tasks, edit, complete, assign and comment on"
+            " tasks, which emails the people who follow them, and delete tasks",
+            fr="ouvrir tes tableaux, créer des projets et des tâches, modifier, terminer, assigner"
+            " et commenter des tâches, ce qui prévient par mail ceux qui les suivent, et"
+            " supprimer des tâches",
         ),
         routers=_tasks,
     ),

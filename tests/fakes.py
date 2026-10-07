@@ -2203,6 +2203,8 @@ class FakeTasks:
                 return self._complete(task, body)
             case "POST", "move":
                 return self._move(task, board, body)
+            case "PUT", "assignees":
+                return self._assign(task, board, body)
         return httpx.Response(404)
 
     def _comment(
@@ -2245,6 +2247,17 @@ class FakeTasks:
                 for child in self.tasks.values()
                 if child.parent_id == hidden.id and not child.hidden
             )
+        return httpx.Response(204)
+
+    def _assign(self, task: TasksTask, board: TasksBoard, body: dict[str, Any]) -> httpx.Response:
+        """Assigns the task to these members of the board, and to no other."""
+        user_ids = body.get("userIds")
+        if set(body) != {"userIds"} or not isinstance(user_ids, list) or len(user_ids) > 50:
+            return _refused("invalid_request")
+        members = {member.user_id: member for member in board.members}
+        if not all(user_id in members for user_id in user_ids):
+            return _refused("invalid_assignee")
+        task.assignees = [members[user_id] for user_id in dict.fromkeys(user_ids)]
         return httpx.Response(204)
 
     def _create(self, board: TasksBoard, body: dict[str, Any]) -> httpx.Response:
