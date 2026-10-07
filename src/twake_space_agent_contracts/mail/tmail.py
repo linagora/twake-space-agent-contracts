@@ -21,6 +21,10 @@ from twake_space_agent_contracts.problems import Problem
 
 CORE = "urn:ietf:params:jmap:core"
 MAIL = "urn:ietf:params:jmap:mail"
+SUBMISSION = "urn:ietf:params:jmap:submission"
+# The capability a method needs beyond core and mail, which only the requests that call it use:
+# Identity/get reads the addresses the user sends from under submission, and sends nothing
+NEEDS = {"Identity/get": SUBMISSION}
 # The JMAP of RFC 8620 and 8621, as James's clients ask for it
 JMAP_JSON = "application/json;jmapVersion=rfc-8621"
 # What a JMAP id is made of (RFC 8620): TMail is never asked for anything else
@@ -42,6 +46,20 @@ MAILBOX_PROPERTIES = ["id", "name", "parentId", "role", "totalEmails", "unreadEm
 FACTS = ["id", "threadId", "mailboxIds", "keywords", "receivedAt", "hasAttachment"]
 SUMMARY_PROPERTIES = [*FACTS, "from", "subject", "preview"]
 EMAIL_PROPERTIES = [*FACTS, "from", "to", "cc", "replyTo", "subject", "textBody", "bodyValues"]
+# What a reply needs of the email it answers: whom it was from and to, and the conversation
+REPLY_PROPERTIES = [
+    *FACTS,
+    "from",
+    "to",
+    "cc",
+    "replyTo",
+    "subject",
+    "messageId",
+    "inReplyTo",
+    "references",
+]
+# A subject that says it is a reply already, such as Re: or the RE : of French mail clients
+REPLY_PREFIX = re.compile(r"\s*re\s*:", re.IGNORECASE)
 NEWEST_FIRST = [{"property": "receivedAt", "isAscending": False}]
 _MAILBOXES = ("Mailbox/get", {"ids": None, "properties": MAILBOX_PROPERTIES})
 # What a list or a search leaves out unless asked for: James names the role of the spam mailbox
@@ -64,6 +82,14 @@ def _unavailable(detail: str) -> Problem:
 
 def _not_found(code: str, title: str, detail: str) -> Problem:
     return Problem(status=404, code=code, title=title, detail=detail)
+
+
+def _email_not_found(email_id: str) -> Problem:
+    return _not_found(
+        "email_not_found",
+        "Email not found",
+        f"The user has no email {email_id} in their own mailboxes.",
+    )
 
 
 def _seen(text: str) -> str:
@@ -225,6 +251,9 @@ class _Email(_Jmap):
     preview: str | None = None
     text_body: list[_BodyPart] = Field(default_factory=list)
     body_values: dict[str, _BodyValue] = Field(default_factory=dict)
+    message_id: list[str] | None = None
+    in_reply_to: list[str] | None = None
+    references: list[str] | None = None
 
     def _facts(self, own: set[str]) -> dict[str, Any]:
         return {
@@ -305,6 +334,99 @@ class _Places(_Jmap):
 
 class _Threads(_Jmap):
     found: list[_Thread] = Field(validation_alias="list")
+
+
+class _Identity(_Jmap):
+    name: str = ""
+    email: str
+
+
+class _Identities(_Jmap):
+    found: list[_Identity] = Field(validation_alias="list")
+
+
+class _Created(_Jmap):
+    id: str
+
+
+class _EmailSet(_Jmap):
+    created: dict[str, _Created] | None = None
+    not_created: dict[str, dict[str, Any]] | None = None
+
+
+class ReplyText(BaseModel):
+    """What other people wrote that a reply draft holds: whom it answers, and its subject."""
+
+    to: list[Address]
+    cc: list[Address]
+    subject: str
+
+
+class ReplyDraft(BaseModel):
+    """A reply prepared in the user's Drafts mailbox, which they review and send themselves."""
+
+    email_id: str
+    """The email it answers."""
+    draft_id: str
+    reply_to_differs: bool
+    recipients_truncated: bool
+    """Whether to or cc gives only the first of the addresses the draft answers."""
+    untrusted: ReplyText
+
+
+def _lowered(addresses: list[_Address]) -> set[str]:
+    return {(address.email or "").lower() for address in addresses}
+
+
+def _recipients(addresses: list[_Address], left_out: set[str]) -> list[_Address]:
+    """Those of the addresses that have an email outside those left out, each email once."""
+    kept: list[_Address] = []
+    seen = set(left_out)
+    for address in addresses:
+        email = (address.email or "").lower()
+        if email and email not in seen:
+            seen.add(email)
+            kept.append(address)
+    return kept
+
+
+def _written_by(email: _Email, users: set[str], sent: set[str]) -> bool:
+    """Whether the user of these addresses wrote the email, whose Sent mailboxes are those: it is
+    in one of them, from one of their addresses. A From alone could be anyone's."""
+    return bool(sent & email.mailbox_ids.keys() and _lowered(email.sender or []) & users)
+
+
+def _reply_recipients(
+    email: _Email, users: set[str], written: bool, reply_all: bool
+) -> tuple[list[_Address], list[_Address]]:
+    """Whom a reply to the email goes to and whom it copies, as Twake Mail answers, never the user
+    of these addresses: the Reply-To address, else the sender, and with reply_all, also those the
+    email went to, and those it copied; for an email the user wrote, those it went to."""
+    if written:
+        answered = email.to or []
+    else:
+        answered = (email.reply_to or email.sender or []) + ((email.to or []) if reply_all else [])
+    to = _recipients(answered, users)
+    cc = _recipients(email.cc or [], users | _lowered(to)) if reply_all else []
+    return to, cc
+
+
+def _reply_subject(subject: str | None) -> str:
+    """The email's subject, with Re: before it unless it says it is a reply already."""
+    subject = subject or ""
+    return subject if REPLY_PREFIX.match(subject) else f"Re: {subject}"
+
+
+def _references(email: _Email) -> list[str]:
+    """The emails a reply to this one refers to, as RFC 5322 has it: those it refers to, else the
+    one it answers, then itself."""
+    in_reply_to = email.in_reply_to or []
+    parents = email.references or (in_reply_to if len(in_reply_to) == 1 else [])
+    return [*parents, *(email.message_id or [])]
+
+
+def _jmap_address(address: _Address) -> dict[str, str]:
+    return {"email": address.email or ""} | ({"name": address.name} if address.name else {})
 
 
 @dataclass(frozen=True)
@@ -452,7 +574,7 @@ class TMail:
         a back-reference to its result names."""
         account = await self._account(user)
         request = {
-            "using": [CORE, MAIL],
+            "using": [CORE, MAIL, *sorted({NEEDS[name] for name, _ in calls if name in NEEDS})],
             "methodCalls": [
                 [name, {"accountId": account} | arguments, name] for name, arguments in calls
             ],
@@ -525,11 +647,7 @@ class TMail:
         )
         emails = _own_emails_as_text(user, results, [email_id], _own(results), BODY_BYTES)
         if not emails:
-            raise _not_found(
-                "email_not_found",
-                "Email not found",
-                f"The user has no email {email_id} in their own mailboxes.",
-            )
+            raise _email_not_found(email_id)
         return emails[0]
 
     async def thread(self, user: User, thread_id: str, limit: int) -> list[Email]:
@@ -573,3 +691,74 @@ class TMail:
                 f"The user has no conversation {thread_id} in their own mailboxes.",
             )
         return emails
+
+    async def reply_draft(
+        self, user: User, email_id: str, text: str, reply_all: bool
+    ) -> ReplyDraft:
+        """Prepares a reply to one of the user's emails, if it is in one of their own mailboxes,
+        as a draft in their Drafts mailbox: Email/set creates it there, and nothing sends it."""
+        results = await self._call(
+            user,
+            _MAILBOXES,
+            ("Email/get", {"ids": [email_id], "properties": REPLY_PROPERTIES}),
+            ("Identity/get", {"ids": None, "properties": ["name", "email"]}),
+        )
+        mailboxes = _parsed(_Mailboxes, results["Mailbox/get"], "the mailboxes").found
+        own = {mailbox.id for mailbox in mailboxes}
+        email = next(
+            (
+                email
+                for email in _parsed(_Emails, results["Email/get"], "the email").found
+                if email.id == email_id and _in_own(email.mailbox_ids, own)
+            ),
+            None,
+        )
+        if email is None:
+            raise _email_not_found(email_id)
+        drafts = next((mailbox.id for mailbox in mailboxes if mailbox.role == "drafts"), None)
+        if drafts is None:
+            raise _not_found(
+                "mailbox_not_found",
+                "Mailbox not found",
+                "The user has no Drafts mailbox of their own, where the draft would go.",
+            )
+        identities = _parsed(_Identities, results["Identity/get"], "the identities").found
+        users = {user.email} | {identity.email.lower() for identity in identities}
+        sent = {mailbox.id for mailbox in mailboxes if mailbox.role == "sent"}
+        written = _written_by(email, users, sent)
+        to, cc = _reply_recipients(email, users, written, reply_all)
+        # From the user's own address, with the name of its identity
+        name = next((one.name for one in identities if one.email.lower() == user.email), "")
+        subject = _reply_subject(email.subject)
+        draft = {
+            "mailboxIds": {drafts: True},
+            # As Twake Mail keeps a draft: one the user need not read
+            "keywords": {"$draft": True, "$seen": True},
+            "from": [_jmap_address(_Address(name=name or None, email=user.email))],
+            "to": [_jmap_address(address) for address in to],
+            "cc": [_jmap_address(address) for address in cc],
+            "subject": subject,
+            "inReplyTo": email.message_id,
+            "references": _references(email),
+            "textBody": [{"partId": "text", "type": "text/plain"}],
+            "bodyValues": {"text": {"value": text}},
+        }
+        # James writes an empty list as an empty header: what is empty is left out
+        create = {"draft": {key: value for key, value in draft.items() if value}}
+        results = await self._call(user, ("Email/set", {"create": create}))
+        answer = _parsed(_EmailSet, results["Email/set"], "the draft")
+        created = (answer.created or {}).get("draft")
+        if created is None:
+            refusal = (answer.not_created or {}).get("draft", {}).get("type", "nothing")
+            raise _unavailable(f"Mail answered {refusal} to Email/set.")
+        # The draft answers a Reply-To address that the email is not from
+        reply_to_differs = not written and bool(
+            _emails(_cleaned(email.reply_to)) - _emails(_cleaned(email.sender))
+        )
+        return ReplyDraft(
+            email_id=email_id,
+            draft_id=created.id,
+            reply_to_differs=reply_to_differs,
+            recipients_truncated=any(len(header) > MOST_ADDRESSES for header in (to, cc)),
+            untrusted=ReplyText(to=_cleaned(to), cc=_cleaned(cc), subject=_line(subject)),
+        )

@@ -239,6 +239,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "list_my_tasks": ["tasks.task.read.v1"],
         "search_tasks": ["tasks.task.read.v1"],
         "read_task": ["tasks.task.read.v1"],
+        "create_reply_draft": ["mail.draft.create.v1"],
     }
 
 
@@ -297,6 +298,7 @@ async def test_the_schemas_agents_are_given_hold_no_reference(client: AsyncClien
         ]
     }
 
+    assert any(name.endswith(".body") for name in schemas), "no body found"
     assert [name for name, schema in schemas.items() if "$ref" in json.dumps(schema)] == []
 
 
