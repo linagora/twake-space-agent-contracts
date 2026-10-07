@@ -270,13 +270,17 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         ),
         response_model=MovedEmails,
         # The emails can be moved back: the owner's consent to write in Mail covers it, as it
-        # covers moving them one at a time
-        openapi_extra={"x-twake-risk": "low"},
+        # covers moving them one at a time. It tells what it would do, for when the owner is asked.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
     )
-    async def move_emails(emails: EmailsTo, user: Annotated[User, Depends(caller)]) -> MovedEmails:
+    async def move_emails(
+        emails: EmailsTo, user: Annotated[User, Depends(caller)], preview: Previewing
+    ) -> MovedEmails | JSONResponse:
         placements = await tmail.placements(user, emails.email_ids)
         mailbox = emails.mailbox(placements, "trash_emails")
-        return await moved_emails(tmail, user, placements, emails.email_ids, mailbox, IN_SPAM)
+        return await moved_emails(
+            tmail, user, placements, emails.email_ids, mailbox, "move", preview, IN_SPAM
+        )
 
     @routes.post(
         "/archive",
@@ -294,13 +298,17 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         ),
         response_model=MovedEmails,
         # The emails can be moved back: the owner's consent to write in Mail covers it, as it
-        # covers archiving them one at a time
-        openapi_extra={"x-twake-risk": "low"},
+        # covers archiving them one at a time. It tells what it would do, for when the owner is
+        # asked.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
     )
-    async def archive_emails(emails: Emails, user: Annotated[User, Depends(caller)]) -> MovedEmails:
+    async def archive_emails(
+        emails: Emails, user: Annotated[User, Depends(caller)], preview: Previewing
+    ) -> MovedEmails | JSONResponse:
         placements = await tmail.placements(user, emails.email_ids)
+        archive = placements.archive()
         return await moved_emails(
-            tmail, user, placements, emails.email_ids, placements.archive(), IN_SPAM
+            tmail, user, placements, emails.email_ids, archive, "archive", preview, IN_SPAM
         )
 
     return routes

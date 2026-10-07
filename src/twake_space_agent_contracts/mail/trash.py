@@ -60,11 +60,17 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         ),
         response_model=MovedEmails,
         # The emails can be moved back: the owner's consent to write in Mail covers it, as it
-        # covers trashing them one at a time
-        openapi_extra={"x-twake-risk": "low"},
+        # covers trashing them one at a time. It tells what it would do, for when the owner is
+        # asked.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
     )
-    async def trash_emails(emails: Emails, user: Annotated[User, Depends(caller)]) -> MovedEmails:
+    async def trash_emails(
+        emails: Emails, user: Annotated[User, Depends(caller)], preview: Previewing
+    ) -> MovedEmails | JSONResponse:
         placements = await tmail.placements(user, emails.email_ids)
-        return await moved_emails(tmail, user, placements, emails.email_ids, placements.trash())
+        trash = placements.trash()
+        return await moved_emails(
+            tmail, user, placements, emails.email_ids, trash, "trash", preview
+        )
 
     return routes

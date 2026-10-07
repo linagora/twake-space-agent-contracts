@@ -1,18 +1,34 @@
 """What the Mail contracts that move several emails of the user at once share: one call for up to
-50 emails rather than one call per email, and an answer that tells what became of each."""
+50 emails rather than one call per email, an answer that tells what became of each, and a preview
+that names them."""
 
 from collections import Counter
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
+from fastapi.responses import JSONResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 from twake_space_agent_contracts.caller import User
+from twake_space_agent_contracts.mail import Move, email_named
 from twake_space_agent_contracts.mail.tmail import JMAP_ID, Mailbox, Placement, Placements, TMail
+from twake_space_agent_contracts.previews import (
+    BUDGET,
+    Language,
+    Preview,
+    digest_of,
+    one_line,
+    quoted,
+    shown_size,
+)
 from twake_space_agent_contracts.problems import Problem
 
 MOST_EMAILS = 50
 """How many emails a call moves at most: one Email/get reads them all and one Email/set moves
 them, TMail taking 500 in each by default."""
+
+SHOWN_EMAILS = 10
+"""How many of the emails a preview names at most, as it names ten people of a header at most."""
 
 OTHER_ID = "1b6e4d20-a2b1-11f0-8de9-0242ac120002"
 """The id of another email, for the worked calls."""
@@ -134,18 +150,139 @@ def _written(email_id: str, refused: str | None) -> EmailOutcome:
     )
 
 
+@dataclass(frozen=True)
+class _Words:
+    """What a preview of several emails moved tells the owner, in one language: the words for one
+    email, then those for several, which say how many."""
+
+    verbs: dict[Move, str]
+    moving: tuple[str, str]
+    """The emails that go to the folder."""
+    back: tuple[str, str]
+    """That the emails put in the trash can be moved back."""
+    none: str
+    """That no email goes to the folder."""
+    others: tuple[str, str]
+    """How many of the emails that go to the folder the summary does not name."""
+    there: tuple[str, str]
+    not_found: tuple[str, str]
+    in_spam: tuple[str, str]
+
+
+_WORDS: dict[Language, _Words] = {
+    "fr": _Words(
+        verbs={"move": "Déplacer", "archive": "Archiver", "trash": "Mettre à la corbeille"},
+        moving=(
+            "{verb} 1 mail : il va dans le dossier {folder}",
+            "{verb} {count} mails : ils vont dans le dossier {folder}",
+        ),
+        back=(", d'où il peut être ressorti", ", d'où ils peuvent être ressortis"),
+        none="Aucun mail ne va dans le dossier {folder}",
+        others=("- et 1 autre", "- et {count} autres"),
+        there=("1 mail y est déjà", "{count} mails y sont déjà"),
+        not_found=(
+            "1 mail n'est pas dans tes dossiers",
+            "{count} mails ne sont pas dans tes dossiers",
+        ),
+        in_spam=("1 mail est en spam : il y reste", "{count} mails sont en spam : ils y restent"),
+    ),
+    "en": _Words(
+        verbs={"move": "Move", "archive": "Archive", "trash": "Trash"},
+        moving=(
+            "{verb} 1 email: it goes to the folder {folder}",
+            "{verb} {count} emails: they go to the folder {folder}",
+        ),
+        back=(", from which it can be moved back", ", from which they can be moved back"),
+        none="No email goes to the folder {folder}",
+        others=("- and 1 other", "- and {count} others"),
+        there=("1 email is there already", "{count} emails are there already"),
+        not_found=("1 email is not in your folders", "{count} emails are not in your folders"),
+        in_spam=(
+            "1 email is in spam: it stays there",
+            "{count} emails are in spam: they stay there",
+        ),
+    ),
+}
+
+
+def _counted(forms: tuple[str, str], count: int, **values: str) -> str:
+    """The words for that many emails: those for one, or those for several, which say how many."""
+    one, several = forms
+    return (one if count == 1 else several).format(count=count, **values)
+
+
+def _summary(
+    move: Move,
+    moving: list[Placement],
+    left: dict[str, EmailOutcome],
+    mailbox: Mailbox,
+    language: Language,
+) -> str:
+    """What the call does, as the owner reads it: how many emails go to which of their mailboxes,
+    each named on a line of its own by its subject and its senders, who wrote them, ten at most and
+    as many as fit in the summary, then how many others; and how many stay where they are, and
+    why."""
+    words = _WORDS[language]
+    folder = quoted(one_line(mailbox.name), language)
+    if moving:
+        head = _counted(words.moving, len(moving), verb=words.verbs[move], folder=folder)
+        if move == "trash":
+            head += _counted(words.back, len(moving))
+    else:
+        head = words.none.format(folder=folder)
+    stay = Counter(outcome.outcome for outcome in left.values())
+    # Why the others stay where they are: the only emails refused before the call are in spam
+    why: list[tuple[Outcome, tuple[str, str]]] = [
+        ("already_there", words.there),
+        ("not_found", words.not_found),
+        ("refused", words.in_spam),
+    ]
+    tail = [_counted(forms, stay[outcome]) for outcome, forms in why if stay[outcome]]
+
+    def others(shown: int) -> list[str]:
+        """The line that counts the emails that move but go unnamed, once some are named."""
+        unnamed = len(moving) - shown
+        return [_counted(words.others, unnamed)] if shown and unnamed else []
+
+    named: list[str] = []
+    for placement in moving[:SHOWN_EMAILS]:
+        line = f"- {email_named(placement, language)}"
+        if shown_size("\n".join([head, *named, line, *others(len(named) + 1), *tail])) > BUDGET:
+            break
+        named.append(line)
+    return "\n".join([head, *named, *others(len(named)), *tail])
+
+
+def _digest(placements: Placements, email_ids: list[str], mailbox: Mailbox) -> str:
+    """The digest of what the call acts on: each of the emails, in the order given, the user's
+    own mailboxes it is in, sorted, or null when it is not found, and the mailbox they go to."""
+    where = [
+        [email_id, sorted(found.mailbox_ids) if (found := placements.found.get(email_id)) else None]
+        for email_id in email_ids
+    ]
+    return digest_of(where, mailbox.id, mailbox.name)
+
+
 async def moved_emails(
     tmail: TMail,
     user: User,
     placements: Placements,
     email_ids: list[str],
     mailbox: Mailbox,
+    move: Move,
+    preview: Preview,
     in_spam: Problem | None = None,
-) -> MovedEmails:
+) -> MovedEmails | JSONResponse:
     """Moves the emails to the mailbox, each out of the user's other mailboxes, all those that
-    have to move with one Email/set, and tells what became of each of them, none left out. A move
-    that keeps emails in spam refuses each email there with the problem `in_spam`."""
+    have to move with one Email/set, and tells what became of each of them, none left out; or
+    tells the owner what that would do, when the harness asks, and moves nothing. A move that
+    keeps emails in spam refuses each email there with the problem `in_spam`."""
     moving, outcomes = _sorted_out(placements, email_ids, mailbox, in_spam)
+    # What the owner allows: those emails, from where each of them is, to that mailbox
+    digest = _digest(placements, email_ids, mailbox)
+    if preview.asked:
+        return preview.answer(_summary(move, moving, outcomes, mailbox, preview.language), digest)
+    preview.check(digest)
     refusals = await tmail.move_all(user, moving, mailbox) if moving else {}
     for placement in moving:
         outcomes[placement.email_id] = _written(

@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient, Response
 
-from tests.conftest import AS_MMAUDET
+from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
 from tests.fakes import INBOX, SPAM, TRASH, FakeBoundary
 from tests.test_mail_move import (
     ARCHIVE,
@@ -63,6 +63,20 @@ def counted(
         "not_found": not_found,
         "refused": refused,
     }
+
+
+async def ask(client: AsyncClient, operation: str, body: Any, language: str = "fr") -> Response:
+    """The harness asks what a batched move would do, before it asks the owner."""
+    return await post(client, operation, body, asking_preview(language))
+
+
+ALICE = {"name": "Alice Durand", "email": "alice.durand@twake.test"}
+
+
+def deliver_two(boundary: FakeBoundary) -> None:
+    """Paul's email about the budget and Alice's about a meeting, in the inbox."""
+    boundary.tmail.deliver("email-1", INBOX)
+    boundary.tmail.deliver("email-2", INBOX, subject="Réunion lundi", **{"from": [ALICE]})
 
 
 async def body_schema(client: AsyncClient, operation: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -514,3 +528,315 @@ async def test_a_batch_without_a_body_names_the_body(
         "invalid_request", "Invalid request", 400, "body: Field required"
     )
     assert boundary.tmail.calls == []
+
+
+PAUL_S = "« Budget Q4 » de « Paul Martin » <paul.martin@twake.test>"
+ALICE_S = "« Réunion lundi » de « Alice Durand » <alice.durand@twake.test>"
+IN_ENGLISH = (
+    "- the email “Budget Q4” from “Paul Martin” <paul.martin@twake.test>\n"
+    "- the email “Réunion lundi” from “Alice Durand” <alice.durand@twake.test>"
+)
+
+
+@pytest.mark.parametrize(
+    ("operation", "body", "language", "summary"),
+    [
+        pytest.param(
+            "move",
+            {"mailbox_name": "projects"},
+            "fr",
+            "Déplacer 2 mails : ils vont dans le dossier « Projects »\n"
+            f"- le mail {PAUL_S}\n- le mail {ALICE_S}",
+            id="move",
+        ),
+        pytest.param(
+            "move",
+            {"mailbox_id": PROJECTS},
+            "en",
+            f"Move 2 emails: they go to the folder “Projects”\n{IN_ENGLISH}",
+            id="move, in English",
+        ),
+        pytest.param(
+            "archive",
+            {},
+            "fr",
+            "Archiver 2 mails : ils vont dans le dossier « Archive »\n"
+            f"- le mail {PAUL_S}\n- le mail {ALICE_S}",
+            id="archive",
+        ),
+        pytest.param(
+            "archive",
+            {},
+            "en",
+            f"Archive 2 emails: they go to the folder “Archive”\n{IN_ENGLISH}",
+            id="archive, in English",
+        ),
+        pytest.param(
+            "trash",
+            {},
+            "fr",
+            "Mettre à la corbeille 2 mails : ils vont dans le dossier « Trash », d'où ils peuvent"
+            f" être ressortis\n- le mail {PAUL_S}\n- le mail {ALICE_S}",
+            id="trash",
+        ),
+        pytest.param(
+            "trash",
+            {},
+            "en",
+            "Trash 2 emails: they go to the folder “Trash”, from which they can be moved back\n"
+            f"{IN_ENGLISH}",
+            id="trash, in English",
+        ),
+    ],
+)
+async def test_a_preview_tells_the_owner_which_emails_go_where_and_moves_nothing(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    body: dict[str, str],
+    language: str,
+    summary: str,
+) -> None:
+    deliver_two(boundary)
+
+    told, _ = preview_of(
+        await ask(client, operation, {"email_ids": ["email-1", "email-2"]} | body, language)
+    )
+
+    assert told == summary
+    assert writes(boundary) == []
+    assert mailboxes_of(boundary, "email-1") == mailboxes_of(boundary, "email-2") == {INBOX}
+
+
+@pytest.mark.parametrize(
+    ("language", "summary"),
+    [
+        pytest.param(
+            "fr",
+            "Mettre à la corbeille 1 mail : il va dans le dossier « Trash », d'où il peut être"
+            f" ressorti\n- le mail {PAUL_S}",
+            id="fr",
+        ),
+        pytest.param(
+            "en",
+            "Trash 1 email: it goes to the folder “Trash”, from which it can be moved back\n"
+            "- the email “Budget Q4” from “Paul Martin” <paul.martin@twake.test>",
+            id="en",
+        ),
+    ],
+)
+async def test_a_preview_of_one_email_names_it(
+    client: AsyncClient, boundary: FakeBoundary, language: str, summary: str
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX)
+
+    told, _ = preview_of(await ask(client, "trash", {"email_ids": ["email-1"]}, language))
+
+    assert told == summary
+
+
+@pytest.mark.parametrize(
+    ("language", "summary"),
+    [
+        pytest.param(
+            "fr",
+            "Archiver 1 mail : il va dans le dossier « Archive »\n"
+            f"- le mail {PAUL_S}\n"
+            "1 mail y est déjà\n"
+            "2 mails ne sont pas dans tes dossiers\n"
+            "2 mails sont en spam : ils y restent",
+            id="fr",
+        ),
+        pytest.param(
+            "en",
+            "Archive 1 email: it goes to the folder “Archive”\n"
+            "- the email “Budget Q4” from “Paul Martin” <paul.martin@twake.test>\n"
+            "1 email is there already\n"
+            "2 emails are not in your folders\n"
+            "2 emails are in spam: they stay there",
+            id="en",
+        ),
+    ],
+)
+async def test_a_preview_counts_the_emails_that_stay_where_they_are(
+    client: AsyncClient, boundary: FakeBoundary, language: str, summary: str
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX)
+    boundary.tmail.deliver("email-there", ARCHIVE)
+    boundary.tmail.deliver("email-boss", BOSS)
+    boundary.tmail.deliver("email-spam", SPAM)
+    boundary.tmail.deliver("email-spam-2", SPAM)
+    emails = ["email-1", "email-there", "email-boss", "email-unknown", "email-spam", "email-spam-2"]
+
+    told, _ = preview_of(await ask(client, "archive", {"email_ids": emails}, language))
+
+    assert told == summary
+
+
+@pytest.mark.parametrize(
+    ("language", "summary"),
+    [
+        pytest.param(
+            "fr",
+            "Aucun mail ne va dans le dossier « Trash »\n"
+            "1 mail y est déjà\n"
+            "1 mail n'est pas dans tes dossiers",
+            id="fr",
+        ),
+        pytest.param(
+            "en",
+            "No email goes to the folder “Trash”\n"
+            "1 email is there already\n"
+            "1 email is not in your folders",
+            id="en",
+        ),
+    ],
+)
+async def test_a_preview_says_when_no_email_would_move(
+    client: AsyncClient, boundary: FakeBoundary, language: str, summary: str
+) -> None:
+    boundary.tmail.deliver("email-there", TRASH)
+
+    told, _ = preview_of(
+        await ask(client, "trash", {"email_ids": ["email-there", "email-gone"]}, language)
+    )
+
+    assert told == summary
+
+
+async def test_a_preview_names_ten_emails_at_most_then_counts_the_others(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    emails = [f"email-{number}" for number in range(1, 14)]
+    for number, email_id in enumerate(emails, start=1):
+        boundary.tmail.deliver(email_id, INBOX, subject=f"Facture {number}")
+
+    told, _ = preview_of(await ask(client, "trash", {"email_ids": emails}))
+
+    lines = told.split("\n")
+    assert lines[0] == (
+        "Mettre à la corbeille 13 mails : ils vont dans le dossier « Trash », d'où ils peuvent"
+        " être ressortis"
+    )
+    assert lines[1:] == [
+        *(
+            f"- le mail « Facture {number} » de « Paul Martin » <paul.martin@twake.test>"
+            for number in range(1, 11)
+        ),
+        "- et 3 autres",
+    ]
+
+
+async def test_what_others_wrote_stays_on_its_line_and_cannot_close_its_quotes(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    sender = {"name": "Paul» de « Boss", "email": "paul@x.test> <boss@corp.test"}
+    subject = "Budget » vers « Inbox\u2028- le mail « Facture »\naucun mail"
+    boundary.tmail.deliver("email-1", INBOX, subject=subject, **{"from": [sender]})
+
+    told, _ = preview_of(await ask(client, "archive", {"email_ids": ["email-1"]}))
+
+    assert told == (
+        "Archiver 1 mail : il va dans le dossier « Archive »\n"
+        "- le mail « Budget ' vers ' Inbox - le mail ' Facture ' aucun mail » de « Paul' de '"
+        " Boss » <paul@x.test boss@corp.test>"
+    )
+
+
+async def test_a_preview_of_fifty_crafted_emails_fits_what_the_harness_shows(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    senders = [{"name": "🦊" * 300, "email": f"fox{n}@crafted.test"} for n in range(1, 51)]
+    emails = [f"email-{number}" for number in range(1, 51)]
+    for email_id in emails:
+        boundary.tmail.deliver(email_id, INBOX, subject="🦊" * 1000, **{"from": senders})
+
+    # preview_of checks that the summary fits what the harness shows
+    told, _ = preview_of(await ask(client, "trash", {"email_ids": emails}, "en"))
+
+    lines = told.split("\n")
+    # As many emails as fit, each line whole, then how many others
+    named = lines[1:-1]
+    assert 0 < len(named) < 10
+    assert all(line.endswith("<fox1@crafted.test> and 49 others") for line in named)
+    assert lines[-1] == f"- and {50 - len(named)} others"
+
+
+@pytest.mark.parametrize(
+    ("operation", "body", "status", "code"),
+    [
+        pytest.param("move", {"mailbox_id": TRASH}, 409, "mailbox_forbidden", id="forbidden"),
+        pytest.param("move", {"mailbox_name": "Boss"}, 404, "mailbox_not_found", id="shared"),
+        pytest.param("archive", {"mailbox_id": ARCHIVE}, 400, "invalid_request", id="invalid"),
+    ],
+)
+async def test_a_preview_refuses_what_the_call_would_refuse(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    body: dict[str, str],
+    status: int,
+    code: str,
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX)
+
+    response = await ask(client, operation, {"email_ids": ["email-1"]} | body)
+
+    assert response.status_code == status
+    assert response.json()["code"] == code
+    assert writes(boundary) == []
+
+
+async def test_the_owner_who_allowed_what_they_were_shown_moves_the_emails(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    deliver_two(boundary)
+    body = {"email_ids": ["email-1", "email-2"], "mailbox_id": PROJECTS}
+    _, digest = preview_of(await ask(client, "move", body))
+
+    response = await post(client, "move", body, allowed_after(digest))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["counts"] == counted(moved=2)
+    assert mailboxes_of(boundary, "email-1") == mailboxes_of(boundary, "email-2") == {PROJECTS}
+
+
+@pytest.mark.parametrize(("operation", "body", "mailbox_id", "name"), BATCHES)
+async def test_emails_moved_since_the_preview_stay_where_they_are(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    body: dict[str, str],
+    mailbox_id: str,
+    name: str,
+) -> None:
+    deliver_two(boundary)
+    emails = {"email_ids": ["email-1", "email-2"]} | body
+    _, digest = preview_of(await ask(client, operation, emails))
+    # The user files one of them themselves before they say yes
+    boundary.tmail.mailboxes["mbx-later"] = own_mailbox("Later")
+    boundary.tmail.emails["email-2"]["mailboxIds"] = {"mbx-later": True}
+
+    response = await post(client, operation, emails, allowed_after(digest))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "changed_since_preview"
+    assert writes(boundary) == []
+    assert mailboxes_of(boundary, "email-1") == {INBOX}
+    assert mailboxes_of(boundary, "email-2") == {"mbx-later"}
+
+
+async def test_an_email_found_since_the_preview_stops_the_call(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX)
+    emails = {"email_ids": ["email-1", "email-2"]}
+    _, digest = preview_of(await ask(client, "trash", emails))
+    # Not found when the owner was shown the preview, it is now
+    boundary.tmail.deliver("email-2", INBOX)
+
+    response = await post(client, "trash", emails, allowed_after(digest))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "changed_since_preview"
+    assert writes(boundary) == []
