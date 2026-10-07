@@ -14,7 +14,6 @@ from twake_space_agent_contracts import (
     drive_create,
     drive_files,
     event_create,
-    events,
     freebusy,
     invitations,
     task_reads,
@@ -168,17 +167,6 @@ def _tasks(context: Context) -> list[APIRouter]:
 
 APPLICATIONS = (
     Application(
-        domain="events",
-        name=Words(en="Workplace events", fr="Événements de l'espace de travail"),
-        read=Words(
-            en="read the events of your workplace that concern you, such as your invitations",
-            fr="lire les événements de ton espace de travail qui te concernent, comme tes"
-            " invitations",
-        ),
-        write=None,
-        routers=lambda context: [events.router(context.pool, context.caller)],
-    ),
-    Application(
         domain="calendar",
         name=Words(en="Twake Calendar", fr="Twake Agenda"),
         read=Words(
@@ -263,19 +251,9 @@ APPLICATIONS = (
 )
 
 
-# The assistant's own feed of workplace events, which the harness reads without asking and checks
-# the invitations it brings with: published whatever PUBLISHED_APPS says
-ALWAYS_PUBLISHED = frozenset({"events"})
-
-
 def published(domains: Collection[str]) -> list[Application]:
-    """The applications of these domains and those always published, in the order they are
-    declared in."""
+    """The applications of these domains, in the order they are declared in."""
     unknown = ", ".join(sorted(set(domains) - {application.domain for application in APPLICATIONS}))
     if unknown:
         raise ValueError(f"PUBLISHED_APPS names applications the service does not have: {unknown}")
-    return [
-        application
-        for application in APPLICATIONS
-        if application.domain in domains or application.domain in ALWAYS_PUBLISHED
-    ]
+    return [application for application in APPLICATIONS if application.domain in domains]

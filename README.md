@@ -22,7 +22,7 @@ On a Drive contract, APISIX also passes the token of the user's Drive instance, 
 
 A contract belongs to the application its id starts with, its domain, such as `calendar` for `calendar.freebusy.read.v1`. Each application is declared once, in [`applications.py`](src/twake_space_agent_contracts/applications.py): its domain, the words the harness names it with, and the routers of its contracts, one per contract.
 
-The service publishes only the applications `PUBLISHED_APPS` names, `events` and `calendar` when it is unset or empty: it serves their contracts and describes them in its OpenAPI document, while the paths of any other application answer 404 `not_found`, like a path the service never had. The operator keeps it equal to the applications APISIX routes, so that an application leaves the agents' tools when it leaves the gateway. A name the service does not know stops it from starting. `events`, the assistant's own feed, which the harness reads without asking and checks the invitations it brings with, is published whatever the setting says.
+The service publishes only the applications `PUBLISHED_APPS` names, `calendar` when it is unset or empty: it serves their contracts and describes them in its OpenAPI document, while the paths of any other application answer 404 `not_found`, like a path the service never had. The operator keeps it equal to the applications APISIX routes, so that an application leaves the agents' tools when it leaves the gateway. A name the service does not know stops it from starting, `events` among them since [`events.read.v1` was retired](#eventsreadv1-retired).
 
 Before an assistant first reads in an application, and before it first writes there, the harness asks its owner, naming the application and saying what reading or writing covers there. It takes those words from the root of the OpenAPI document, in `x-twake-domains`, which holds the published applications only:
 
@@ -66,25 +66,18 @@ To switch an application off, take it out of `PUBLISHED_APPS`: its paths answer 
 Every contract keeps the rules of the capability catalog:
 
 - A `GET` contract reads, and any other writes. Every write declares in `x-twake-risk` whether it is `low`, which the owner's consent to write in its application covers, or `high`, which the owner confirms call by call; the harness takes a write that declares neither for a high one, and the tests refuse it.
-- Every operation's description ends with a worked call, its values in the exact format the gateway checks: `Example: event_id=f7c9….`, or `Example, <what it is an example of>: name=value, name=value.`, and `Example: (no parameters).` for an operation that takes none. A list gives its name once per value, and a body is written `body=<JSON>`. The tests check each value against the operation's schema in the document, as the gateway does.
+- Every operation's description ends with a worked call, its values in the exact format the gateway checks: `Example: email_id=0f9c….`, or `Example, <what it is an example of>: name=value, name=value.`, and `Example: (no parameters).` for an operation that takes none. A list gives its name once per value, and a body is written `body=<JSON>`. The tests check each value against the operation's schema in the document, as the gateway does.
 - The schema of a parameter or of a body is written whole in its operation, without a reference to the document's components: the harness gives it to the model as it is.
 - A contract that makes the application notify other people says so in its description, as `accept_invitation` does of the organizer.
 - Text other people wrote, which an agent reads as data and never as instructions, comes back in an `untrusted` object, separately from what the contract computed.
 - A write that can tell what a call would do without doing it declares `x-twake-preview: true`, and its owner reads that rather than the call when the harness asks them: see [Previews](#previews).
 
-### `events.read.v1`
+### `events.read.v1`, retired
 
-Reads the workplace events stored for the user the agent acts for: those whose targets name the user's email (`data.targets[].native_id`). An event sent to another address of the user, such as an alias, is not found.
+`read_event` and `list_events` read the workplace events stored for the user, which a Kafka bus brought and its storage wrote in the `workplace_events` table of a PostgreSQL database. Nothing writes that table since the bus was removed in October 2026: the harness now hears from RabbitMQ of what concerns an assistant, such as an invitation, with the UID of its event, which `accept_invitation` takes. The two contracts are gone from the service and from its OpenAPI document:
 
-| Operation | Request | Answer |
-|---|---|---|
-| `read_event` | `GET /contracts/v1/events/{event_id}` | the event, if the user is one of its targets |
-| `list_events` | `GET /contracts/v1/events?type=…&limit=…` | `{"events": [...]}`, the user's events newest first |
-
-- `limit` goes from 1 to 100 and is 20 by default.
-- Pass `type=com.twake.calendar.event.invited.v1` to list meeting invitations.
-- An event the user is not a target of answers exactly like an unknown one, so the contract never reveals that an event exists.
-- The title of the event's object, which its author wrote, comes back in `untrusted.title` rather than in `data.object`, where the rest is what the producer computed, such as the `uid` and the times of an invitation.
+- `events` is no longer an application of the service. It is not published whatever `PUBLISHED_APPS` says, as it was, and a setting that still names it stops the service from starting.
+- An operator takes `events` out of `PUBLISHED_APPS` with the new image, gives the OpenAPI document a new address, then removes the gateway's routes of `events`, as for [switching an application off](#putting-an-application-in-service).
 
 ### `calendar.freebusy.read.v1`
 
@@ -523,7 +516,6 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 401 | `missing_drive_token` | a Drive contract without the user's Drive token |
 | 403 | `forbidden_role` | the user is a viewer of the board: they only read it |
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
-| 404 | `event_not_found` | no event with this id concerns the user |
 | 404 | `invitation_not_found` | no invitation to an event of this UID was sent to the user: their calendars have no copy of the event, their copy does not list them as an attendee, or they organize it |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `chat_account_not_found` | Chat has no account for the user's email |
@@ -602,7 +594,7 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `OIDC_AUDIENCE` | the audience the tokens must have, `twake-space-agents` by default |
 | `OIDC_JWKS_URL` | the issuer's signing keys, `<issuer>/oauth2/jwks` by default, where LemonLDAP-NG publishes them |
 | `CALENDAR_URL` | the Calendar side service, which Calendar and Contacts go through |
-| `PUBLISHED_APPS` | the applications the service publishes, by domain, comma separated: `events,calendar` when unset or empty, and `events` always (see [Applications](#applications)) |
+| `PUBLISHED_APPS` | the applications the service publishes, by domain, comma separated: `calendar` when unset or empty (see [Applications](#applications)) |
 | `CHAT_URL` | the gateway's outbound route to Synapse, which adds the token of the contracts' application service; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `CHAT_GATEWAY_KEY` | the key the gateway's outbound route to Synapse admits, so that only this service uses the application service's token: sent in `apikey` on each call to `CHAT_URL`, and to no other application; needed once `PUBLISHED_APPS` names `chat`, and only then |
 | `MATRIX_SERVER_NAME` | the name of Chat's homeserver, which ends its users' Matrix ids; needed once `PUBLISHED_APPS` names `chat`, and only then |

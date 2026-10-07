@@ -222,8 +222,6 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
     }
     assert document["info"]["title"] == "Twake Space agent contracts"
     assert {name: operation["tags"] for name, operation in operations.items()} == {
-        "read_event": ["events.read.v1"],
-        "list_events": ["events.read.v1"],
         "read_freebusy": ["calendar.freebusy.read.v1"],
         "accept_invitation": ["calendar.invitation.accept.v1"],
         "create_event": ["calendar.event.create.v1"],

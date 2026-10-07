@@ -1,14 +1,8 @@
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import AS_MMAUDET
+from tests.conftest import AS_MMAUDET, SLOT
 from tests.fakes import MMAUDET_CALENDAR_ID, FakeBoundary, as_user, email_of
-
-# Tuesday 17:00 to 18:00 in Paris
-SLOT: dict[str, str | list[str]] = {
-    "start": "2026-10-06T17:00:00+02:00",
-    "end": "2026-10-06T18:00:00+02:00",
-}
 
 
 async def free_busy(client: AsyncClient, **params: str | list[str]) -> dict[str, object]:
