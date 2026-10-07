@@ -4,6 +4,7 @@ of the token's user in their org_id, and shows them the spaces they are a member
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 
@@ -29,6 +30,15 @@ def space_not_found(space_id: str) -> Problem:
         code="space_not_found",
         title="Space not found",
         detail=f"The user is a member of no space {space_id}: list_spaces gives theirs.",
+    )
+
+
+def feed_item_not_found(space_id: str, item_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="feed_item_not_found",
+        title="Feed item not found",
+        detail=f"The feed of space {space_id} has no item {item_id}.",
     )
 
 
@@ -170,6 +180,13 @@ class FeedItem:
     body: str | None = None
     edited_at: datetime | None = None
 
+    def reacted(self, user_id: str | None, key: str) -> bool:
+        """Whether the member of that user id reacted to the item so; False for None, whom the
+        contract cannot tell."""
+        return any(
+            reaction.key == key and user_id in reaction.user_ids for reaction in self.reactions
+        )
+
 
 def _actor(value: Any) -> Actor | None:
     """An actor as Space gives it. Raises KeyError, TypeError or ValueError for any other form."""
@@ -256,7 +273,7 @@ class TwakeSpace:
         self._http = http
 
     async def _call(
-        self, user: User, method: str, path: str, *, params: Any = None
+        self, user: User, method: str, path: str, *, params: Any = None, body: Any = None
     ) -> httpx.Response:
         """Space's answer, once Space answered and took the user's token."""
         try:
@@ -264,6 +281,7 @@ class TwakeSpace:
                 method,
                 self._url + path,
                 params=params,
+                json=body,
                 headers={"Authorization": f"Bearer {user.token}", "Accept": "application/json"},
             )
         except httpx.HTTPError as error:
@@ -312,6 +330,22 @@ class TwakeSpace:
         if invalid is not None and response.status_code == 400:
             raise invalid
         return self._json(response, "GET", path)
+
+    async def _write(
+        self, user: User, method: str, path: str, *, missing: Problem, body: Any = None
+    ) -> httpx.Response:
+        """Space's answer to a write it took; `missing` when what the write acts on is gone, or no
+        longer the user's, since the contract read it."""
+        response = await self._call(user, method, path, body=body)
+        error = _error_of(response)
+        if response.status_code == 404 and error == "not_found":
+            raise missing
+        # Space checks what the contract cannot
+        if response.status_code == 400:
+            raise invalid_request(f"Space refused {method} {path}: {error}.")
+        if not response.is_success:
+            raise _unavailable(f"Space answered {response.status_code} to {method} {path}.")
+        return response
 
     async def spaces(self, user: User) -> list[SpaceSummary]:
         """The spaces the user is a member of, by name."""
@@ -427,3 +461,13 @@ class TwakeSpace:
             return _feed_item(found)
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Space gave the item in an unexpected form.") from error
+
+    async def react(self, user: User, space_id: str, item_id: str, key: str) -> None:
+        """Adds the user's reaction to the item, which Space keeps once."""
+        path = f"/spaces/{space_id}/feed/items/{item_id}/reactions/{quote(key, safe='')}"
+        await self._write(user, "PUT", path, missing=feed_item_not_found(space_id, item_id))
+
+    async def unreact(self, user: User, space_id: str, item_id: str, key: str) -> None:
+        """Takes the user's reaction to the item back."""
+        path = f"/spaces/{space_id}/feed/items/{item_id}/reactions/{quote(key, safe='')}"
+        await self._write(user, "DELETE", path, missing=feed_item_not_found(space_id, item_id))

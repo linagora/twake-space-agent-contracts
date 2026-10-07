@@ -265,6 +265,8 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "search_organization_people": ["space.people.read.v1"],
         "list_feed_items": ["space.feed.read.v1"],
         "read_feed_item": ["space.feed.read.v1"],
+        "add_feed_reaction": ["space.reaction.add.v1"],
+        "remove_feed_reaction": ["space.reaction.remove.v1"],
     }
 
 
@@ -369,6 +371,10 @@ WRITES_NAMED = {
         "create_contact": ("create", "créer"),
         "update_contact": ("change", "modifier"),
         "delete_contact": ("delete", "supprimer"),
+    },
+    "space": {
+        "add_feed_reaction": ("react", "réagir"),
+        "remove_feed_reaction": ("take your reactions back", "retirer tes réactions"),
     },
 }
 
@@ -496,6 +502,8 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "create_contact": ("post", True),
         "update_contact": ("patch", True),
         "delete_contact": ("delete", True),
+        "add_feed_reaction": ("post", True),
+        "remove_feed_reaction": ("post", True),
     }
 
 
@@ -624,6 +632,47 @@ async def test_the_bodies_of_the_contacts_writes_are_whole_and_closed(
         for name in ("emails", "phones", "addresses")
     ]
     assert [item["additionalProperties"] for item in items] == [False, False, False]
+
+
+async def test_reacting_and_taking_a_reaction_back_are_low_risk_writes(
+    client: AsyncClient,
+) -> None:
+    # The user's own reaction, which they take back at will: once the owner allowed writing in
+    # Space, each runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, _, operation in operations_of(document)
+        if operation["operationId"] in ("add_feed_reaction", "remove_feed_reaction")
+    }
+
+    assert risks == {"add_feed_reaction": "low", "remove_feed_reaction": "low"}
+
+
+@pytest.mark.parametrize("operation_id", ["add_feed_reaction", "remove_feed_reaction"])
+async def test_a_reaction_is_one_of_those_twake_space_offers(
+    client: AsyncClient, operation_id: str
+) -> None:
+    # The model reacts with what the Space web app offers, never with words members would read
+    document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
+
+    schema = operations[operation_id]["requestBody"]["content"]["application/json"]["schema"]
+
+    assert "$ref" not in json.dumps(schema)
+    assert schema["required"] == ["key"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["key"]["enum"] == [
+        "\N{THUMBS UP SIGN}",
+        "\N{HEAVY BLACK HEART}\N{VARIATION SELECTOR-16}",
+        "\N{FACE WITH TEARS OF JOY}",
+        "\N{PARTY POPPER}",
+        "\N{EYES}",
+        "\N{PERSON WITH FOLDED HANDS}",
+    ]
 
 
 async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:

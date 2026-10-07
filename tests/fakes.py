@@ -2505,6 +2505,11 @@ class FakeSpace:
         self.cards: dict[str, SpaceCard] = {}
         self.posts: dict[str, SpacePost] = {}
         self.reactions: list[SpaceReaction] = []
+        self.writes: list[tuple[str, str, Any]] = []
+        """The writes received, in order: method, path and JSON body, refused ones included."""
+        self.failing: dict[str, tuple[int, str]] = {}
+        """By method, the status and the error Space answers a write with, as when it fails, or
+        when what the write acts on changed between two calls."""
 
     def card(
         self,
@@ -2605,6 +2610,10 @@ class FakeSpace:
         self.requests.append((request.method, request.url.path))
         caller = (space_id(subject), organization)
         path = request.url.path
+        if request.method != "GET":
+            self.writes.append((request.method, path, json.loads(request.content or b"null")))
+            if request.method in self.failing:
+                return _space_refusal(*self.failing[request.method])
         if request.method == "GET" and path == "/organization/members":
             return self._directory(request, organization)
         if request.method == "GET" and path == "/spaces":
@@ -2627,7 +2636,31 @@ class FakeSpace:
                 if shown is None
                 else httpx.Response(200, json=shown)
             )
+        reaction = re.fullmatch(r"/feed/items/([^/]+)/reactions/([^/]+)", rest)
+        if request.method in ("PUT", "DELETE") and reaction:
+            return self._react(room, caller[0], request.method, reaction[1], reaction[2])
         return _space_refusal(404, "not_found")
+
+    def _react(
+        self, room: SpaceRoom, user_id: str, method: str, item_id: str, key: str
+    ) -> httpx.Response:
+        """Adds the person's reaction to an item of the feed, once, or takes it back: any member
+        reacts, viewers included."""
+        if not _is_uuid(item_id) or not 1 <= len(key) <= 16:
+            return _space_refusal(400, "invalid_request")
+        mine = [
+            reaction
+            for reaction in self.reactions
+            if (reaction.item, reaction.user_id, reaction.key) == (item_id, user_id, key)
+        ]
+        if method == "DELETE":
+            self.reactions = [reaction for reaction in self.reactions if reaction not in mine]
+            return httpx.Response(204)
+        if self._item(room, item_id) is None:
+            return _space_refusal(404, "not_found")
+        if not mine:
+            self.reactions.append(SpaceReaction(item_id, user_id, key, len(self.reactions)))
+        return httpx.Response(204)
 
     def _reached(self, room_id: str, user_id: str, organization: str) -> SpaceRoom | None:
         """The space of that id, if the person is a member of it, in their organization."""
@@ -2808,6 +2841,10 @@ def _feed_cursor(cursor: str) -> tuple[str, str] | Literal[False]:
     except (ValueError, UnicodeDecodeError):
         return False
     return (time, item_id)
+
+
+def _is_uuid(value: str) -> bool:
+    return re.fullmatch(r"[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}", value) is not None
 
 
 def _space_refusal(status: int, error: str) -> httpx.Response:

@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.problems import Problem
 from twake_space_agent_contracts.space import (
     EXAMPLE_ITEM,
     EXAMPLE_SPACE,
@@ -19,7 +18,12 @@ from twake_space_agent_contracts.space import (
     line,
     paragraphs,
 )
-from twake_space_agent_contracts.space.backend import Actor, FeedItem, TwakeSpace
+from twake_space_agent_contracts.space.backend import (
+    Actor,
+    FeedItem,
+    TwakeSpace,
+    feed_item_not_found,
+)
 
 LONGEST_NAME = 255
 LONGEST_TITLE = 500
@@ -124,15 +128,6 @@ class SpaceFeed(BaseModel):
     items: list[SpaceFeedItem]
     next: str | None = Field(
         description="The cursor of the older items, to pass as before; null after the last."
-    )
-
-
-def feed_item_not_found(space_id: str, item_id: str) -> Problem:
-    return Problem(
-        status=404,
-        code="feed_item_not_found",
-        title="Feed item not found",
-        detail=f"The feed of space {space_id} has no item {item_id}.",
     )
 
 
