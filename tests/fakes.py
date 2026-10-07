@@ -1000,6 +1000,8 @@ class DriveDoc:
     """The status of the antivirus scan, once the stack scanned the file."""
     sharing: str | None = None
     """The sharing whose root this is, on either side, which the stack references from it."""
+    size: int | None = None
+    """The size the stack keeps, the content's own unless a test says otherwise."""
 
 
 @dataclass
@@ -1167,7 +1169,7 @@ class FakeDrive:
         stored |= {
             "mime": doc.mime,
             "class": CLASSES.get(doc.mime, doc.mime.partition("/")[0]),
-            "size": str(len(doc.content)),
+            "size": str(len(doc.content) if doc.size is None else doc.size),
             "md5sum": "ODZmYjI2OWQxOTBkMmM4NQo=",
             "trashed": doc.trashed,
             "encrypted": doc.encrypted,

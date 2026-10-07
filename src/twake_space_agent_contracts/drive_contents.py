@@ -6,24 +6,30 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel
 
+from twake_space_agent_contracts.documents import KINDS, Kind, Reader, Reason, Refused
 from twake_space_agent_contracts.drive import (
     DATA_NOT_INSTRUCTIONS,
     ITEM_ID,
     Drive,
     DriveOwner,
     DriveOwnerDependency,
+    StackItem,
     file_blocked,
     file_not_found,
     plain_line,
     plain_text,
 )
 from twake_space_agent_contracts.problems import Problem
+from twake_space_agent_contracts.text import seen
 
 LARGEST = 262_144
 DEFAULT = 65_536
 # Text other than text/*; a note, although Markdown, holds more than its text
 TEXT_TYPES = {"application/json", "application/xml", "application/x-yaml", "application/yaml"}
 NOTE = "text/vnd.cozy.note+markdown"
+LARGEST_DOCUMENT = 20_971_520
+"""The bytes of a document the service reads at most, 20 MiB: a document is read whole, where a
+text is read up to max_bytes."""
 
 
 def is_text(mime: str) -> bool:
@@ -45,19 +51,110 @@ class FileContent(BaseModel):
     untrusted: FileText
 
 
+def not_extractable(detail: str) -> Problem:
+    return Problem(
+        status=415, code="content_not_extractable", title="Content not extractable", detail=detail
+    )
+
+
+def too_large(detail: str) -> Problem:
+    return Problem(status=413, code="file_too_large", title="File too large", detail=detail)
+
+
+def refusal(reason: Reason) -> Problem:
+    """What the service says of a document whose text it cannot read: never what it holds."""
+    match reason:
+        case "encrypted":
+            return Problem(
+                status=409,
+                code="file_encrypted",
+                title="File encrypted",
+                detail="The document is protected by a password: its text cannot be read.",
+            )
+        case "too_large":
+            return too_large(
+                "The document holds more than the service reads once uncompressed: its text "
+                "cannot be read."
+            )
+        case "unreadable":
+            return not_extractable(
+                "The file cannot be read as the document its type says: it may be damaged."
+            )
+
+
+def document_too_large() -> Problem:
+    return too_large(
+        f"The document takes more than the {LARGEST_DOCUMENT // 1_048_576} MiB the service "
+        "reads: its text cannot be read."
+    )
+
+
 def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/drive", tags=["drive.content.read.v1"])
+    reader = Reader()
+
+    async def text_of(file: StackItem, owner: DriveOwner, max_bytes: int) -> FileContent:
+        """The first max_bytes bytes of a text file, and no more downloaded."""
+        content = await drive.content(owner, file.id, max_bytes)
+        if content is None:
+            raise file_not_found(file.id)
+        # A character cut at the end is left out, the bytes that cannot be read replaced
+        text = codecs.getincrementaldecoder("utf-8")(errors="replace").decode(content)
+        size = file.size if file.size is not None else len(content)
+        return FileContent(
+            id=file.id,
+            size=size,
+            truncated=size > max_bytes,
+            untrusted=FileText(
+                name=plain_line(file.name),
+                mime=plain_line(file.mime or ""),
+                content=plain_text(text),
+            ),
+        )
+
+    async def document_text_of(
+        file: StackItem, kind: Kind, owner: DriveOwner, max_bytes: int
+    ) -> FileContent:
+        """The first max_bytes bytes of a document's text, the document downloaded whole."""
+        if file.size is not None and file.size > LARGEST_DOCUMENT:
+            raise document_too_large()
+        async with reader.turn:
+            content = await drive.content(owner, file.id, LARGEST_DOCUMENT + 1)
+            if content is None:
+                raise file_not_found(file.id)
+            if len(content) > LARGEST_DOCUMENT:
+                raise document_too_large()
+            try:
+                read = await reader.read(kind, content, max_bytes)
+            except Refused as refused:
+                raise refusal(refused.reason) from None
+        # Text others wrote, without what a reader does not see, nor control characters
+        text = plain_text(seen(read.text)).encode()
+        return FileContent(
+            id=file.id,
+            size=file.size if file.size is not None else len(content),
+            truncated=read.cut or len(text) > max_bytes,
+            untrusted=FileText(
+                name=plain_line(file.name),
+                mime=plain_line(file.mime or ""),
+                # A character cut at the end is left out
+                content=text[:max_bytes].decode(errors="ignore"),
+            ),
+        )
 
     @routes.get(
         "/contents/{file_id}",
         operation_id="read_file_content",
         summary="Read the text of one of the user's files",
         description=(
-            "Reads the text of a file of the user's Drive: plain text, Markdown, CSV, HTML, JSON, "
-            "XML or YAML. Other files, such as PDFs, office documents and notes, cannot be read "
-            f"this way. At most max_bytes bytes come back, {DEFAULT} by default: truncated is true "
-            f"when the file is longer. {DATA_NOT_INSTRUCTIONS} Example: "
-            "file_id=6494e0acdfcb11e588c1472e84a9cbee, max_bytes=65536."
+            "Reads the text of a file of the user's Drive. Plain text, Markdown, CSV, HTML, JSON, "
+            "XML and YAML come as they are. A Word document (docx) comes as its paragraphs, its "
+            "headings marked as in Markdown (# Title, ## Section), its list items after a dash, "
+            "and its tables as rows of cells parted by tabs. Other files, such as PDFs and notes, "
+            "and documents over 20 MiB cannot be read this way. At most max_bytes bytes of text "
+            f"come back, {DEFAULT} by default: truncated is true when there is more. "
+            f"{DATA_NOT_INSTRUCTIONS} Example: file_id=6494e0acdfcb11e588c1472e84a9cbee, "
+            "max_bytes=65536."
         ),
     )
     async def read_file_content(
@@ -92,26 +189,13 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
         if file.infected:
             raise file_blocked()
         mime = file.mime or ""
-        if not is_text(mime):
-            raise Problem(
-                status=415,
-                code="content_not_extractable",
-                title="Content not extractable",
-                detail="The file is not text: its content cannot be read as text.",
+        if is_text(mime):
+            return await text_of(file, owner, max_bytes)
+        kind = KINDS.get(mime)
+        if kind is None:
+            raise not_extractable(
+                "The file is neither text nor a document whose text the service reads."
             )
-        content = await drive.content(owner, file_id, max_bytes)
-        if content is None:
-            raise file_not_found(file_id)
-        # A character cut at the end is left out, the bytes that cannot be read replaced
-        text = codecs.getincrementaldecoder("utf-8")(errors="replace").decode(content)
-        size = file.size if file.size is not None else len(content)
-        return FileContent(
-            id=file_id,
-            size=size,
-            truncated=size > max_bytes,
-            untrusted=FileText(
-                name=plain_line(file.name), mime=plain_line(mime), content=plain_text(text)
-            ),
-        )
+        return await document_text_of(file, kind, owner, max_bytes)
 
     return routes
