@@ -4,7 +4,15 @@ one of their spaces, with one of the reactions Twake Space offers, and takes a r
 from httpx import AsyncClient, Response
 
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
-from tests.fakes import FakeBoundary, SpaceCard, SpacePost, SpaceRoom, space_person, space_uuid
+from tests.fakes import (
+    FakeBoundary,
+    SpaceCard,
+    SpacePerson,
+    SpacePost,
+    SpaceRoom,
+    space_person,
+    space_uuid,
+)
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
@@ -199,9 +207,10 @@ async def test_the_user_takes_their_reaction_back(
     ]
 
 
-async def test_a_reaction_the_user_did_not_make_is_not_taken_back(
+async def test_a_reaction_the_user_did_not_make_stays_as_space_answers(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
+    # Space is asked all the same, and takes nothing back: only the user's own
     post = roadmap(boundary, design(boundary))
     boundary.space.react(post, ALICE, THUMBS_UP)
 
@@ -211,7 +220,7 @@ async def test_a_reaction_the_user_did_not_make_is_not_taken_back(
     assert response.json()["reactions"] == [
         {"count": 1, "mine": False, "untrusted": {"key": THUMBS_UP}}
     ]
-    assert boundary.space.writes == []
+    assert [method for method, _, _ in boundary.space.writes] == ["DELETE"]
 
 
 async def test_the_preview_tells_which_reaction_is_taken_back(
@@ -292,3 +301,40 @@ async def test_the_user_takes_back_any_reaction_of_theirs(
     assert boundary.space.writes == [
         ("DELETE", f"/spaces/{post.space}/feed/items/{post.id}/reactions/{ROCKET}", None)
     ]
+
+
+async def test_a_reaction_is_taken_back_though_no_member_has_the_users_email(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The user's address changed in the directory: the contract cannot tell their reactions, but
+    # Space, which knows the user by their uuid, takes theirs back
+    moved = SpacePerson(MMAUDET.user_id, "mmaudet", "michel@twake.test")
+    room = boundary.space.space("Design", {moved: "viewer", ALICE: "admin"})
+    post = roadmap(boundary, room)
+    boundary.space.react(post, moved, THUMBS_UP)
+
+    response = await react(client, post, THUMBS_UP, remove=True)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["reactions"] == []
+    assert [method for method, _, _ in boundary.space.writes] == ["DELETE"]
+
+
+async def test_the_preview_does_not_tell_whether_a_user_it_cannot_match_reacted(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    moved = SpacePerson(MMAUDET.user_id, "mmaudet", "michel@twake.test")
+    room = boundary.space.space("Design", {moved: "viewer", ALICE: "admin"})
+    post = roadmap(boundary, room)
+
+    english = await react(client, post, THUMBS_UP, asking_preview("en"), remove=True)
+    french = await react(client, post, THUMBS_UP, asking_preview("fr"), remove=True)
+
+    assert preview_of(english)[0] == (
+        f"Take back your {THUMBS_UP} on the post of “Alice Martin” in the space “Design”, if you"
+        " made it."
+    )
+    assert preview_of(french)[0] == (
+        f"Retirer ton {THUMBS_UP} sur le message de « Alice Martin » dans l'espace « Design », si"
+        " tu l'as mis."
+    )

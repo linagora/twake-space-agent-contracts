@@ -93,12 +93,14 @@ async def _react(
         told = reacting if adding else unreacting
         return preview.answer(told(item, me, detail.name, key, preview.language), digest)
     preview.check(digest)
-    # Space keeps a reaction once, and takes back the user's own only: nothing else to write
-    if reacted == adding:
-        return feed_item(item, me)
     if adding:
+        # Space keeps a reaction once: one the user made already changes nothing
+        if reacted:
+            return feed_item(item, me)
         await space.react(user, space_id, item_id, key)
     else:
+        # Space takes back the user's own reaction alone, which it knows when the contract may
+        # not, as when no member has the user's email: it is always asked
         await space.unreact(user, space_id, item_id, key)
     now = await space.item(user, space_id, item_id)
     if now is None:
@@ -147,8 +149,9 @@ def _remove(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         summary="Take a reaction back from an item of the feed of a space in Twake Space",
         description=(
             "Takes back a reaction of the user you act for to a card or a post of the feed of a "
-            "space they are a member of, by the item_id list_feed_items gives: only their own, "
-            "which mine tells. It answers the item, with its reactions. "
+            "space they are a member of, by the item_id list_feed_items gives, and its key, as "
+            "reactions gives it where mine is true: Space takes back the user's own alone, and a "
+            "reaction they did not make stays. It answers the item, with its reactions. "
             f"{UNTRUSTED} Example, to take a thumbs up back: {EXAMPLE_ITEM}, "
             'body={"key": "\N{THUMBS UP SIGN}"}.'
         ),

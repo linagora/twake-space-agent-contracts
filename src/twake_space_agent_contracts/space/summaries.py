@@ -47,6 +47,7 @@ class _Words:
     react: str
     reacted: str
     unreact: str
+    unreact_if_made: str
     not_reacted: str
     items: dict[str, dict[Form, str]]
     """How an item is named in each form: the user's post, someone's post, a post of no one the
@@ -76,6 +77,7 @@ _WORDS: dict[Language, _Words] = {
         react="Réagir avec {key} {item} dans {space}, que ses membres voient",
         reacted="Tu as déjà réagi avec {key} {item} dans {space} : rien ne change.",
         unreact="Retirer ton {key} {item} dans {space}.",
+        unreact_if_made="Retirer ton {key} {item} dans {space}, si tu l'as mis.",
         not_reacted="Tu n'as pas réagi avec {key} {item} dans {space} : rien ne change.",
         items={
             "own": {"to": "à ton message", "on": "sur ton message", "the": "ton message"},
@@ -114,6 +116,7 @@ _WORDS: dict[Language, _Words] = {
         react="React with {key} {item} in {space}, which its members see",
         reacted="You reacted with {key} {item} in {space} already: nothing changes.",
         unreact="Take back your {key} {item} in {space}.",
+        unreact_if_made="Take back your {key} {item} in {space}, if you made it.",
         not_reacted="You have not reacted with {key} {item} in {space}: nothing changes.",
         items={
             "own": {"to": "to your post", "on": "on your post", "the": "your post"},
@@ -180,9 +183,12 @@ def unreacting(
     item: FeedItem, me: str | None, space: str | None, key: str, language: Language
 ) -> str:
     """What taking a reaction back does, as the owner reads it: which reaction leaves which item,
-    or that the user did not react so."""
+    or that the user did not react so, when the contract can tell the user among the members."""
     words = _WORDS[language]
     space_name = space_named(space, language)
+    if me is None:
+        named = item_named(item, me, "on", language)
+        return words.unreact_if_made.format(key=key, item=named, space=space_name)
     if not item.reacted(me, key):
         named = item_named(item, me, "to", language)
         return words.not_reacted.format(key=key, item=named, space=space_name)
