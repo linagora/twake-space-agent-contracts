@@ -538,8 +538,8 @@ class Tasks:
         await self._write(user, "PUT", board_id, task_id, {"userIds": user_ids}, "/assignees")
 
     async def trash_task(self, user: User, board_id: str, task_id: str) -> None:
-        """Moves the task to the board's trash, with the subtasks the board shows, where a member
-        can restore it for 30 days, before Tasks deletes it for good."""
+        """Moves the task to the board's trash, with the subtasks the board shows, where an editor
+        or an admin of the board can restore it for 30 days, before Tasks deletes it for good."""
         await self._write(user, "DELETE", board_id, task_id, None)
 
     async def move_task(self, user: User, board_id: str, task_id: str, section_id: str) -> None:

@@ -92,15 +92,15 @@ async def test_a_task_off_the_board_answers_like_an_unknown_one(
         (
             "fr",
             "Supprimer la tâche WEB-1 « Fix the login page » du tableau « Website » : elle passe"
-            " dans la corbeille du tableau, d'où un membre peut la restaurer pendant 30 jours,"
-            " avant que Tasks la supprime définitivement\n"
+            " dans la corbeille du tableau, d'où un éditeur ou un administrateur du tableau peut la"
+            " restaurer pendant 30 jours, avant que Tasks la supprime définitivement\n"
             "Ses 2 sous-tâches partent avec elle.",
         ),
         (
             "en",
             "Delete the task WEB-1 “Fix the login page” from the board “Website”: it goes to the"
-            " board's trash, where a member can restore it for 30 days, before Tasks deletes it"
-            " for good\n"
+            " board's trash, where an editor or an admin of the board can restore it for 30 days,"
+            " before Tasks deletes it for good\n"
             "Its 2 subtasks go with it.",
         ),
     ],

@@ -383,8 +383,8 @@ _WORDS: dict[Language, _Words] = {
         at="{day} à {time}",
         recurrence_cleared="Sa récurrence est effacée aussi.",
         delete="Supprimer la tâche {key} {title} du tableau {board} : elle passe dans la corbeille"
-        " du tableau, d'où un membre peut la restaurer pendant 30 jours, avant que Tasks la"
-        " supprime définitivement",
+        " du tableau, d'où un éditeur ou un administrateur du tableau peut la restaurer pendant 30"
+        " jours, avant que Tasks la supprime définitivement",
         deleted_subtask="Sa sous-tâche part avec elle.",
         deleted_subtasks="Ses {count} sous-tâches partent avec elle.",
         assign="Assigner la tâche {key} {title} du tableau {board} :",
@@ -421,7 +421,8 @@ _WORDS: dict[Language, _Words] = {
         at="{day} at {time}",
         recurrence_cleared="Its recurrence is cleared too.",
         delete="Delete the task {key} {title} from the board {board}: it goes to the board's"
-        " trash, where a member can restore it for 30 days, before Tasks deletes it for good",
+        " trash, where an editor or an admin of the board can restore it for 30 days, before Tasks"
+        " deletes it for good",
         deleted_subtask="Its subtask goes with it.",
         deleted_subtasks="Its {count} subtasks go with it.",
         assign="Assign the task {key} {title} on the board {board}:",
@@ -883,8 +884,9 @@ def _delete(tasks: Tasks, caller: CallerDependency) -> APIRouter:
         summary="Delete a task in Twake Tasks as the user",
         description=(
             "Deletes, as the user you act for, a task of a board they can edit, with its "
-            "subtasks: they go to the board's trash, where a member can restore them in Tasks "
-            "for 30 days, before Tasks deletes them for good. Call it only once the user asked "
+            "subtasks: they go to the board's trash, where an editor or an admin of the board "
+            "can restore them in Tasks for 30 days, before Tasks deletes them for good. Call it "
+            "only once the user asked "
             "to delete this very task; they confirm each call. It answers the task as it was, "
             "and how many of its subtasks went with it. An archived task, or one in the trash, "
             f"is not found. {DATA_NOT_INSTRUCTIONS} Example: {EXAMPLE_IDS}."
