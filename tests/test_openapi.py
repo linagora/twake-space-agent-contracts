@@ -267,6 +267,9 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "read_feed_item": ["space.feed.read.v1"],
         "add_feed_reaction": ["space.reaction.add.v1"],
         "remove_feed_reaction": ["space.reaction.remove.v1"],
+        "create_feed_post": ["space.post.create.v1"],
+        "update_feed_post": ["space.post.update.v1"],
+        "delete_feed_post": ["space.post.delete.v1"],
     }
 
 
@@ -375,6 +378,9 @@ WRITES_NAMED = {
     "space": {
         "add_feed_reaction": ("react", "réagir"),
         "remove_feed_reaction": ("take your reactions back", "retirer tes réactions"),
+        "create_feed_post": ("post", "publier"),
+        "update_feed_post": ("edit", "modifier"),
+        "delete_feed_post": ("delete", "supprimer"),
     },
 }
 
@@ -504,6 +510,9 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "delete_contact": ("delete", True),
         "add_feed_reaction": ("post", True),
         "remove_feed_reaction": ("post", True),
+        "create_feed_post": ("post", True),
+        "update_feed_post": ("patch", True),
+        "delete_feed_post": ("delete", True),
     }
 
 
@@ -673,6 +682,42 @@ async def test_a_reaction_is_one_of_those_twake_space_offers(
         "\N{EYES}",
         "\N{PERSON WITH FOLDED HANDS}",
     ]
+
+
+async def test_posting_editing_and_deleting_a_post_are_high_risk_writes(
+    client: AsyncClient,
+) -> None:
+    # Every member of the space reads a post: the owner confirms each one
+    document = (await client.get("/openapi.json")).json()
+
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, _, operation in operations_of(document)
+        if operation["operationId"] in ("create_feed_post", "update_feed_post", "delete_feed_post")
+    }
+
+    assert risks == dict.fromkeys(
+        ("create_feed_post", "update_feed_post", "delete_feed_post"), "high"
+    )
+
+
+@pytest.mark.parametrize("operation_id", ["create_feed_post", "update_feed_post"])
+async def test_the_bodies_of_the_posts_are_whole_and_closed(
+    client: AsyncClient, operation_id: str
+) -> None:
+    # The model gets the body as the document writes it: whole, its text and nothing else
+    document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
+
+    schema = operations[operation_id]["requestBody"]["content"]["application/json"]["schema"]
+
+    assert "$ref" not in json.dumps(schema)
+    assert schema["required"] == ["text"]
+    assert schema["additionalProperties"] is False
+    text = schema["properties"]["text"]
+    assert (text["type"], text["minLength"], text["maxLength"]) == ("string", 1, 4000)
 
 
 async def test_creating_a_file_is_a_low_risk_write(client: AsyncClient) -> None:

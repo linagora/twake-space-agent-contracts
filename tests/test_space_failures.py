@@ -12,6 +12,7 @@ from tests.fakes import FakeBoundary, SpacePost, space_id, space_person
 MMAUDET = space_person("mmaudet")
 SPACE = f"/contracts/v1/space/spaces/{space_id('Design')}"
 ITEM = f"{SPACE}/feed/items/{space_id('Hello')}"
+POST = f"{SPACE}/feed/posts/{space_id('Hello')}"
 THUMBS_UP = {"key": "\N{THUMBS UP SIGN}"}
 # Each operation's method, path, query and body
 OPERATIONS = [
@@ -24,6 +25,9 @@ OPERATIONS = [
     pytest.param("GET", ITEM, {}, None, id="read_feed_item"),
     pytest.param("POST", f"{ITEM}/reactions", {}, THUMBS_UP, id="add_feed_reaction"),
     pytest.param("POST", f"{ITEM}/reactions/remove", {}, THUMBS_UP, id="remove_feed_reaction"),
+    pytest.param("POST", f"{SPACE}/feed/posts", {}, {"text": "Hi"}, id="create_feed_post"),
+    pytest.param("PATCH", POST, {}, {"text": "Hi"}, id="update_feed_post"),
+    pytest.param("DELETE", POST, {}, None, id="delete_feed_post"),
 ]
 PARAMETERS = ("method", "path", "params", "body")
 
@@ -139,16 +143,29 @@ async def test_space_is_called_only_with_the_user_token(
 
 
 @pytest.mark.parametrize(
-    ("method", "path", "body", "reacted"),
+    ("written", "method", "path", "body", "reacted"),
     [
-        pytest.param("PUT", "/reactions", THUMBS_UP, False, id="add_feed_reaction"),
+        pytest.param("PUT", "POST", f"{ITEM}/reactions", THUMBS_UP, False, id="add_feed_reaction"),
         # With the reaction to take back
-        pytest.param("DELETE", "/reactions/remove", THUMBS_UP, True, id="remove_feed_reaction"),
+        pytest.param(
+            "DELETE",
+            "POST",
+            f"{ITEM}/reactions/remove",
+            THUMBS_UP,
+            True,
+            id="remove_feed_reaction",
+        ),
+        pytest.param(
+            "POST", "POST", f"{SPACE}/feed/posts", {"text": "Hi"}, False, id="create_feed_post"
+        ),
+        pytest.param("PATCH", "PATCH", POST, {"text": "Hi"}, False, id="update_feed_post"),
+        pytest.param("DELETE", "DELETE", POST, None, False, id="delete_feed_post"),
     ],
 )
 async def test_a_write_space_fails_is_a_bad_gateway(
     client: AsyncClient,
     boundary: FakeBoundary,
+    written: str,
     method: str,
     path: str,
     body: Any,
@@ -157,12 +174,12 @@ async def test_a_write_space_fails_is_a_bad_gateway(
     post = hello(boundary)
     if reacted:
         boundary.space.react(post, MMAUDET, THUMBS_UP["key"])
-    boundary.space.failing = {method: (500, "internal")}
+    boundary.space.failing = {written: (500, "internal")}
 
-    response = await client.post(f"{ITEM}{path}", json=body, headers=AS_MMAUDET)
+    response = await client.request(method, path, json=body, headers=AS_MMAUDET)
 
     assert response.status_code == 502
     assert response.json()["code"] == "space_unavailable"
-    written, at, _ = boundary.space.writes[0]
-    assert response.json()["detail"].startswith(f"Space answered 500 to {method} /spaces/")
-    assert (written, post.id in at) == (method, True)
+    sent, at, _ = boundary.space.writes[0]
+    assert response.json()["detail"].startswith(f"Space answered 500 to {written} /spaces/")
+    assert (sent, at.startswith(f"/spaces/{post.space}/feed/")) == (written, True)

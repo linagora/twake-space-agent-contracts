@@ -2510,6 +2510,8 @@ class FakeSpace:
         self.failing: dict[str, tuple[int, str]] = {}
         """By method, the status and the error Space answers a write with, as when it fails, or
         when what the write acts on changed between two calls."""
+        self.now = "2026-10-07T10:00:00.000Z"
+        """When Space writes a post, or its edit."""
 
     def card(
         self,
@@ -2639,7 +2641,45 @@ class FakeSpace:
         reaction = re.fullmatch(r"/feed/items/([^/]+)/reactions/([^/]+)", rest)
         if request.method in ("PUT", "DELETE") and reaction:
             return self._react(room, caller[0], request.method, reaction[1], reaction[2])
+        body = json.loads(request.content or b"null")
+        if request.method == "POST" and rest == "/feed/posts":
+            return self._post(room, caller[0], body)
+        written = re.fullmatch(r"/feed/posts/([^/]+)", rest)
+        if request.method in ("PATCH", "DELETE") and written:
+            return self._rewrite(room, caller[0], request.method, written[1], body)
         return _space_refusal(404, "not_found")
+
+    def _post(self, room: SpaceRoom, user_id: str, body: Any) -> httpx.Response:
+        """A new post of the person, an editor or an admin of the space."""
+        if room.members[user_id][1] == "viewer":
+            return _space_refusal(403, "cannot_post")
+        text = _post_body(body)
+        if text is None:
+            return _space_refusal(400, "invalid_request")
+        post = SpacePost(
+            space_id(f"post {room.id} {len(self.posts)}"), room.id, user_id, text, self.now
+        )
+        self.posts[post.id] = post
+        return httpx.Response(201, json=self._item(room, post.id))
+
+    def _rewrite(
+        self, room: SpaceRoom, user_id: str, method: str, post_id: str, body: Any
+    ) -> httpx.Response:
+        """Edits or deletes a post of the space, by its author alone."""
+        post = self.posts.get(post_id)
+        if post is None or post.space != room.id:
+            return _space_refusal(404, "not_found")
+        if post.author != user_id:
+            return _space_refusal(403, "not_author")
+        if method == "DELETE":
+            del self.posts[post_id]
+            self.reactions = [reaction for reaction in self.reactions if reaction.item != post_id]
+            return httpx.Response(204)
+        text = _post_body(body)
+        if text is None:
+            return _space_refusal(400, "invalid_request")
+        post.body, post.edited_at = text, self.now
+        return httpx.Response(200, json=self._item(room, post_id))
 
     def _react(
         self, room: SpaceRoom, user_id: str, method: str, item_id: str, key: str
@@ -2841,6 +2881,15 @@ def _feed_cursor(cursor: str) -> tuple[str, str] | Literal[False]:
     except (ValueError, UnicodeDecodeError):
         return False
     return (time, item_id)
+
+
+def _post_body(body: Any) -> str | None:
+    """The text of a post as Space takes it: 1 to 4000 characters once trimmed, in a body that
+    holds nothing else; None for any other."""
+    if not isinstance(body, dict) or set(body) != {"body"} or not isinstance(body["body"], str):
+        return None
+    text = body["body"].strip()
+    return text if 1 <= len(text) <= 4000 else None
 
 
 def _is_uuid(value: str) -> bool:

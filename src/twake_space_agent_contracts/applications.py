@@ -28,7 +28,7 @@ from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
-from twake_space_agent_contracts.space import feed, people, reactions, spaces
+from twake_space_agent_contracts.space import feed, people, posts, reactions, spaces
 from twake_space_agent_contracts.space.backend import TwakeSpace
 from twake_space_agent_contracts.tasks import Tasks
 
@@ -174,6 +174,7 @@ def _space(context: Context) -> list[APIRouter]:
         people.router(space, context.caller),
         feed.router(space, context.caller),
         *reactions.routers(space, context.caller),
+        *posts.routers(space, context.caller),
     ]
 
 
@@ -270,10 +271,10 @@ APPLICATIONS = (
             " ton organisation",
         ),
         write=Words(
-            en="react to what the feeds of your spaces show, which their members see, and take"
-            " your reactions back",
-            fr="réagir à ce que montre le fil de tes espaces, ce que leurs membres voient, et"
-            " retirer tes réactions",
+            en="react in the feeds of your spaces and take your reactions back, post there, edit"
+            " and delete your posts, all of which their members see",
+            fr="réagir dans le fil de tes espaces et retirer tes réactions, y publier, modifier"
+            " et supprimer tes messages, ce que leurs membres voient",
         ),
         routers=_space,
     ),

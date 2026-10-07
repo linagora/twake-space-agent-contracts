@@ -23,6 +23,13 @@ class _Words:
     """What a preview of a write in Space tells the owner, in one language."""
 
     space: str
+    post: str
+    edit: str
+    instead: str
+    unedited: str
+    delete: str
+    seen_by: tuple[str, str]
+    """Who sees what the user posts: the one member, and more members."""
     react: str
     reacted: str
     unreact: str
@@ -35,6 +42,12 @@ class _Words:
 _WORDS: dict[Language, _Words] = {
     "fr": _Words(
         space="l'espace {name}",
+        post="Publier dans le fil de {space}, {seen}",
+        edit="Modifier {item} dans le fil de {space}, {seen}, en :",
+        instead="Au lieu de :",
+        unedited="{item} dans le fil de {space} dit déjà cela : rien ne change.",
+        delete="Supprimer {item} du fil de {space}, définitivement, avec ses réactions",
+        seen_by=("que son seul membre voit", "que ses {count} membres voient"),
         react="Réagir avec {key} {item} dans {space}, que ses membres voient",
         reacted="Tu as déjà réagi avec {key} {item} dans {space} : rien ne change.",
         unreact="Retirer ton {key} {item} dans {space}.",
@@ -56,6 +69,12 @@ _WORDS: dict[Language, _Words] = {
     ),
     "en": _Words(
         space="the space {name}",
+        post="Post in the feed of {space}, {seen}",
+        edit="Change {item} in the feed of {space}, {seen}, to:",
+        instead="Instead of:",
+        unedited="{item} in the feed of {space} says so already: nothing changes.",
+        delete="Delete {item} from the feed of {space}, for good, with its reactions",
+        seen_by=("which its only member sees", "which its {count} members see"),
         react="React with {key} {item} in {space}, which its members see",
         reacted="You reacted with {key} {item} in {space} already: nothing changes.",
         unreact="Take back your {key} {item} in {space}.",
@@ -133,3 +152,46 @@ def unreacting(
         return words.not_reacted.format(key=key, item=named, space=space_name)
     named = item_named(item, me, "on", language)
     return words.unreact.format(key=key, item=named, space=space_name)
+
+
+def seen_by(count: int, language: Language) -> str:
+    """Who sees what the user writes in a space: its members."""
+    one, many = _WORDS[language].seen_by
+    return one if count == 1 else many.format(count=count)
+
+
+def posting(space: str | None, members: int, text: str, language: Language) -> str:
+    """What posting does, as the owner reads it: where the post goes, how many people see it,
+    and its text, whole when it fits."""
+    words = _WORDS[language]
+    head = words.post.format(space=space_named(space, language), seen=seen_by(members, language))
+    return _with_text(head, text, language)
+
+
+def _capitalized(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def editing(
+    item: FeedItem, me: str | None, space: str | None, members: int, text: str, language: Language
+) -> str:
+    """What editing a post does, as the owner reads it: its new text and its former one, each
+    whole when they fit, or that it says so already."""
+    words = _WORDS[language]
+    named = item_named(item, me, "the", language)
+    space_name = space_named(space, language)
+    if item.body == text:
+        return words.unedited.format(item=_capitalized(named), space=space_name)
+    head = words.edit.format(item=named, space=space_name, seen=seen_by(members, language)) + "\n"
+    middle = "\n" + words.instead + "\n"
+    room = (BUDGET - shown_size(head + middle)) // 2
+    return head + excerpt(text, room, language) + middle + excerpt(item.body or "", room, language)
+
+
+def deleting(item: FeedItem, me: str | None, space: str | None, language: Language) -> str:
+    """What deleting a post does, as the owner reads it: which post goes for good, and its
+    text, whole when it fits."""
+    words = _WORDS[language]
+    named = item_named(item, me, "the", language)
+    head = words.delete.format(item=named, space=space_named(space, language))
+    return _with_text(head, item.body, language)

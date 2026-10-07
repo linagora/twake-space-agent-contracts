@@ -33,6 +33,36 @@ def space_not_found(space_id: str) -> Problem:
     )
 
 
+def forbidden_role(space_id: str) -> Problem:
+    return Problem(
+        status=403,
+        code="forbidden_role",
+        title="Role forbids writing",
+        detail=f"The user is a viewer of space {space_id}: they read its feed and react, but do"
+        " not post.",
+    )
+
+
+def not_author(space_id: str, item_id: str) -> Problem:
+    return Problem(
+        status=403,
+        code="not_author",
+        title="Not the author",
+        detail=f"The user did not write post {item_id} of space {space_id}: only its author"
+        " edits or deletes it.",
+    )
+
+
+def not_a_post(space_id: str, item_id: str) -> Problem:
+    return Problem(
+        status=409,
+        code="not_a_post",
+        title="Not a post",
+        detail=f"Item {item_id} of the feed of space {space_id} is a card, which shows what an"
+        " app did: only posts are edited or deleted.",
+    )
+
+
 def feed_item_not_found(space_id: str, item_id: str) -> Problem:
     return Problem(
         status=404,
@@ -332,14 +362,24 @@ class TwakeSpace:
         return self._json(response, "GET", path)
 
     async def _write(
-        self, user: User, method: str, path: str, *, missing: Problem, body: Any = None
+        self,
+        user: User,
+        method: str,
+        path: str,
+        *,
+        missing: Problem,
+        refusals: dict[str, Problem] | None = None,
+        body: Any = None,
     ) -> httpx.Response:
         """Space's answer to a write it took; `missing` when what the write acts on is gone, or no
-        longer the user's, since the contract read it."""
+        longer the user's, since the contract read it, and each of the `refusals` for the error
+        Space names it with, as when the user's role changed meanwhile."""
         response = await self._call(user, method, path, body=body)
         error = _error_of(response)
         if response.status_code == 404 and error == "not_found":
             raise missing
+        if not response.is_success and error in (refusals or {}):
+            raise (refusals or {})[error]
         # Space checks what the contract cannot
         if response.status_code == 400:
             raise invalid_request(f"Space refused {method} {path}: {error}.")
@@ -471,3 +511,45 @@ class TwakeSpace:
         """Takes the user's reaction to the item back."""
         path = f"/spaces/{space_id}/feed/items/{item_id}/reactions/{quote(key, safe='')}"
         await self._write(user, "DELETE", path, missing=feed_item_not_found(space_id, item_id))
+
+    async def post(self, user: User, space_id: str, text: str) -> FeedItem:
+        """Posts the text in the feed of the space, as the user: the post as Space keeps it."""
+        path = f"/spaces/{space_id}/feed/posts"
+        response = await self._write(
+            user,
+            "POST",
+            path,
+            missing=space_not_found(space_id),
+            refusals={"cannot_post": forbidden_role(space_id)},
+            body={"body": text},
+        )
+        try:
+            return _feed_item(response.json())
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Space gave the new post in an unexpected form.") from error
+
+    async def edit(self, user: User, space_id: str, item_id: str, text: str) -> FeedItem:
+        """Changes the text of the user's post: the post as Space keeps it."""
+        path = f"/spaces/{space_id}/feed/posts/{item_id}"
+        response = await self._write(
+            user,
+            "PATCH",
+            path,
+            missing=feed_item_not_found(space_id, item_id),
+            refusals={"not_author": not_author(space_id, item_id)},
+            body={"body": text},
+        )
+        try:
+            return _feed_item(response.json())
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Space gave the post in an unexpected form.") from error
+
+    async def delete(self, user: User, space_id: str, item_id: str) -> None:
+        """Deletes the user's post, and its reactions, for good."""
+        await self._write(
+            user,
+            "DELETE",
+            f"/spaces/{space_id}/feed/posts/{item_id}",
+            missing=feed_item_not_found(space_id, item_id),
+            refusals={"not_author": not_author(space_id, item_id)},
+        )
