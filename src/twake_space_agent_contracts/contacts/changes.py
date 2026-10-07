@@ -37,6 +37,9 @@ HELD_IN = {
 }
 # What a card starts with, which the name Contacts shows follows
 HEADING = {"version", "prodid", "uid"}
+# The parts of an address the contracts write, in the order vCard gives them, after its post office
+# box and its extended address
+PARTS = ("street", "locality", "region", "postal_code", "country")
 
 # An email address: its local part, dot-separated atoms of letters, digits and the signs RFC 5322
 # allows, then a domain of two labels at least, the last one letters, or the punycode of a top
@@ -170,10 +173,7 @@ def _text(value: str | None) -> str | None:
 
 
 def _address(address: NewAddress) -> dict[str, Any]:
-    parts = {
-        name: _text(getattr(address, name))
-        for name in ("street", "locality", "region", "postal_code", "country")
-    }
+    parts = {name: _text(getattr(address, name)) or "" for name in PARTS}
     if not any(parts.values()):
         raise invalid_request(
             "addresses: An address has a street, a locality, a region, a postal code or a country."
@@ -262,21 +262,10 @@ def properties(fields: dict[str, Any]) -> dict[str, list[list[Any]]]:
                     ["tel", _typed(phone["type"]), "text", phone["number"]] for phone in value
                 ]
             case "addresses":
+                # Its post office box and extended address, which the contracts leave empty, then
+                # the parts they write
                 held[name] = [
-                    [
-                        "adr",
-                        _typed(address["type"]),
-                        "text",
-                        [
-                            "",
-                            "",
-                            *(
-                                address[part] or ""
-                                for part in ("street", "locality", "region", "postal_code")
-                            ),
-                            address["country"] or "",
-                        ],
-                    ]
+                    ["adr", _typed(address["type"]), "text", ["", "", *map(address.get, PARTS)]]
                     for address in value
                 ]
             case "birthday":
