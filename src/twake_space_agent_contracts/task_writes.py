@@ -60,6 +60,8 @@ EXAMPLE_IDS = (
 )
 MOST_ASSIGNEES = 50
 """The most people Tasks assigns a task to."""
+SHOWN_SUBTASKS = 10
+"""How many of the subtasks that go with a deleted task its preview names, at most."""
 MOST_PEOPLE = 10
 """How many members a preview names in a list, at most."""
 PEOPLE_SIZE = BUDGET // 6
@@ -347,8 +349,10 @@ class _Words:
     at: str
     recurrence_cleared: str
     delete: str
-    deleted_subtask: str
-    deleted_subtasks: str
+    deleted_subtasks: tuple[str, str]
+    """For one subtask, and for several."""
+    other_subtasks: tuple[str, str]
+    """How many of the subtasks the summary does not name: for one, and for several."""
     assign: str
     assigned: str
     unassigned: str
@@ -385,8 +389,11 @@ _WORDS: dict[Language, _Words] = {
         delete="Supprimer la tâche {key} {title} du tableau {board} : elle passe dans la corbeille"
         " du tableau, d'où un éditeur ou un administrateur du tableau peut la restaurer pendant 30"
         " jours, avant que Tasks la supprime définitivement",
-        deleted_subtask="Sa sous-tâche part avec elle.",
-        deleted_subtasks="Ses {count} sous-tâches partent avec elle.",
+        deleted_subtasks=(
+            "Sa sous-tâche part avec elle :",
+            "Ses {count} sous-tâches partent avec elle :",
+        ),
+        other_subtasks=("- et 1 autre", "- et {count} autres"),
         assign="Assigner la tâche {key} {title} du tableau {board} :",
         assigned="Désormais assignée à {people}",
         unassigned="Plus assignée à {people}",
@@ -423,8 +430,8 @@ _WORDS: dict[Language, _Words] = {
         delete="Delete the task {key} {title} from the board {board}: it goes to the board's"
         " trash, where an editor or an admin of the board can restore it for 30 days, before Tasks"
         " deletes it for good",
-        deleted_subtask="Its subtask goes with it.",
-        deleted_subtasks="Its {count} subtasks go with it.",
+        deleted_subtasks=("Its subtask goes with it:", "Its {count} subtasks go with it:"),
+        other_subtasks=("- and 1 other", "- and {count} others"),
         assign="Assign the task {key} {title} on the board {board}:",
         assigned="Assigned now to {people}",
         unassigned="No longer assigned to {people}",
@@ -582,30 +589,31 @@ def _changed(
 
 
 def _subtasks(board: BoardContent, task_id: str) -> list[str]:
-    """The ids of the tasks under that one, at any depth, as the board shows them: sorted, so that
-    the same subtasks, listed in another order, make the same digest."""
+    """The ids of the tasks under that one, at any depth, as the board shows them: each followed by
+    its own, in the board's order."""
     children: dict[str, list[str]] = {}
     for key, item in board.tasks.items():
         parent = item.get("parentId") if isinstance(item, dict) else None
         if isinstance(parent, str):
             children.setdefault(parent, []).append(key)
     under: list[str] = []
-    parents = [task_id]
-    while parents:
-        for key in children.get(parents.pop(), []):
-            if key not in under and key != task_id:
-                under.append(key)
-                parents.append(key)
-    return sorted(under)
+    next_ones = list(reversed(children.get(task_id, [])))
+    while next_ones:
+        key = next_ones.pop()
+        if key not in under and key != task_id:
+            under.append(key)
+            next_ones.extend(reversed(children.get(key, [])))
+    return under
 
 
 def _open_subtasks(board: BoardContent, task_id: str) -> list[str]:
-    """The ids of the open tasks under that one, at any depth, as the board shows them, sorted."""
-    return [
+    """The ids of the open tasks under that one, at any depth, as the board shows them: sorted, so
+    that the same subtasks, listed in another order, make the same digest."""
+    return sorted(
         key
         for key in _subtasks(board, task_id)
         if not board.tasks[key].get("completedAt") and not board.tasks[key].get("canceledAt")
-    ]
+    )
 
 
 def _completing(
@@ -632,15 +640,33 @@ def _completing(
     return "\n".join(lines)
 
 
-def _deleting(board: BoardContent, task: BoardTask, subtasks: int, language: Language) -> str:
+def _deleting(
+    board: BoardContent, task: BoardTask, subtasks: list[BoardTask], language: Language
+) -> str:
     """What deleting the task does, as the owner reads it: where it goes, for how long, and the
-    subtasks that go with it."""
+    subtasks that go with it, each on a line of its own by its key and title, which members wrote,
+    ten at most and as many as fit in the summary, then how many others."""
     words = _WORDS[language]
     lines = [words.delete.format(**task_names(board, task, language))]
-    if subtasks:
-        many = words.deleted_subtasks.format(count=subtasks)
-        lines.append(words.deleted_subtask if subtasks == 1 else many)
-    return "\n".join(lines)
+    if not subtasks:
+        return lines[0]
+    one, several = words.deleted_subtasks
+    lines.append(one if len(subtasks) == 1 else several.format(count=len(subtasks)))
+
+    def others(named: int) -> list[str]:
+        """The line that counts the subtasks left unnamed."""
+        unnamed = len(subtasks) - named
+        one, several = words.other_subtasks
+        return [one if unnamed == 1 else several.format(count=unnamed)] if unnamed else []
+
+    named: list[str] = []
+    for subtask in subtasks[:SHOWN_SUBTASKS]:
+        summary = subtask.summary
+        line = f"- {one_line(summary.key)} {_named(summary.untrusted.title, language)}"
+        if shown_size("\n".join([*lines, *named, line, *others(len(named) + 1)])) > BUDGET:
+            break
+        named.append(line)
+    return "\n".join([*lines, *named, *others(len(named))])
 
 
 def _assigning(board: BoardContent, task: BoardTask, chosen: list[str], language: Language) -> str:
@@ -904,11 +930,13 @@ def _delete(tasks: Tasks, caller: CallerDependency) -> APIRouter:
     ) -> DeletedTask | JSONResponse:
         board = await _editable(tasks, user, board_id)
         task = _shown(board, task_id)
-        subtasks = _subtasks(board, task_id)
-        # What the owner allows: the task as it is, and the subtasks that go with it
-        digest = digest_of(board_id, _acted_on(task), subtasks)
+        subtasks = [_shown(board, key) for key in _subtasks(board, task_id)]
+        # What the owner allows: the task as it is, and the subtasks that go with it, by their
+        # titles, sorted, so that the same subtasks, listed in another order, make the same digest
+        titled = sorted([each.summary.task_id, each.summary.untrusted.title] for each in subtasks)
+        digest = digest_of(board_id, _acted_on(task), titled)
         if preview.asked:
-            return preview.answer(_deleting(board, task, len(subtasks), preview.language), digest)
+            return preview.answer(_deleting(board, task, subtasks, preview.language), digest)
         preview.check(digest)
         deleted = _written(board, task, user.email)
         await tasks.trash_task(user, board_id, task_id)

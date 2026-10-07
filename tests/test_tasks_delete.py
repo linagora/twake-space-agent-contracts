@@ -94,14 +94,18 @@ async def test_a_task_off_the_board_answers_like_an_unknown_one(
             "Supprimer la tâche WEB-1 « Fix the login page » du tableau « Website » : elle passe"
             " dans la corbeille du tableau, d'où un éditeur ou un administrateur du tableau peut la"
             " restaurer pendant 30 jours, avant que Tasks la supprime définitivement\n"
-            "Ses 2 sous-tâches partent avec elle.",
+            "Ses 2 sous-tâches partent avec elle :\n"
+            "- WEB-2 « Reproduce it »\n"
+            "- WEB-3 « Write a test »",
         ),
         (
             "en",
             "Delete the task WEB-1 “Fix the login page” from the board “Website”: it goes to the"
             " board's trash, where an editor or an admin of the board can restore it for 30 days,"
             " before Tasks deletes it for good\n"
-            "Its 2 subtasks go with it.",
+            "Its 2 subtasks go with it:\n"
+            "- WEB-2 “Reproduce it”\n"
+            "- WEB-3 “Write a test”",
         ),
     ],
 )
@@ -120,9 +124,12 @@ async def test_a_preview_tells_the_owner_what_deleting_would_do_and_deletes_noth
     assert task.hidden is False
 
 
-@pytest.mark.parametrize(("subtasks", "told"), [(0, None), (1, "Sa sous-tâche part avec elle.")])
-async def test_a_preview_counts_the_subtasks_that_go_with_the_task(
-    client: AsyncClient, boundary: FakeBoundary, subtasks: int, told: str | None
+@pytest.mark.parametrize(
+    ("subtasks", "told"),
+    [(0, []), (1, ["Sa sous-tâche part avec elle :", "- WEB-2 « Step 0 »"])],
+)
+async def test_a_preview_names_the_subtasks_that_go_with_the_task(
+    client: AsyncClient, boundary: FakeBoundary, subtasks: int, told: list[str]
 ) -> None:
     board = website(boundary)
     task = boundary.tasks.task(board, "Fix the login page", section_id=TO_DO)
@@ -131,7 +138,34 @@ async def test_a_preview_counts_the_subtasks_that_go_with_the_task(
 
     summary, _ = preview_of(await delete(client, task, asking_preview("fr")))
 
-    assert summary.splitlines()[1:] == ([told] if told else [])
+    assert summary.splitlines()[1:] == told
+
+
+@pytest.mark.parametrize(
+    ("title", "named"),
+    [
+        pytest.param("Step", 10, id="ten at most"),
+        pytest.param("🦊" * 200, 7, id="as many as fit"),
+    ],
+)
+async def test_a_preview_names_the_first_subtasks_then_counts_the_others(
+    client: AsyncClient, boundary: FakeBoundary, title: str, named: int
+) -> None:
+    # Members name subtasks as they like: twelve of the longest titles still leave the summary
+    # within what the harness shows
+    board = website(boundary)
+    task = boundary.tasks.task(board, "Fix the login page", section_id=TO_DO)
+    for _ in range(12):
+        boundary.tasks.task(board, title, parent_id=task.id)
+
+    summary, _ = preview_of(await delete(client, task, asking_preview("en")))
+
+    lines = summary.splitlines()
+    assert lines[1] == "Its 12 subtasks go with it:"
+    assert [line.split(" ")[1] for line in lines[2:-1]] == [
+        f"WEB-{number}" for number in range(2, 2 + named)
+    ]
+    assert lines[-1] == f"- and {12 - named} others"
 
 
 async def test_the_owner_who_allowed_what_they_were_shown_deletes_the_task(
@@ -161,3 +195,20 @@ async def test_a_subtask_added_since_the_preview_keeps_the_task(
     assert response.json()["code"] == "changed_since_preview"
     assert boundary.tasks.writes == []
     assert task.hidden is False
+
+
+async def test_a_subtask_renamed_since_the_preview_keeps_the_task(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The owner allowed deleting the subtasks they were shown, by their titles
+    board = website(boundary)
+    task = boundary.tasks.task(board, "Fix the login page", section_id=TO_DO)
+    subtask = boundary.tasks.task(board, "Reproduce it", parent_id=task.id)
+    _, digest = preview_of(await delete(client, task, asking_preview("fr")))
+    subtask.title = "Keep this one"
+
+    response = await delete(client, task, allowed_after(digest))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "changed_since_preview"
+    assert boundary.tasks.writes == []
