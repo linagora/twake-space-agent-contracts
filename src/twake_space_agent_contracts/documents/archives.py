@@ -111,6 +111,15 @@ def attribute(element: Element | None, name: str) -> str | None:
     return None
 
 
+def relationship_id(element: Element) -> str | None:
+    """The id of the relationship through which the element links to another part, apart from
+    its own id, which has no namespace."""
+    for key, value in element.attrib.items():
+        if key.startswith("{") and local(key) == "id":
+            return value
+    return None
+
+
 def child(element: Element | None, name: str) -> Element | None:
     """The element's first child of that name, whatever its namespace."""
     if element is None:

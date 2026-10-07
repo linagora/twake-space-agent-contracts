@@ -10,10 +10,10 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from twake_space_agent_contracts.documents import word
+from twake_space_agent_contracts.documents import slides, word
 from twake_space_agent_contracts.documents.reading import Full, OutOfTime, Output, Refusal
 
-READERS: dict[str, Callable[[bytes, Output], None]] = {"docx": word.read}
+READERS: dict[str, Callable[[bytes, Output], None]] = {"docx": word.read, "pptx": slides.read}
 
 
 def read(kind: str, content: bytes, budget: int, seconds: float) -> dict[str, object]:

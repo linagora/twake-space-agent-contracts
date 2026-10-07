@@ -11,10 +11,13 @@ from docx import Document as new_word_document
 from docx.document import Document as WordDocument
 from docx.oxml import parse_xml
 from httpx import AsyncClient, Response
+from pptx import Presentation as new_presentation
+from pptx.presentation import Presentation
 
 from tests.fakes import as_drive_owner
 
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 # The prefixes the WordprocessingML a test adds may use
 WORD_NAMESPACES = {
@@ -45,6 +48,16 @@ def word(build: Callable[[WordDocument], object]) -> bytes:
     build(document)
     written = io.BytesIO()
     document.save(written)
+    return written.getvalue()
+
+
+def presentation(build: Callable[[Presentation], object]) -> bytes:
+    """A presentation as python-pptx writes it, from its default template, which PowerPoint
+    made."""
+    deck = new_presentation()
+    build(deck)
+    written = io.BytesIO()
+    deck.save(written)
     return written.getvalue()
 
 
