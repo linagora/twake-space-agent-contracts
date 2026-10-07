@@ -243,9 +243,14 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "search_tasks": ["tasks.task.read.v1"],
         "read_task": ["tasks.task.read.v1"],
         "open_boards": ["tasks.board.open.v1"],
+        "list_projects": ["tasks.project.read.v1"],
+        "create_project": ["tasks.project.create.v1"],
         "create_task": ["tasks.task.create.v1"],
         "update_task": ["tasks.task.update.v1"],
         "complete_task": ["tasks.task.complete.v1"],
+        "delete_task": ["tasks.task.delete.v1"],
+        "comment_on_task": ["tasks.comment.create.v1"],
+        "assign_task": ["tasks.task.assign.v1"],
         "create_reply_draft": ["mail.draft.create.v1"],
         "create_file": ["drive.file.create.v1"],
         "move_email": ["mail.email.move.v1"],
@@ -360,6 +365,16 @@ WRITES_NAMED = {
         "accept_invitation": ("accept", "accepter"),
         "create_event": ("add events", "ajouter des événements"),
     },
+    "tasks": {
+        "open_boards": ("open your boards", "ouvrir tes tableaux"),
+        "create_project": ("create projects", "créer des projets"),
+        "create_task": ("create projects and tasks", "créer des projets et des tâches"),
+        "update_task": ("edit", "modifier"),
+        "complete_task": ("complete", "terminer"),
+        "delete_task": ("delete", "supprimer"),
+        "comment_on_task": ("comment", "commenter"),
+        "assign_task": ("assign", "assigner"),
+    },
     "contacts": {
         "create_contact": ("create", "créer"),
         "update_contact": ("change", "modifier"),
@@ -375,6 +390,7 @@ READS_NAMED = {
         ("your organization's directory", "l'annuaire de ton organisation"),
         ("the address books shared with you", "les carnets partagés avec toi"),
     ],
+    "tasks": [("your projects", "tes projets")],
 }
 
 
@@ -487,6 +503,10 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "create_task": ("post", True),
         "update_task": ("patch", True),
         "complete_task": ("post", True),
+        "create_project": ("post", True),
+        "delete_task": ("delete", True),
+        "comment_on_task": ("post", True),
+        "assign_task": ("put", True),
         "create_file": ("post", True),
         "create_contact": ("post", True),
         "update_contact": ("patch", True),
@@ -677,6 +697,49 @@ async def test_creating_changing_and_completing_a_task_are_low_risk_writes(
     assert risks == {"create_task": "low", "update_task": "low", "complete_task": "low"}
 
 
+async def test_creating_a_project_is_a_low_risk_write(client: AsyncClient) -> None:
+    # A project the user alone is a member of, which notifies nobody: once the owner allowed
+    # writing in Tasks, it runs without asking
+    document = (await client.get("/openapi.json")).json()
+
+    create = document["paths"]["/contracts/v1/tasks/projects"]["post"]
+
+    assert create["x-twake-risk"] == "low"
+
+
+async def test_deleting_a_task_is_a_high_risk_write(client: AsyncClient) -> None:
+    # The task and its subtasks leave the board, for the trash Tasks empties after 30 days: the
+    # owner confirms each task deleted
+    document = (await client.get("/openapi.json")).json()
+
+    path = "/contracts/v1/tasks/boards/{board_id}/tasks/{task_id}"
+    deleting = document["paths"][path]["delete"]
+
+    assert deleting["x-twake-risk"] == "high"
+    assert "requestBody" not in deleting
+
+
+async def test_commenting_on_a_task_is_a_high_risk_write(client: AsyncClient) -> None:
+    # A comment stays, and Tasks emails the people who follow the task of it: the owner confirms
+    # each comment
+    document = (await client.get("/openapi.json")).json()
+
+    path = "/contracts/v1/tasks/boards/{board_id}/tasks/{task_id}/comments"
+    commenting = document["paths"][path]["post"]
+
+    assert commenting["x-twake-risk"] == "high"
+
+
+async def test_assigning_a_task_is_a_high_risk_write(client: AsyncClient) -> None:
+    # Tasks emails each new assignee: the owner confirms each assignment
+    document = (await client.get("/openapi.json")).json()
+
+    path = "/contracts/v1/tasks/boards/{board_id}/tasks/{task_id}/assignees"
+    assigning = document["paths"][path]["put"]
+
+    assert assigning["x-twake-risk"] == "high"
+
+
 async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: AsyncClient) -> None:
     # The model gets each body as the document writes it: whole, taking these fields and no other
     document = (await client.get("/openapi.json")).json()
@@ -686,21 +749,32 @@ async def test_the_bodies_of_the_tasks_writes_are_whole_and_closed(client: Async
 
     schemas = {
         name: operations[name]["requestBody"]["content"]["application/json"]["schema"]
-        for name in ("create_task", "update_task")
+        for name in (
+            "create_project",
+            "create_task",
+            "update_task",
+            "comment_on_task",
+            "assign_task",
+        )
     }
 
     assert "requestBody" not in operations["open_boards"]
     assert "requestBody" not in operations["complete_task"]
     assert "$ref" not in json.dumps(schemas)
     assert {name: sorted(schema["properties"]) for name, schema in schemas.items()} == {
+        "create_project": ["key_prefix", "name"],
         "create_task": sorted(
             ["title", "section_id", "parent_id", "priority", "due_date", "due_time", "due_zone"]
         ),
         "update_task": sorted(
             ["title", "priority", "due_date", "due_time", "due_zone", "deadline"]
         ),
+        "comment_on_task": ["body"],
+        "assign_task": ["assignees"],
     }
-    assert [schema["additionalProperties"] for schema in schemas.values()] == [False, False]
+    assert [schema["additionalProperties"] for schema in schemas.values()] == [False] * 5
+    assert schemas["assign_task"]["required"] == ["assignees"]
+    assert schemas["assign_task"]["properties"]["assignees"]["maxItems"] == 50
 
 
 async def test_the_bodies_of_the_batched_mail_moves_are_whole_and_closed(

@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, time
 from typing import Annotated, Any, Literal
@@ -229,6 +230,57 @@ def person(name: str | None, address: str | None, language: Language) -> str | N
     return " ".join(shown) or None
 
 
+MOST_PEOPLE = 10
+"""How many people a summary names in a list, at most."""
+PEOPLE_SIZE = BUDGET // 6
+"""What the people a summary names in a list take of it at most, as the harness counts it: so that
+people, however many and however long their names and addresses, such as those of a crafted email,
+leave room for the rest."""
+
+
+@dataclass(frozen=True)
+class _Words:
+    """What a summary tells of people in a list, in one language: the words for one person, then
+    those for several, which say how many."""
+
+    people: tuple[str, str]
+    """People none of whom the summary names."""
+    others: tuple[str, str]
+    """The people the summary names, then how many others it does not."""
+
+
+_WORDS: dict[Language, _Words] = {
+    "fr": _Words(
+        people=("1 personne", "{count} personnes"),
+        others=("{named} et 1 autre", "{named} et {count} autres"),
+    ),
+    "en": _Words(
+        people=("1 person", "{count} people"),
+        others=("{named} and 1 other", "{named} and {count} others"),
+    ),
+}
+
+
+def people(persons: Sequence[tuple[str | None, str | None]], total: int, language: Language) -> str:
+    """People, by their names and addresses, as a summary names them: the first ones, ten at most
+    and as many as fit in what a list of people takes of the summary, then how many others there
+    are of the total."""
+    named: list[str] = []
+    for name, address in persons[:MOST_PEOPLE]:
+        found = person(name, address, language)
+        if found is None:
+            continue
+        if shown_size(", ".join([*named, found])) > PEOPLE_SIZE:
+            break
+        named.append(found)
+    others = total - len(named)
+    if others <= 0:
+        return ", ".join(named)
+    words = _WORDS[language]
+    one, several = words.others if named else words.people
+    return (one if others == 1 else several).format(named=", ".join(named), count=others)
+
+
 def shown_size(text: str) -> int:
     """What text takes of a summary, as the harness counts it: its bytes in UTF-8, and those of
     its HTML, which escapes &, < and >."""
@@ -273,18 +325,42 @@ def _cut(text: str, budget: int, language: Language, indent: str = "") -> str:
     return indent + kept.replace("\n", "\n" + indent) + "\n" + said
 
 
-def excerpt(text: str, budget: int, language: Language) -> str:
-    """The text a write would put, as its summary shows it: line by line, each line after a tab,
-    so that none passes for the summary's own, without what a reader does not see. Whole when it
-    takes no more than `budget` of the summary; else cut, with a line that says how much of it is
-    left out, never silently."""
+def _whole(text: str) -> tuple[str, str]:
+    """The text a write would put, without what a reader does not see, and as its summary shows it
+    whole: line by line, each line after a tab, so that none passes for the summary's own."""
     kept = "".join(
         character
         for character in _BREAKS.sub("\n", text)
         if character in "\n\t" or unicodedata.category(character) not in UNSEEN
     ).rstrip()
-    shown = "\t" + kept.replace("\n", "\n\t")
+    return kept, "\t" + kept.replace("\n", "\n\t")
+
+
+def excerpt(text: str, budget: int, language: Language) -> str:
+    """The text a write would put, as its summary shows it: line by line, each line after a tab,
+    so that none passes for the summary's own, without what a reader does not see. Whole when it
+    takes no more than `budget` of the summary; else cut, with a line that says how much of it is
+    left out, never silently."""
+    kept, shown = _whole(text)
     return shown if shown_size(shown) <= budget else _cut(kept, budget, language, "\t")
+
+
+def shown_whole(text: str, budget: int) -> bool:
+    """Whether the summary shows the text a write would put whole, in `budget` of it."""
+    return shown_size(_whole(text)[1]) <= budget
+
+
+def longest_shown_whole(text: str, budget: int) -> int:
+    """How many of the first characters of the text a write would put the summary shows whole, in
+    `budget` of it."""
+    shown, cut = 0, len(text) + 1
+    while cut - shown > 1:
+        middle = (shown + cut) // 2
+        if shown_whole(text[:middle], budget):
+            shown = middle
+        else:
+            cut = middle
+    return shown
 
 
 def day(value: date, language: Language) -> str:

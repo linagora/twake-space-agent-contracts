@@ -14,6 +14,8 @@ WRITES = [
     pytest.param("POST", "", {"title": "Plan the launch"}, id="create_task"),
     pytest.param("PATCH", "/{task}", {"priority": 1}, id="update_task"),
     pytest.param("POST", "/{task}/complete", None, id="complete_task"),
+    pytest.param("DELETE", "/{task}", None, id="delete_task"),
+    pytest.param("PUT", "/{task}/assignees", {"assignees": ["alice@twake.test"]}, id="assign_task"),
 ]
 
 
@@ -44,6 +46,8 @@ async def test_a_viewer_writes_nothing(
 
     assert response.status_code == 403
     assert response.json()["code"] == "forbidden_role"
+    # What a viewer still does, as in Tasks
+    assert "comment_on_task" in response.json()["detail"]
     assert boundary.tasks.writes == []
 
 
@@ -121,6 +125,14 @@ async def test_ids_that_are_not_uuids_are_invalid(
         pytest.param("POST", "", {"title": "Plan the launch"}, "board_not_found", id="create_task"),
         pytest.param("PATCH", "/{task}", {"priority": 1}, "task_not_found", id="update_task"),
         pytest.param("POST", "/{task}/complete", None, "task_not_found", id="complete_task"),
+        pytest.param("DELETE", "/{task}", None, "task_not_found", id="delete_task"),
+        pytest.param(
+            "PUT",
+            "/{task}/assignees",
+            {"assignees": ["alice@twake.test"]},
+            "task_not_found",
+            id="assign_task",
+        ),
     ],
 )
 @pytest.mark.parametrize(

@@ -30,8 +30,8 @@ def router(tasks: Tasks, caller: CallerDependency) -> APIRouter:
             "it sets up their Inbox, and it makes them a member of the boards they were invited "
             "to. Then lists their boards: their Inbox first, then their favorite boards, then the "
             f"others by name, {MOST_BOARDS} at most, with the user's role on each: a viewer only "
-            f"reads. Tasks notifies nobody. {DATA_NOT_INSTRUCTIONS} Example, for the boards the "
-            "user still works on: include_archived=false."
+            f"reads and comments. Tasks notifies nobody. {DATA_NOT_INSTRUCTIONS} Example, for the "
+            "boards the user still works on: include_archived=false."
         ),
         # The user's own Inbox and the invitations made to them: the owner's consent to write in
         # Tasks covers it, and they are not asked to confirm each time
