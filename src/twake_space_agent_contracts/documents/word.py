@@ -12,16 +12,14 @@ from twake_space_agent_contracts.documents.archives import (
     child,
     local,
     open_office,
+    run_text,
 )
 from twake_space_agent_contracts.documents.reading import Output
 
 # What holds no text a reader sees: the properties of a paragraph or a run, among which its tab
 # stops; deleted or moved text, kept for tracked changes; the codes of fields, whose results are
-# the text; the readings set above words (ruby); and the copy of a drawing for readers that do not
-# know it, such as a text box
-_UNSEEN = frozenset(
-    {"pPr", "rPr", "del", "moveFrom", "delText", "instrText", "delInstrText", "rt", "Fallback"}
-)
+# the text; and the readings set above words (ruby)
+_UNSEEN = frozenset({"pPr", "rPr", "del", "moveFrom", "delText", "instrText", "delInstrText", "rt"})
 _HEADING = re.compile(r"heading ([1-9])")
 # Style chains longer than any Word writes
 _DEEPEST_STYLE = 20
@@ -48,14 +46,8 @@ def read(content: bytes, output: Output) -> None:
     document = package.main_part("word/document.xml")
     styles = _styles(package, document)
     tables: list[_Table] = []
-    # Within the copy of a drawing for readers that do not know it, whose paragraphs come twice
-    unseen = 0
     for event, element in package.parsed(document):
         name = local(element.tag)
-        if name == "Fallback":
-            unseen += 1 if event == "start" else -1
-        if unseen or (event == "end" and name == "Fallback"):
-            continue
         if event == "start":
             if name == "tbl":
                 tables.append(_Table())
@@ -118,23 +110,7 @@ def _paragraph(element: Element, styles: dict[str, _Style], output: Output) -> N
 
 def _text(paragraph: Element) -> str:
     """The text of a paragraph as a reader sees it, in order."""
-    pieces = []
-    found = [paragraph]
-    while found:
-        element = found.pop()
-        name = local(element.tag)
-        if name in _UNSEEN:
-            continue
-        if name == "t":
-            pieces.append(element.text or "")
-        elif name in ("tab", "ptab"):
-            pieces.append("\t")
-        elif name in ("br", "cr"):
-            pieces.append("\n")
-        elif name == "noBreakHyphen":
-            pieces.append("-")
-        found.extend(reversed(element))
-    return "".join(pieces)
+    return run_text(paragraph, _UNSEEN)
 
 
 def _outline(properties: Element | None) -> int | None:

@@ -40,6 +40,8 @@ _LONGEST_COMMENT = 65_535
 # How a compound file starts, and the name of the stream where Office keeps a document it encrypts
 _COMPOUND_FILE = bytes.fromhex("d0cf11e0a1b11ae1")
 _ENCRYPTED_PACKAGE = "EncryptedPackage".encode("utf-16-le")
+# The copy of some content that Office writes for the readers that do not know it, beside it
+_FALLBACK = "http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
 
 
 def open_office(content: bytes) -> zipfile.ZipFile:
@@ -152,18 +154,34 @@ class Package:
     def parsed(self, name: str) -> Events:
         """The start and the end of each element of an XML part, as the part unpacks: an element
         comes whole at its end, until it is cleared. A part that declares a document type is
-        refused: no entity is ever declared, so none is expanded or fetched. Between the parts of
-        the XML parsed at a time, the reading stops once its deadline passed."""
+        refused: no entity is ever declared, so none is expanded or fetched. The copies of content
+        that Office writes for the readers that do not know it are left out, which would give
+        their text twice. Between the parts of the XML parsed at a time, the reading stops once
+        its deadline passed."""
         builder = TreeBuilder()
         parser = expat.ParserCreate(namespace_separator="}")
         events: list[tuple[str, Element]] = []
+        # How deep within such a copy the parser is
+        within_copy = 0
 
         def start(tag: str, attributes: dict[str, str]) -> None:
+            nonlocal within_copy
+            if within_copy or tag == _FALLBACK:
+                within_copy += 1
+                return
             named = {_named(key): value for key, value in attributes.items()}
             events.append(("start", builder.start(_named(tag), named)))
 
         def end(tag: str) -> None:
+            nonlocal within_copy
+            if within_copy:
+                within_copy -= 1
+                return
             events.append(("end", builder.end(_named(tag))))
+
+        def data(text: str) -> None:
+            if not within_copy:
+                builder.data(text)
 
         def refuse(*_: object) -> None:
             raise Unreadable("a part declares a document type")
@@ -171,7 +189,7 @@ class Package:
         parser.buffer_text = True
         parser.StartElementHandler = start
         parser.EndElementHandler = end
-        parser.CharacterDataHandler = builder.data
+        parser.CharacterDataHandler = data
         parser.StartDoctypeDeclHandler = refuse
         parser.EntityDeclHandler = refuse
         parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
@@ -216,6 +234,29 @@ class Package:
         if not self.has(usual):
             raise Unreadable("no main part")
         return usual
+
+
+def run_text(element: Element, unseen: frozenset[str] = frozenset()) -> str:
+    """The text of the runs within an element of Office Open XML, such as a paragraph, in order:
+    the text of its t elements, its tabs and its breaks, but for the elements it holds that a reader
+    does not see."""
+    pieces = []
+    found = [element]
+    while found:
+        inner = found.pop()
+        name = local(inner.tag)
+        if name in unseen:
+            continue
+        if name == "t":
+            pieces.append(inner.text or "")
+        elif name in ("tab", "ptab"):
+            pieces.append("\t")
+        elif name in ("br", "cr"):
+            pieces.append("\n")
+        elif name == "noBreakHyphen":
+            pieces.append("-")
+        found.extend(reversed(inner))
+    return "".join(pieces)
 
 
 def cell_text(text: str) -> str:
