@@ -1,6 +1,8 @@
 """The user's Twake Drive: their cozy-stack instance, called with the access token of that instance
 that the token broker holds for them."""
 
+import base64
+import hashlib
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -10,7 +12,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import Depends, Header
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AwareDatetime, BaseModel, Field, ValidationError
 
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.problems import Problem, invalid_request
@@ -20,6 +22,11 @@ ROOT_ID = "io.cozy.files.root-dir"
 TRASH_ID = "io.cozy.files.trash-dir"
 SHARED_DRIVES_ID = "io.cozy.files.shared-drives-dir"
 TRASH_PATH = "/.cozy_trash"
+SHARINGS = "io.cozy.sharings"
+# The stack's own bound on the depth of a folder
+DEEPEST = 512
+# The pages of links the service reads at most, 100 links a page: far more than anyone makes
+LINK_PAGES = 100
 
 ITEM_ID = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 """The id of a file or folder of the stack, such as io.cozy.files.root-dir: one path segment, which
@@ -74,6 +81,26 @@ def file_blocked() -> Problem:
         code="file_blocked",
         title="File blocked",
         detail="The antivirus of the user's Drive blocks this file.",
+    )
+
+
+def name_taken() -> Problem:
+    return Problem(
+        status=409,
+        code="name_taken",
+        title="Name taken",
+        detail="A file or folder of this name is already in the folder: nothing was replaced. "
+        "Choose another name.",
+    )
+
+
+def quota_exceeded() -> Problem:
+    return Problem(
+        status=409,
+        code="quota_exceeded",
+        title="Quota exceeded",
+        detail="The user's Drive has no room left for this file: the user frees space in Drive, "
+        "or gets more.",
     )
 
 
@@ -144,6 +171,11 @@ class _Scan(BaseModel):
     status: str = ""
 
 
+class _Reference(BaseModel):
+    type: str
+    id: str
+
+
 class StackItem(BaseModel):
     """A file or folder, as the stack gives it in its JSON:API: what the contracts read of it."""
 
@@ -164,6 +196,14 @@ class StackItem(BaseModel):
     """Only files say it."""
     encrypted: bool = False
     antivirus_scan: _Scan | None = None
+    referenced_by: list[_Reference] = Field(default_factory=list)
+    """The documents that reference it, among them the sharing whose root it is."""
+
+    @property
+    def shared(self) -> bool:
+        """Whether it is the root of a sharing, sent or received, or of a shared drive: the stack
+        references the sharing from it, on the side of each member, until the sharing ends."""
+        return any(reference.type == SHARINGS for reference in self.referenced_by)
 
     @property
     def in_trash(self) -> bool:
@@ -202,8 +242,13 @@ def _data(answer: Any) -> Any:
 
 def _item(resource: Any) -> StackItem:
     try:
-        return StackItem.model_validate(resource["attributes"] | {"id": resource["id"]})
-    except (KeyError, TypeError, ValidationError) as error:
+        # The stack gives the references of an item as a relationship
+        relationships = resource.get("relationships") or {}
+        references = (relationships.get("referenced_by") or {}).get("data") or []
+        return StackItem.model_validate(
+            resource["attributes"] | {"id": resource["id"], "referenced_by": references}
+        )
+    except (AttributeError, KeyError, TypeError, ValidationError) as error:
         raise _unavailable("Drive gave files in an unexpected form.") from error
 
 
@@ -211,6 +256,36 @@ def _items(resources: Any) -> list[StackItem]:
     if not isinstance(resources, list):
         raise _unavailable("Drive gave files in an unexpected form.")
     return [_item(resource) for resource in resources]
+
+
+class _LinkRule(BaseModel):
+    type: str = ""
+    selector: str = ""
+    values: list[str] = Field(default_factory=list)
+
+
+class _Link(BaseModel):
+    """A share-by-link permission: whoever holds its code reads what its rules name, and what the
+    folders among them hold, until it expires. Its codes are left unread."""
+
+    permissions: dict[str, _LinkRule] = Field(default_factory=dict)
+    expires_at: AwareDatetime | None = None
+
+    def files(self) -> set[str]:
+        """The ids of the files and folders it shares."""
+        return {
+            value
+            for rule in self.permissions.values()
+            if rule.type == "io.cozy.files" and not rule.selector
+            for value in rule.values
+        }
+
+
+def _links(resources: Any) -> list[_Link]:
+    try:
+        return [_Link.model_validate(resource["attributes"]) for resource in resources]
+    except (KeyError, TypeError, ValidationError) as error:
+        raise _unavailable("Drive gave its links in an unexpected form.") from error
 
 
 def _next(answer: dict[str, Any], parameter: str) -> str | None:
@@ -322,6 +397,63 @@ class Drive:
         answer = await self._request(owner, "POST", "/files/_all_docs", json={"keys": [item_id]})
         found = [item for item in _items(_data(answer)) if item.id == item_id]
         return found[0] if found else None
+
+    async def parents(self, owner: DriveOwner, item: StackItem) -> list[StackItem]:
+        """The folders the item is in, from its own up to the root."""
+        parents: list[StackItem] = []
+        parent_id = item.dir_id
+        while parent_id:
+            parent = await self.item(owner, parent_id)
+            if parent is None or len(parents) >= DEEPEST:
+                raise _unavailable("Drive gave folders in an unexpected form.")
+            parents.append(parent)
+            parent_id = parent.dir_id
+        return parents
+
+    async def linked_ids(self, owner: DriveOwner) -> set[str]:
+        """The ids of the files and folders that a link of the user shares with whoever holds it,
+        until it expires: what the folders hold, the link shares too."""
+        now = datetime.now(UTC)
+        ids: set[str] = set()
+        cursor: str | None = None
+        for _ in range(LINK_PAGES):
+            params = {"page[limit]": 100} | ({"page[cursor]": cursor} if cursor else {})
+            answer = await self._request(
+                owner, "GET", "/permissions/doctype/io.cozy.files/shared-by-link", params=params
+            )
+            for link in _links(_data(answer)):
+                if link.expires_at is None or link.expires_at > now:
+                    ids |= link.files()
+            cursor = _next(answer, "page[cursor]")
+            if cursor is None:
+                return ids
+        raise _unavailable("Drive gave more links than the service reads.")
+
+    async def create_file(
+        self, owner: DriveOwner, folder_id: str, name: str, content: bytes, mime: str
+    ) -> StackItem | None:
+        """The new file in the folder, its content checked on arrival with its MD5, and never
+        executable; None when the folder is gone, in the trash or out of the token's reach. The
+        stack never writes it over another item of its name."""
+        path = f"/files/{quote(folder_id, safe='')}"
+        md5 = hashlib.md5(content, usedforsecurity=False).digest()
+        response = await self._send(
+            owner,
+            "POST",
+            path,
+            params={"Type": "file", "Name": name},
+            content=content,
+            headers={"Content-Type": mime, "Content-MD5": base64.b64encode(md5).decode()},
+        )
+        # Out of the token's reach, as a token that may only read, answers like what is missing
+        if response.status_code in (403, 404):
+            return None
+        if response.status_code == 409:
+            raise name_taken()
+        if response.status_code == 413:
+            raise quota_exceeded()
+        _checked(response, "POST", path, missing_ok=False, cursor=None)
+        return _item(_data(_json(response, "POST", path)))
 
     async def folder(
         self, owner: DriveOwner, folder_id: str, limit: int, cursor: str | None
