@@ -139,8 +139,9 @@ class Mailbox(_Jmap):
 
     id: str
     name: str
-    role: str | None
-    parent_id: str | None
+    # James leaves out what a mailbox lacks: the role of most, the parent of a top-level one
+    role: str | None = None
+    parent_id: str | None = None
     total_emails: int
     unread_emails: int
 
