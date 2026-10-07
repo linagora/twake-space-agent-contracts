@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient, Response
 
-from tests.conftest import AS_MMAUDET
+from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
 from tests.fakes import (
     INBOX,
     MMAUDET,
@@ -43,9 +43,26 @@ def mailboxes(boundary: FakeBoundary) -> None:
 
 
 async def post(
-    client: AsyncClient, email_id: str, operation: str, body: dict[str, Any] | None = None
+    client: AsyncClient,
+    email_id: str,
+    operation: str,
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Response:
-    return await client.post(f"{EMAILS}/{email_id}/{operation}", json=body, headers=AS_MMAUDET)
+    return await client.post(
+        f"{EMAILS}/{email_id}/{operation}", json=body, headers=AS_MMAUDET | (headers or {})
+    )
+
+
+async def ask(
+    client: AsyncClient,
+    email_id: str,
+    operation: str,
+    body: dict[str, Any] | None = None,
+    language: str = "fr",
+) -> Response:
+    """The harness asks what a move would do, before it asks the owner."""
+    return await post(client, email_id, operation, body, asking_preview(language))
 
 
 def mailboxes_of(boundary: FakeBoundary, email_id: str) -> set[str]:
@@ -429,3 +446,166 @@ async def test_an_email_id_that_is_not_one_is_an_invalid_request(
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_request"
     assert boundary.tmail.calls == []
+
+
+@pytest.mark.parametrize(
+    ("operation", "body", "language", "summary"),
+    [
+        pytest.param(
+            "move",
+            {"mailbox_name": "projects"},
+            "fr",
+            "Déplacer le mail « Budget Q4 » de « Paul Martin » <paul.martin@twake.test> : il va"
+            " dans le dossier « Projects »",
+            id="move",
+        ),
+        pytest.param(
+            "move",
+            {"mailbox_id": PROJECTS},
+            "en",
+            "Move the email “Budget Q4” from “Paul Martin” <paul.martin@twake.test>: it goes to the"
+            " folder “Projects”",
+            id="move, in English",
+        ),
+        pytest.param(
+            "archive",
+            None,
+            "fr",
+            "Archiver le mail « Budget Q4 » de « Paul Martin » <paul.martin@twake.test> : il va"
+            " dans le dossier « Archive »",
+            id="archive",
+        ),
+        pytest.param(
+            "trash",
+            None,
+            "fr",
+            "Mettre à la corbeille le mail « Budget Q4 » de « Paul Martin »"
+            " <paul.martin@twake.test> : il va dans le dossier « Trash », d'où il peut être"
+            " ressorti",
+            id="trash",
+        ),
+        pytest.param(
+            "trash",
+            None,
+            "en",
+            "Trash the email “Budget Q4” from “Paul Martin” <paul.martin@twake.test>: it goes to"
+            " the folder “Trash”, from which it can be moved back",
+            id="trash, in English",
+        ),
+    ],
+)
+async def test_a_preview_tells_the_owner_which_email_goes_where_and_moves_nothing(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    body: dict[str, Any] | None,
+    language: str,
+    summary: str,
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX)
+
+    told, _ = preview_of(await ask(client, "email-1", operation, body, language))
+
+    assert told == summary
+    assert writes(boundary) == []
+    assert mailboxes_of(boundary, "email-1") == {INBOX}
+
+
+async def test_what_the_sender_wrote_cannot_close_the_quotes_it_comes_in(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    sender = {"name": "Paul» de « Boss", "email": "paul@x.test> <boss@corp.test"}
+    boundary.tmail.deliver("email-1", INBOX, subject="Budget » vers « Trash", **{"from": [sender]})
+
+    told, _ = preview_of(await ask(client, "email-1", "archive"))
+
+    assert told == (
+        "Archiver le mail « Budget ' vers ' Trash » de « Paul' de ' Boss »"
+        " <paul@x.test boss@corp.test> : il va dans le dossier « Archive »"
+    )
+
+
+async def test_a_preview_names_an_email_without_subject_nor_sender(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX, subject="", **{"from": None})
+
+    told, _ = preview_of(await ask(client, "email-1", "archive"))
+
+    assert told == "Archiver le mail sans objet : il va dans le dossier « Archive »"
+
+
+async def test_a_preview_refuses_what_the_move_would_refuse(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.tmail.deliver("email-1", SPAM)
+
+    response = await ask(client, "email-1", "archive")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "email_in_spam"
+    assert writes(boundary) == []
+
+
+async def test_the_owner_who_allowed_what_they_were_shown_moves_the_email(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX)
+    _, digest = preview_of(await ask(client, "email-1", "move", {"mailbox_id": PROJECTS}))
+
+    response = await post(
+        client, "email-1", "move", {"mailbox_id": PROJECTS}, allowed_after(digest)
+    )
+
+    assert response.status_code == 200, response.text
+    assert mailboxes_of(boundary, "email-1") == {PROJECTS}
+
+
+@pytest.mark.parametrize(
+    ("operation", "body"),
+    [("move", {"mailbox_id": PROJECTS}), ("archive", None), ("trash", None)],
+    ids=["move", "archive", "trash"],
+)
+async def test_an_email_moved_since_the_preview_stays_where_it_is(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    body: dict[str, Any] | None,
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX)
+    _, digest = preview_of(await ask(client, "email-1", operation, body))
+    # The user files it themselves before they say yes
+    boundary.tmail.mailboxes["mbx-later"] = own_mailbox("Later")
+    boundary.tmail.emails["email-1"]["mailboxIds"] = {"mbx-later": True}
+
+    response = await post(client, "email-1", operation, body, allowed_after(digest))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "changed_since_preview"
+    assert writes(boundary) == []
+    assert mailboxes_of(boundary, "email-1") == {"mbx-later"}
+
+
+async def test_a_preview_of_an_email_from_many_fits_what_the_harness_shows(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    senders = [{"name": "🦊" * 300, "email": f"fox{n}@crafted.test"} for n in range(1, 51)]
+    boundary.tmail.deliver("email-1", INBOX, **{"from": senders})
+
+    told, _ = preview_of(await ask(client, "email-1", "archive", language="en"))
+
+    assert told == (
+        f"Archive the email “Budget Q4” from “{'🦊' * 200}” <fox1@crafted.test> and 49 others:"
+        " it goes to the folder “Archive”"
+    )
+
+
+async def test_a_preview_counts_a_sender_too_long_to_name(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    sender = {"name": "🦊" * 200, "email": "🦊" * 300 + "@crafted.test"}
+    boundary.tmail.deliver("email-1", INBOX, **{"from": [sender]})
+
+    told, _ = preview_of(await ask(client, "email-1", "archive", language="en"))
+
+    assert told == "Archive the email “Budget Q4” from 1 person: it goes to the folder “Archive”"

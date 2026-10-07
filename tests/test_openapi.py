@@ -376,6 +376,44 @@ async def test_each_write_declares_its_risk(client: AsyncClient) -> None:
     assert {name: risk for name, risk in risks.items() if risk not in ("low", "high")} == {}
 
 
+async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncClient) -> None:
+    # The harness asks a contract what a call would do only when its operation declares
+    # x-twake-preview: true, since a contract that never promised it would take the question for
+    # the call itself; it ignores the declaration on a read
+    document = (await client.get("/openapi.json")).json()
+
+    declared = {
+        operation["operationId"]: (method, operation["x-twake-preview"])
+        for _, method, operation in operations_of(document)
+        if "x-twake-preview" in operation
+    }
+
+    assert declared == {
+        "accept_invitation": ("post", True),
+        "create_reply_draft": ("post", True),
+        "move_email": ("post", True),
+        "archive_email": ("post", True),
+        "trash_email": ("post", True),
+        "create_task": ("post", True),
+        "update_task": ("patch", True),
+        "complete_task": ("post", True),
+        "create_file": ("post", True),
+    }
+
+
+async def test_the_harness_alone_asks_for_a_preview(client: AsyncClient) -> None:
+    # The headers of a preview are the harness's: a model never sets them as parameters
+    document = (await client.get("/openapi.json")).json()
+
+    parameters = {
+        parameter["name"].lower()
+        for _, _, operation in operations_of(document)
+        for parameter in operation.get("parameters", [])
+    }
+
+    assert not parameters & {"x-twake-preview", "x-twake-preview-digest", "accept-language"}
+
+
 async def test_accepting_an_invitation_is_a_low_risk_write(client: AsyncClient) -> None:
     # The user's own answer: once the owner allowed writing in Calendar, it runs without asking
     document = (await client.get("/openapi.json")).json()

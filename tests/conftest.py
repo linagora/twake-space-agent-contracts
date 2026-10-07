@@ -1,3 +1,5 @@
+import re
+import unicodedata
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
@@ -8,7 +10,7 @@ import psycopg
 import pytest
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from psycopg.types.json import Jsonb
 from testcontainers.community.postgres import PostgresContainer
 
@@ -21,6 +23,53 @@ SCHEMA = Path(__file__).parent.parent / "sql" / "workplace_events.sql"
 INVITED = "com.twake.calendar.event.invited.v1"
 
 AS_MMAUDET = as_user(email_of("mmaudet"))
+
+# The digest of a preview, as the harness keeps it and sends it back (src/contracts/preview.ts)
+DIGEST = re.compile(r"[A-Za-z0-9+/=._:-]{1,256}")
+
+
+# The most a summary may take for the harness to show it (CALL_BYTES in
+# src/consents/request.ts)
+HARNESS_LIMIT = 16_384
+
+
+def harness_size(text: str) -> int:
+    """What a summary takes as the harness counts it: its bytes in UTF-8, and those of its HTML,
+    which escapes &, < and >."""
+    html = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return len(text.encode()) + len(html.encode())
+
+
+def asking_preview(language: str) -> dict[str, str]:
+    """What the harness adds to a call to ask what it would do, in the owner's language."""
+    return {"x-twake-preview": "true", "accept-language": language}
+
+
+def allowed_after(digest: str) -> dict[str, str]:
+    """What the harness adds to the call its owner allowed once shown its preview."""
+    return {"x-twake-preview-digest": digest}
+
+
+def preview_of(response: Response) -> tuple[str, str]:
+    """The summary and the digest of a preview, once found what the harness takes for one: a 200
+    that carries x-twake-preview: true back, with a summary it can show, which holds no control
+    or format character but line feeds and tabs, and a digest it can send back."""
+    assert response.status_code == 200, response.text
+    assert response.headers.get("x-twake-preview") == "true"
+    answer = response.json()
+    assert set(answer) == {"summary", "digest"}, answer
+    summary, digest = answer["summary"], answer["digest"]
+    assert isinstance(summary, str)
+    assert summary.strip()
+    unshown = [
+        character
+        for character in summary
+        if character not in "\n\t" and unicodedata.category(character) in ("Cc", "Cf")
+    ]
+    assert unshown == []
+    assert DIGEST.fullmatch(digest), digest
+    assert harness_size(summary.strip()) <= HARNESS_LIMIT
+    return summary, digest
 
 
 class Store(Protocol):

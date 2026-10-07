@@ -143,13 +143,19 @@ def uids_of(jcal: list[Any]) -> set[str]:
 class FakeCalendar:
     """The Calendar side service, as the contracts go through it with the bearer's token.
 
-    The user lookup by email; the JSON free/busy of esn-sabre, which leaves out the events whose
-    UIDs it is given, with times written as esn-sabre writes them, 20261006T150000Z; and the
+    The user lookup by email; the user's settings, of which their time zone, always given, the
+    deployment's when they set none; the JSON free/busy of esn-sabre, which leaves out the events
+    whose UIDs it is given, with times written as esn-sabre writes them, 20261006T150000Z; and the
     user's own events, found by UID with esn-sabre's JSON REPORT and written back with PUT.
     """
 
     def __init__(self) -> None:
         self.users: dict[str, str] = {email_of("mmaudet"): MMAUDET_CALENDAR_ID}
+        self.time_zones: dict[str, str] = {email_of("mmaudet"): "Europe/Paris"}
+        """The time zone each user set in Calendar, by email: the deployment's, here UTC, for a
+        user who set none."""
+        self.settings_down = False
+        """Whether the side service fails to give the users' settings, and answers the rest."""
         self.busy: dict[str, list[dict[str, str]]] = {}
         """Busy slots by user id: uid, start, end."""
         self.down = False
@@ -178,6 +184,8 @@ class FakeCalendar:
             return httpx.Response(
                 200, json=[{"_id": user, "preferredEmail": email}] if user else []
             )
+        if request.method == "POST" and request.url.path == "/api/configurations":
+            return self._configurations(request, caller)
         if request.method == "POST" and request.url.path == "/dav/calendars/freebusy":
             return self._free_busy(request, self.users.get(caller))
         if request.method == "REPORT" and request.url.path.endswith(".json"):
@@ -185,6 +193,29 @@ class FakeCalendar:
         if request.method == "PUT" and request.url.path.startswith("/dav/calendars/"):
             return self._write(request, self.users.get(caller))
         return httpx.Response(404)
+
+    def _configurations(self, request: httpx.Request, caller: str) -> httpx.Response:
+        """The settings asked for, by module, as the side service gives them: here the user's
+        date and time settings alone."""
+        if self.settings_down:
+            return httpx.Response(503)
+        settings = {
+            ("core", "datetime"): {
+                "timeZone": self.time_zones.get(caller, "UTC"),
+                "use24hourFormat": True,
+            }
+        }
+        modules = [
+            {
+                "name": module["name"],
+                "configurations": [
+                    {"name": key, "value": settings.get((module["name"], key))}
+                    for key in module["keys"]
+                ],
+            }
+            for module in json.loads(request.content)
+        ]
+        return httpx.Response(200, json=modules)
 
     def _find_by_uid(self, request: httpx.Request, user: str | None) -> httpx.Response:
         # esn-sabre answers JSON for this exact Accept only, and searches the calendars of the

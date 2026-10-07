@@ -1,14 +1,15 @@
 """mail.email.move.v1: an email of the user moved to another of their own mailboxes, or archived."""
 
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import PydanticCustomError
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.mail import EXAMPLE_ID, EmailId
+from twake_space_agent_contracts.mail import EXAMPLE_ID, EmailId, people
 from twake_space_agent_contracts.mail.tmail import (
     JMAP_ID,
     SPAM_ROLES,
@@ -16,6 +17,14 @@ from twake_space_agent_contracts.mail.tmail import (
     Moved,
     Placement,
     TMail,
+)
+from twake_space_agent_contracts.previews import (
+    Language,
+    Preview,
+    Previewing,
+    digest_of,
+    one_line,
+    quoted,
 )
 from twake_space_agent_contracts.problems import Problem
 
@@ -86,6 +95,61 @@ class Destination(BaseModel):
         raise AssertionError("A destination names exactly one mailbox, as validated")
 
 
+Move = Literal["move", "archive", "trash"]
+
+# What a preview of each move tells the owner, in each language
+_MOVES: dict[Move, dict[Language, str]] = {
+    "move": {
+        "fr": "Déplacer {email} : il va dans le dossier {mailbox}",
+        "en": "Move {email}: it goes to the folder {mailbox}",
+    },
+    "archive": {
+        "fr": "Archiver {email} : il va dans le dossier {mailbox}",
+        "en": "Archive {email}: it goes to the folder {mailbox}",
+    },
+    "trash": {
+        "fr": "Mettre à la corbeille {email} : il va dans le dossier {mailbox}, d'où il peut être"
+        " ressorti",
+        "en": "Trash {email}: it goes to the folder {mailbox}, from which it can be moved back",
+    },
+}
+_EMAIL: dict[Language, tuple[str, str, str]] = {
+    "fr": ("le mail {subject}", "le mail sans objet", "{email} de {senders}"),
+    "en": ("the email {subject}", "the email with no subject", "{email} from {senders}"),
+}
+
+
+def _summary(move: Move, placement: Placement, mailbox: Mailbox, language: Language) -> str:
+    """What the move does, as the owner reads it: which email, by its subject and its senders,
+    who wrote them, goes to which of their mailboxes."""
+    titled, untitled, sent = _EMAIL[language]
+    subject = one_line(placement.subject)
+    email = titled.format(subject=quoted(subject, language)) if subject else untitled
+    senders = people(placement.senders, len(placement.senders), language)
+    if senders:
+        email = sent.format(email=email, senders=senders)
+    folder = quoted(one_line(mailbox.name), language)
+    return _MOVES[move][language].format(email=email, mailbox=folder)
+
+
+async def moved(
+    tmail: TMail,
+    user: User,
+    placement: Placement,
+    mailbox: Mailbox,
+    move: Move,
+    preview: Preview,
+) -> Moved | JSONResponse:
+    """Moves the email to the mailbox; or tells the owner what that would do, when the harness
+    asks, and moves nothing."""
+    # What the owner allows: that email, from where it is, to that mailbox
+    digest = digest_of(placement.email_id, sorted(placement.mailbox_ids), mailbox.id, mailbox.name)
+    if preview.asked:
+        return preview.answer(_summary(move, placement, mailbox, preview.language), digest)
+    preview.check(digest)
+    return await tmail.move(user, placement, mailbox)
+
+
 def out_of_spam(placement: Placement) -> None:
     """Refuses to move an email out of spam, which TMail would report as ham."""
     if placement.in_spam:
@@ -117,14 +181,17 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
             f"mailbox named Projects: email_id={EXAMPLE_ID}, "
             'body={"mailbox_name": "Projects"}.'
         ),
-        # The email can be moved back: the owner's consent to write in Mail covers it
-        openapi_extra={"x-twake-risk": "low"},
+        response_model=Moved,
+        # The email can be moved back: the owner's consent to write in Mail covers it. It tells
+        # what it would do, for when the owner is asked.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
     )
     async def move_email(
         email_id: EmailId,
         destination: Destination,
         user: Annotated[User, Depends(caller)],
-    ) -> Moved:
+        preview: Previewing,
+    ) -> Moved | JSONResponse:
         placement = await tmail.placement(user, email_id)
         out_of_spam(placement)
         mailbox = destination.mailbox(placement)
@@ -136,7 +203,7 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
                 detail=f"An email is not moved to the {mailbox.role} mailbox: "
                 f"{SPECIAL[mailbox.role]}.",
             )
-        return await tmail.move(user, placement, mailbox)
+        return await moved(tmail, user, placement, mailbox, "move", preview)
 
     @routes.post(
         "/{email_id}/archive",
@@ -149,12 +216,16 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
             "back with move_email. Example, for an email that list_emails gave with the id "
             f"{EXAMPLE_ID}: email_id={EXAMPLE_ID}."
         ),
-        # The email can be moved back: the owner's consent to write in Mail covers it
-        openapi_extra={"x-twake-risk": "low"},
+        response_model=Moved,
+        # The email can be moved back: the owner's consent to write in Mail covers it. It tells
+        # what it would do, for when the owner is asked.
+        openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
     )
-    async def archive_email(email_id: EmailId, user: Annotated[User, Depends(caller)]) -> Moved:
+    async def archive_email(
+        email_id: EmailId, user: Annotated[User, Depends(caller)], preview: Previewing
+    ) -> Moved | JSONResponse:
         placement = await tmail.placement(user, email_id)
         out_of_spam(placement)
-        return await tmail.move(user, placement, placement.archive())
+        return await moved(tmail, user, placement, placement.archive(), "archive", preview)
 
     return routes

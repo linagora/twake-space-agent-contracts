@@ -6,7 +6,6 @@ mailboxes, and every call goes to the user's personal account."""
 
 import hashlib
 import re
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,6 +17,7 @@ from pydantic.alias_generators import to_camel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
+from twake_space_agent_contracts.text import seen
 
 CORE = "urn:ietf:params:jmap:core"
 MAIL = "urn:ietf:params:jmap:mail"
@@ -67,11 +67,6 @@ _MAILBOXES = ("Mailbox/get", {"ids": None, "properties": MAILBOX_PROPERTIES})
 LEFT_OUT = {"trash", "spam", "junk"}
 SPAM_ROLES = {"spam", "junk"}
 
-# What a reader does not see (Unicode's Cc, Cf and Cs): the control characters but for whitespace,
-# which is collapsed; the format characters, which are invisible and can reorder text, such as
-# bidirectional marks, zero-width spaces and tags; and surrogates left alone, which no text holds
-UNSEEN = {"Cc", "Cf", "Cs"}
-
 
 def _mail_problem(code: str, title: str, detail: str) -> Problem:
     return Problem(status=502, code=code, title=title, detail=detail)
@@ -93,20 +88,15 @@ def _email_not_found(email_id: str) -> Problem:
     )
 
 
-def _seen(text: str) -> str:
-    """The text without what a reader does not see."""
-    return "".join(c for c in text if c.isspace() or unicodedata.category(c) not in UNSEEN)
-
-
 def _line(text: str | None, longest: int = LONGEST_LINE) -> str:
     """Text other people wrote, on one line, without what a reader does not see, cut after
     `longest` characters."""
-    return " ".join(_seen(text or "").split())[:longest]
+    return " ".join(seen(text or "").split())[:longest]
 
 
 def _paragraphs(text: str) -> str:
     """Text other people wrote, without what a reader does not see, its blank runs collapsed."""
-    lines = (" ".join(line.split()) for line in _seen(text).splitlines())
+    lines = (" ".join(line.split()) for line in seen(text).splitlines())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
@@ -330,6 +320,17 @@ class _Place(_Jmap):
     mailbox_ids: dict[str, bool]
 
 
+class _Placed(_Place):
+    """Where an email is, and what tells it apart: its subject, and whom it is from."""
+
+    subject: str | None = None
+    sender: list[_Address] | None = Field(default=None, validation_alias="from")
+
+
+class _Placements(_Jmap):
+    found: list[_Placed] = Field(validation_alias="list")
+
+
 class _Places(_Jmap):
     found: list[_Place] = Field(validation_alias="list")
 
@@ -376,6 +377,24 @@ class ReplyDraft(BaseModel):
     recipients_truncated: bool
     """Whether to or cc gives only the first of the addresses the draft answers."""
     untrusted: ReplyText
+
+
+@dataclass(frozen=True)
+class PreparedReply:
+    """A reply to one of the user's emails as it would go to their Drafts mailbox, but for its
+    text: nothing is written until it is saved."""
+
+    email_id: str
+    """The email it answers."""
+    draft: dict[str, Any]
+    """The email Email/set would create, in JMAP, but for its text."""
+    reply_to_differs: bool
+    """Whether it answers a Reply-To address that the email is not from."""
+    to: list[Address]
+    cc: list[Address]
+    subject: str
+    recipients_truncated: bool
+    """Whether to or cc gives only the first of the addresses the draft answers."""
 
 
 def _lowered(addresses: list[_Address]) -> set[str]:
@@ -527,6 +546,9 @@ class Placement:
     """All the user's own mailboxes."""
     mailbox_ids: list[str]
     """Those the email is in."""
+    subject: str
+    """What others wrote of the email that tells it apart: its subject, and whom it is from."""
+    senders: list[Address]
 
     @property
     def in_spam(self) -> bool:
@@ -795,11 +817,9 @@ class TMail:
             )
         return emails
 
-    async def reply_draft(
-        self, user: User, email_id: str, text: str, reply_all: bool
-    ) -> ReplyDraft:
-        """Prepares a reply to one of the user's emails, if it is in one of their own mailboxes,
-        as a draft in their Drafts mailbox: Email/set creates it there, and nothing sends it."""
+    async def prepare_reply(self, user: User, email_id: str, reply_all: bool) -> PreparedReply:
+        """A reply to one of the user's emails, if it is in one of their own mailboxes, as it
+        would go to their Drafts mailbox, but for its text: this only reads."""
         results = await self._call(
             user,
             _MAILBOXES,
@@ -843,48 +863,65 @@ class TMail:
             "subject": subject,
             "inReplyTo": email.message_id,
             "references": _references(email),
+        }
+        return PreparedReply(
+            email_id=email_id,
+            # James writes an empty list as an empty header: what is empty is left out
+            draft={key: value for key, value in draft.items() if value},
+            # The draft answers a Reply-To address that the email is not from
+            reply_to_differs=not written
+            and bool(_emails(_cleaned(email.reply_to)) - _emails(_cleaned(email.sender))),
+            to=_cleaned(to),
+            cc=_cleaned(cc),
+            subject=_line(subject),
+            recipients_truncated=any(len(header) > MOST_ADDRESSES for header in (to, cc)),
+        )
+
+    async def save_reply(self, user: User, reply: PreparedReply, text: str) -> ReplyDraft:
+        """Creates the reply with its text in the user's Drafts mailbox, with Email/set: nothing
+        sends it."""
+        body = {
             "textBody": [{"partId": "text", "type": "text/plain"}],
             "bodyValues": {"text": {"value": text}},
         }
-        # James writes an empty list as an empty header: what is empty is left out
-        create = {"draft": {key: value for key, value in draft.items() if value}}
-        results = await self._call(user, ("Email/set", {"create": create}))
+        results = await self._call(user, ("Email/set", {"create": {"draft": reply.draft | body}}))
         answer = _parsed(_EmailSet, results["Email/set"], "the draft")
         created = (answer.created or {}).get("draft")
         if created is None:
             refusal = (answer.not_created or {}).get("draft", {}).get("type", "nothing")
             raise _unavailable(f"Mail answered {refusal} to Email/set.")
-        # The draft answers a Reply-To address that the email is not from
-        reply_to_differs = not written and bool(
-            _emails(_cleaned(email.reply_to)) - _emails(_cleaned(email.sender))
-        )
         return ReplyDraft(
-            email_id=email_id,
+            email_id=reply.email_id,
             draft_id=created.id,
-            reply_to_differs=reply_to_differs,
-            recipients_truncated=any(len(header) > MOST_ADDRESSES for header in (to, cc)),
-            untrusted=ReplyText(to=_cleaned(to), cc=_cleaned(cc), subject=_line(subject)),
+            reply_to_differs=reply.reply_to_differs,
+            recipients_truncated=reply.recipients_truncated,
+            untrusted=ReplyText(to=reply.to, cc=reply.cc, subject=reply.subject),
         )
 
     async def placement(self, user: User, email_id: str) -> Placement:
-        """Where one of the user's emails is, if it is in one of their own mailboxes."""
+        """Where one of the user's emails is, if it is in one of their own mailboxes, with what
+        tells it apart."""
+        properties = ["id", "mailboxIds", "subject", "from"]
         results = await self._call(
-            user, _MAILBOXES, ("Email/get", {"ids": [email_id], "properties": ["id", "mailboxIds"]})
+            user, _MAILBOXES, ("Email/get", {"ids": [email_id], "properties": properties})
         )
         mailboxes = _parsed(_Mailboxes, results["Mailbox/get"], "the mailboxes").found
         own = {mailbox.id for mailbox in mailboxes}
-        places = _parsed(_Places, results["Email/get"], "the email").found
+        place = next(
+            (
+                place
+                for place in _parsed(_Placements, results["Email/get"], "the email").found
+                if place.id == email_id
+            ),
+            None,
+        )
         # TMail gives the emails of mailboxes shared with the user too
-        mailbox_ids = [
-            mailbox
-            for place in places
-            if place.id == email_id
-            for mailbox in place.mailbox_ids
-            if mailbox in own
-        ]
-        if not mailbox_ids:
+        mailbox_ids = [mailbox for mailbox in place.mailbox_ids if mailbox in own] if place else []
+        if place is None or not mailbox_ids:
             raise _email_not_found(email_id)
-        return Placement(email_id, mailboxes, mailbox_ids)
+        return Placement(
+            email_id, mailboxes, mailbox_ids, _line(place.subject), _cleaned(place.sender)
+        )
 
     async def move(self, user: User, placement: Placement, mailbox: Mailbox) -> Moved:
         """Moves the email to one of the user's own mailboxes, out of their others. A patch rather
