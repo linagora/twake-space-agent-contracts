@@ -40,9 +40,12 @@ DATA_NOT_INSTRUCTIONS = (
 # A label of a domain name: what is between its dots
 _LABEL = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
 _DOMAIN = re.compile(rf"({_LABEL}\.)*{_LABEL}")
-# What other people wrote keeps no control character, but tabs and line breaks in a text
+# What other people wrote keeps no control character, but tabs and line feeds in a text, where a
+# carriage return, before a line feed or alone, makes a line feed: alone, a terminal would write
+# what follows it over the line
 _LINE_CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _TEXT_CONTROLS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+_CARRIAGE_RETURNS = re.compile(r"\r\n?")
 # The files of the recent view of the Drive web app: out of the trash and of the shared drives
 _RECENT_FILES = {"type": "file", "trashed": False, "dir_id": {"$nin": [SHARED_DRIVES_ID, TRASH_ID]}}
 
@@ -53,8 +56,9 @@ def plain_line(words: str) -> str:
 
 
 def plain_text(text: str) -> str:
-    """A text that someone wrote, without control characters but tabs and line breaks."""
-    return _TEXT_CONTROLS.sub("", text)
+    """A text that someone wrote, without control characters but tabs and line feeds, its line
+    breaks all line feeds."""
+    return _TEXT_CONTROLS.sub("", _CARRIAGE_RETURNS.sub("\n", text))
 
 
 def file_not_found(file_id: str) -> Problem:

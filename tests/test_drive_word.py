@@ -99,6 +99,19 @@ async def test_the_text_a_reader_sees_comes_once(
     )
 
 
+async def test_a_carriage_return_in_a_document_ends_its_line(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    def returned(document: WordDocument) -> None:
+        add_word_xml(document, "<w:p><w:r><w:t>Shown&#13;Written over</w:t></w:r></w:p>")
+
+    boundary.drive.add(text_file("doc", "Doc.docx", content=word(returned), mime=DOCX))
+
+    response = await read_content(client, "doc")
+
+    assert response.json()["untrusted"]["content"] == "Shown\nWritten over"
+
+
 async def test_what_a_reader_does_not_see_is_left_out(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
