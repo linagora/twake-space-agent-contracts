@@ -13,6 +13,8 @@ MMAUDET = space_person("mmaudet")
 SPACE = f"/contracts/v1/space/spaces/{space_id('Design')}"
 ITEM = f"{SPACE}/feed/items/{space_id('Hello')}"
 POST = f"{SPACE}/feed/posts/{space_id('Hello')}"
+BOB = space_person("bob")
+MEMBER = f"{SPACE}/members/{BOB.user_id}"
 THUMBS_UP = {"key": "\N{THUMBS UP SIGN}"}
 # Each operation's method, path, query and body
 OPERATIONS = [
@@ -28,13 +30,23 @@ OPERATIONS = [
     pytest.param("POST", f"{SPACE}/feed/posts", {}, {"text": "Hi"}, id="create_feed_post"),
     pytest.param("PATCH", POST, {}, {"text": "Hi"}, id="update_feed_post"),
     pytest.param("DELETE", POST, {}, None, id="delete_feed_post"),
+    pytest.param(
+        "POST",
+        f"{SPACE}/members",
+        {},
+        {"usernames": ["jmartin"], "role": "viewer"},
+        id="add_space_members",
+    ),
+    pytest.param("PATCH", MEMBER, {}, {"role": "editor"}, id="update_space_member"),
+    pytest.param("DELETE", MEMBER, {}, None, id="remove_space_member"),
 ]
 PARAMETERS = ("method", "path", "params", "body")
 
 
 @pytest.fixture(autouse=True)
 def design(boundary: FakeBoundary) -> None:
-    boundary.space.space("Design", {MMAUDET: "admin"})
+    boundary.space.space("Design", {MMAUDET: "admin", BOB: "viewer"})
+    boundary.space.people(space_person("jmartin"))
 
 
 def hello(boundary: FakeBoundary) -> SpacePost:
@@ -160,6 +172,16 @@ async def test_space_is_called_only_with_the_user_token(
         ),
         pytest.param("PATCH", "PATCH", POST, {"text": "Hi"}, False, id="update_feed_post"),
         pytest.param("DELETE", "DELETE", POST, None, False, id="delete_feed_post"),
+        pytest.param(
+            "POST",
+            "POST",
+            f"{SPACE}/members",
+            {"usernames": ["jmartin"], "role": "viewer"},
+            False,
+            id="add_space_members",
+        ),
+        pytest.param("PATCH", "PATCH", MEMBER, {"role": "editor"}, False, id="update_space_member"),
+        pytest.param("DELETE", "DELETE", MEMBER, None, False, id="remove_space_member"),
     ],
 )
 async def test_a_write_space_fails_is_a_bad_gateway(
@@ -182,4 +204,4 @@ async def test_a_write_space_fails_is_a_bad_gateway(
     assert response.json()["code"] == "space_unavailable"
     sent, at, _ = boundary.space.writes[0]
     assert response.json()["detail"].startswith(f"Space answered 500 to {written} /spaces/")
-    assert (sent, at.startswith(f"/spaces/{post.space}/feed/")) == (written, True)
+    assert (sent, at.startswith(f"/spaces/{post.space}/")) == (written, True)

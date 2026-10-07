@@ -270,6 +270,9 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "create_feed_post": ["space.post.create.v1"],
         "update_feed_post": ["space.post.update.v1"],
         "delete_feed_post": ["space.post.delete.v1"],
+        "add_space_members": ["space.member.add.v1"],
+        "update_space_member": ["space.member.update.v1"],
+        "remove_space_member": ["space.member.remove.v1"],
     }
 
 
@@ -381,6 +384,9 @@ WRITES_NAMED = {
         "create_feed_post": ("post", "publier"),
         "update_feed_post": ("edit", "modifier"),
         "delete_feed_post": ("delete", "supprimer"),
+        "add_space_members": ("add members", "ajouter des membres"),
+        "update_space_member": ("change their roles", "changer leur rôle"),
+        "remove_space_member": ("remove them", "les retirer"),
     },
 }
 
@@ -513,6 +519,9 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "create_feed_post": ("post", True),
         "update_feed_post": ("patch", True),
         "delete_feed_post": ("delete", True),
+        "add_space_members": ("post", True),
+        "update_space_member": ("patch", True),
+        "remove_space_member": ("delete", True),
     }
 
 
@@ -699,6 +708,48 @@ async def test_posting_editing_and_deleting_a_post_are_high_risk_writes(
     assert risks == dict.fromkeys(
         ("create_feed_post", "update_feed_post", "delete_feed_post"), "high"
     )
+
+
+async def test_adding_changing_and_removing_members_are_high_risk_writes(
+    client: AsyncClient,
+) -> None:
+    # Who sees what a space holds, and who manages it, changes: the owner confirms each call
+    document = (await client.get("/openapi.json")).json()
+    writes = ("add_space_members", "update_space_member", "remove_space_member")
+
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, _, operation in operations_of(document)
+        if operation["operationId"] in writes
+    }
+
+    assert risks == dict.fromkeys(writes, "high")
+
+
+async def test_the_bodies_of_the_member_writes_are_whole_and_closed(client: AsyncClient) -> None:
+    # The model gets each body as the document writes it: whole, taking these fields and no other
+    document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
+
+    schemas = {
+        name: operations[name]["requestBody"]["content"]["application/json"]["schema"]
+        for name in ("add_space_members", "update_space_member")
+    }
+
+    assert "requestBody" not in operations["remove_space_member"]
+    assert "$ref" not in json.dumps(schemas)
+    assert {name: sorted(schema["required"]) for name, schema in schemas.items()} == {
+        "add_space_members": ["role", "usernames"],
+        "update_space_member": ["role"],
+    }
+    assert [schema["additionalProperties"] for schema in schemas.values()] == [False, False]
+    usernames = schemas["add_space_members"]["properties"]["usernames"]
+    assert (usernames["minItems"], usernames["maxItems"]) == (1, 20)
+    assert [schema["properties"]["role"]["enum"] for schema in schemas.values()] == [
+        ["viewer", "editor", "admin"]
+    ] * 2
 
 
 @pytest.mark.parametrize("operation_id", ["create_feed_post", "update_feed_post"])

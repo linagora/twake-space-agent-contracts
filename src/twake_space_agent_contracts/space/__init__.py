@@ -23,8 +23,17 @@ EXAMPLE_ITEM = (
 )
 """An item of the feed of a space, as list_feed_items gives it, for the worked calls."""
 
+EXAMPLE_MEMBER = (
+    "space_id=3b9e2c71-5d4a-4f0e-9c8b-1a2d6e7f8091, user_id=c9f0f895-fb98-4b91-a1a4-7f3e2d1c0b5a"
+)
+"""A member of a space, as read_space gives them, for the worked calls."""
+
 SpaceId = Annotated[
     str, Path(pattern=SPACE_ID, description="The space_id of the space, as list_spaces gives it.")
+]
+UserId = Annotated[
+    str,
+    Path(pattern=SPACE_ID, description="The user_id of the member, as read_space gives it."),
 ]
 ItemId = Annotated[
     str,

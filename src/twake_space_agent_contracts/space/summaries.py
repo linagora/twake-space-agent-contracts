@@ -8,10 +8,11 @@ from twake_space_agent_contracts.previews import (
     Language,
     excerpt,
     one_line,
+    person,
     quoted,
     shown_size,
 )
-from twake_space_agent_contracts.space.backend import FeedItem
+from twake_space_agent_contracts.space.backend import FeedItem, Member, Person
 
 Form = Literal["to", "on", "the"]
 """How a summary names an item: as what a reaction goes to, what it is taken back on, or as
@@ -28,6 +29,18 @@ class _Words:
     instead: str
     unedited: str
     delete: str
+    add: str
+    left: str
+    unchanged: str
+    roles: dict[str, str]
+    """Each role, for several people."""
+    role: dict[str, str]
+    """Each role, for one person."""
+    change_role: str
+    admin_powers: str
+    same_role: str
+    remove: str
+    remove_yourself: str
     seen_by: tuple[str, str]
     """Who sees what the user posts: the one member, and more members."""
     react: str
@@ -47,6 +60,17 @@ _WORDS: dict[Language, _Words] = {
         instead="Au lieu de :",
         unedited="{item} dans le fil de {space} dit déjà cela : rien ne change.",
         delete="Supprimer {item} du fil de {space}, définitivement, avec ses réactions",
+        add="Ajouter à {space}, comme {roles}, ces personnes, qui en voient alors tout le"
+        " contenu :",
+        left="Déjà membres, laissés tels quels :",
+        unchanged="Rien ne change dans {space} : ces personnes y sont déjà {roles} :",
+        roles={"viewer": "lecteurs", "editor": "éditeurs", "admin": "administrateurs"},
+        role={"viewer": "lecteur", "editor": "éditeur", "admin": "administrateur"},
+        change_role="Faire de {person} un {role} de {space}, au lieu d'un {former}",
+        admin_powers=" : cette personne ajoute alors, modifie et retire ses membres",
+        same_role="{person} est déjà {role} de {space} : rien ne change.",
+        remove="Retirer {person} de {space} : cette personne n'en voit plus le contenu.",
+        remove_yourself="Te retirer de {space} : tu n'en vois plus le contenu.",
         seen_by=("que son seul membre voit", "que ses {count} membres voient"),
         react="Réagir avec {key} {item} dans {space}, que ses membres voient",
         reacted="Tu as déjà réagi avec {key} {item} dans {space} : rien ne change.",
@@ -74,6 +98,17 @@ _WORDS: dict[Language, _Words] = {
         instead="Instead of:",
         unedited="{item} in the feed of {space} says so already: nothing changes.",
         delete="Delete {item} from the feed of {space}, for good, with its reactions",
+        add="Add to {space}, as {roles}, these people, who then see all it holds:",
+        left="Members already, left as they are:",
+        unchanged="Nothing changes in {space}: these people are {roles} there already:",
+        roles={"viewer": "viewers", "editor": "editors", "admin": "admins"},
+        role={"viewer": "viewer", "editor": "editor", "admin": "admin"},
+        change_role="Make {person} {article} {role} of {space}, instead of {former_article}"
+        " {former}",
+        admin_powers=": they then add, change and remove its members",
+        same_role="{person} is {article} {role} of {space} already: nothing changes.",
+        remove="Remove {person} from {space}: they no longer see what it holds.",
+        remove_yourself="Remove yourself from {space}: you no longer see what it holds.",
         seen_by=("which its only member sees", "which its {count} members see"),
         react="React with {key} {item} in {space}, which its members see",
         reacted="You reacted with {key} {item} in {space} already: nothing changes.",
@@ -195,3 +230,63 @@ def deleting(item: FeedItem, me: str | None, space: str | None, language: Langua
     named = item_named(item, me, "the", language)
     head = words.delete.format(item=named, space=space_named(space, language))
     return _with_text(head, item.body, language)
+
+
+def _people(people: list[Person], language: Language) -> list[str]:
+    """People, each on a line of its own after a tab, by their name and their email."""
+    return [
+        "\t" + (person(found.display_name, found.email, language) or one_line(found.username))
+        for found in people
+    ]
+
+
+def adding_members(
+    space: str | None, role: str, added: list[Person], left: list[Person], language: Language
+) -> str:
+    """What adding people to a space does, as the owner reads it: whom it takes in and as what,
+    and who are members already, or that nothing changes."""
+    words = _WORDS[language]
+    named = {"space": space_named(space, language), "roles": words.roles[role]}
+    if not added:
+        return "\n".join([words.unchanged.format(**named), *_people(left, language)])
+    lines = [words.add.format(**named), *_people(added, language)]
+    if left:
+        lines += [words.left, *_people(left, language)]
+    return "\n".join(lines)
+
+
+def _article(role: str) -> str:
+    """The English article of a role: an admin, an editor, a viewer."""
+    return "an" if role[:1] in "aeiou" else "a"
+
+
+def member_named(member: Member, language: Language) -> str:
+    """A member, as a summary names them: by their name and their email."""
+    return person(member.display_name, member.email, language) or one_line(member.username)
+
+
+def changing_role(member: Member, role: str, space: str | None, language: Language) -> str:
+    """What changing the role of a member does, as the owner reads it: their new role and their
+    former one, and what an admin does, or that nothing changes."""
+    words = _WORDS[language]
+    named = {
+        "person": member_named(member, language),
+        "role": words.role[role],
+        "article": _article(words.role[role]),
+        "space": space_named(space, language),
+    }
+    if member.role == role:
+        return words.same_role.format(**named)
+    former = words.role.get(member.role, one_line(member.role))
+    line = words.change_role.format(**named, former=former, former_article=_article(former))
+    return line + (words.admin_powers if role == "admin" else "") + "."
+
+
+def removing(member: Member, you: bool, space: str | None, language: Language) -> str:
+    """What removing a member does, as the owner reads it: who leaves the space, maybe the user
+    themselves."""
+    words = _WORDS[language]
+    space_name = space_named(space, language)
+    if you:
+        return words.remove_yourself.format(space=space_name)
+    return words.remove.format(person=member_named(member, language), space=space_name)

@@ -63,6 +63,60 @@ def not_a_post(space_id: str, item_id: str) -> Problem:
     )
 
 
+def not_space_admin(space_id: str) -> Problem:
+    return Problem(
+        status=403,
+        code="not_space_admin",
+        title="Not an admin of the space",
+        detail=f"The user is not an admin of space {space_id}: only its admins add, change and"
+        " remove its members, which the user asks one of them to do.",
+    )
+
+
+def person_not_found(usernames: list[str]) -> Problem:
+    return Problem(
+        status=404,
+        code="person_not_found",
+        title="Person not found",
+        detail="The user's organization has no active person whose username is"
+        f" {', '.join(usernames)}: search_organization_people finds its people.",
+        extensions={"usernames": usernames},
+    )
+
+
+def member_exists(space_id: str, members: "list[Member]") -> Problem:
+    return Problem(
+        status=409,
+        code="member_exists",
+        title="Member exists",
+        detail=f"Some of these people are members of space {space_id} already, with another"
+        " role, which update_space_member changes: nobody was added. members names them, when"
+        " the contract tells.",
+        extensions={
+            "members": [{"user_id": member.user_id, "role": member.role} for member in members]
+        },
+    )
+
+
+def member_not_found(space_id: str, user_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="member_not_found",
+        title="Member not found",
+        detail=f"Space {space_id} has no member {user_id}: read_space gives its members.",
+    )
+
+
+def last_admin(space_id: str) -> Problem:
+    return Problem(
+        status=409,
+        code="last_admin",
+        title="Last admin",
+        detail=f"Space {space_id} would be left without an admin, which it keeps at least one"
+        " of: make another member an admin first.",
+    )
+
+
 def feed_item_not_found(space_id: str, item_id: str) -> Problem:
     return Problem(
         status=404,
@@ -552,4 +606,51 @@ class TwakeSpace:
             f"/spaces/{space_id}/feed/posts/{item_id}",
             missing=feed_item_not_found(space_id, item_id),
             refusals={"not_author": not_author(space_id, item_id)},
+        )
+
+    async def add_members(self, user: User, space_id: str, usernames: list[str], role: str) -> None:
+        """Adds people of the user's organization to the space, by username, with one role."""
+        await self._write(
+            user,
+            "POST",
+            f"/spaces/{space_id}/members",
+            missing=space_not_found(space_id),
+            # ldap-rest's refusals, which Space passes on: someone made a member, or whose
+            # account was disabled, since the contract read them
+            refusals={
+                "not_space_admin": not_space_admin(space_id),
+                "MEMBER_EXISTS": member_exists(space_id, []),
+                "USER_NOT_FOUND": person_not_found(usernames),
+            },
+            body={"usernames": usernames, "role": role},
+        )
+
+    async def set_role(self, user: User, space_id: str, user_id: str, role: str) -> None:
+        """Changes the role of a member of the space."""
+        await self._write(
+            user,
+            "PATCH",
+            f"/spaces/{space_id}/members/{user_id}",
+            missing=member_not_found(space_id, user_id),
+            # ldap-rest's refusals, which Space passes on
+            refusals={
+                "not_space_admin": not_space_admin(space_id),
+                "LAST_ADMIN": last_admin(space_id),
+                "MEMBER_NOT_FOUND": member_not_found(space_id, user_id),
+            },
+            body={"role": role},
+        )
+
+    async def remove_member(self, user: User, space_id: str, user_id: str) -> None:
+        """Removes a member from the space: Space takes one another admin removed first for
+        removed."""
+        await self._write(
+            user,
+            "DELETE",
+            f"/spaces/{space_id}/members/{user_id}",
+            missing=member_not_found(space_id, user_id),
+            refusals={
+                "not_space_admin": not_space_admin(space_id),
+                "LAST_ADMIN": last_admin(space_id),
+            },
         )

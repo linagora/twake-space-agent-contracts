@@ -2385,6 +2385,7 @@ SPACE_APPS = ("chat", "tasks", "drive", "mail", "calendar")
 """The apps the deployment provides, by the tab each gives a space."""
 SPACE_KINDS = ("drive", "mailbox", "calendar", "matrix_space", "project")
 """The kind of what each app links to a space, in Space's order."""
+SPACE_ROLES = ("viewer", "editor", "admin")
 DIRECTORY_PAGE = 20
 """How many people a page of the organization's directory holds."""
 
@@ -2647,7 +2648,60 @@ class FakeSpace:
         written = re.fullmatch(r"/feed/posts/([^/]+)", rest)
         if request.method in ("PATCH", "DELETE") and written:
             return self._rewrite(room, caller[0], request.method, written[1], body)
+        member = re.fullmatch(r"/members(?:/([^/]+))?", rest)
+        if member and request.method in ("POST", "PATCH", "DELETE"):
+            return self._members(room, caller[0], request.method, member[1], body)
         return _space_refusal(404, "not_found")
+
+    def _members(
+        self, room: SpaceRoom, user_id: str, method: str, member_id: str | None, body: Any
+    ) -> httpx.Response:
+        """Adds people of the organization to the space, by username, with one role, changes the
+        role of a member, or removes them, as an admin of the space alone, ldap-rest refusing
+        what would leave the space without an admin."""
+        role = body.get("role") if isinstance(body, dict) else None
+        # The path and the body are checked first, then the caller
+        if method != "DELETE" and (not isinstance(role, str) or role not in SPACE_ROLES):
+            return _space_refusal(400, "invalid_request")
+        if method == "PATCH" and set(body) != {"role"}:
+            return _space_refusal(400, "invalid_request")
+        if member_id is not None and not _is_uuid(member_id):
+            return _space_refusal(400, "invalid_request")
+        if room.members[user_id][1] != "admin":
+            return _space_refusal(403, "not_space_admin")
+        if method == "POST":
+            return self._add_members(room, body)
+        if member_id not in room.members:
+            return _space_refusal(404, "not_found")
+        person, former = room.members[member_id]
+        admins = [key for key, (_, held) in room.members.items() if held == "admin"]
+        if former == "admin" and admins == [member_id] and role != "admin":
+            return _space_refusal(409, "LAST_ADMIN")
+        if method == "DELETE":
+            del room.members[member_id]
+        elif isinstance(role, str):
+            room.members[member_id] = (person, role)
+        return httpx.Response(204)
+
+    def _add_members(self, room: SpaceRoom, body: Any) -> httpx.Response:
+        usernames = body.get("usernames") if isinstance(body, dict) else None
+        if (
+            set(body) != {"usernames", "role"}
+            or not isinstance(usernames, list)
+            or not 1 <= len(usernames) <= 100
+            or not all(isinstance(name, str) and name for name in usernames)
+        ):
+            return _space_refusal(400, "invalid_request")
+        found = [self.directory.get(name) for name in usernames]
+        people = [entry[0] for entry in found if entry and entry[1] == room.organization]
+        if len(people) != len(usernames):
+            return _space_refusal(404, "USER_NOT_FOUND")
+        role = body["role"]
+        if any(room.members.get(person.user_id, (person, role))[1] != role for person in people):
+            return _space_refusal(409, "MEMBER_EXISTS")
+        for person in people:
+            room.members[person.user_id] = (person, role)
+        return httpx.Response(204)
 
     def _post(self, room: SpaceRoom, user_id: str, body: Any) -> httpx.Response:
         """A new post of the person, an editor or an admin of the space."""
