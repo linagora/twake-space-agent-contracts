@@ -119,7 +119,8 @@ class EventList(BaseModel):
     time_zone: str | None = Field(
         description="The user's IANA time zone, which the days are read in; null when Calendar "
         "gives none the IANA database has: the days are then read in UTC, and every time is in "
-        "UTC."
+        "UTC, but a recurrence_id UTC cannot show, before year 1 or after year 9999, which comes "
+        "as the event writes it."
     )
     start: datetime = Field(
         description="When the first day starts, with its offset, or in UTC where it counts seconds."

@@ -860,6 +860,11 @@ def alone(*occurrences: list[Any]) -> list[Any]:
         ),
         pytest.param(jcal_event("sync", "0001-01-01", "0001-01-02"), [], id="a day on 0001-01-01"),
         pytest.param(
+            jcal_event("sync", "0001-01-01", "2026-10-10"),
+            [("sync", "0001-01-01", "2026-10-09")],
+            id="days starting on 0001-01-01",
+        ),
+        pytest.param(
             jcal_event("sync", "9999-12-31T23:30:00", "9999-12-31T23:45:00", zone="UTC"),
             [],
             id="a time late on 9999-12-31 in UTC",
