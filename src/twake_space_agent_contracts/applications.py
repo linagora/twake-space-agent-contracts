@@ -224,8 +224,10 @@ APPLICATIONS = (
         domain="drive",
         name=Words(en="Twake Drive", fr="Twake Drive"),
         read=Words(
-            en="list, search and read your files",
-            fr="lister, chercher et lire tes fichiers",
+            en="list, search and read your files, and see the files and folders others shared with"
+            " you",
+            fr="lister, chercher et lire tes fichiers, et voir les fichiers et dossiers que"
+            " d'autres ont partagés avec toi",
         ),
         write=Words(
             en="create text files in your Drive, never in a folder shared with others",

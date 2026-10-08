@@ -403,6 +403,8 @@ READS_NAMED = {
         ("your organization's directory", "l'annuaire de ton organisation"),
         ("the address books shared with you", "les carnets partagés avec toi"),
     ],
+    # Who shared which files and folders with the user, beyond the files themselves
+    "drive": [("others shared with you", "que d'autres ont partagés avec toi")],
     "tasks": [("your projects", "tes projets")],
 }
 
