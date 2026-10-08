@@ -163,6 +163,13 @@ UIDS = [
         ),
         pytest.param(
             "Europe/Paris",
+            ["dtstart", {"tzid": "W. Europe Standard Time"}, "date-time", "2026-10-13T17:00:00"],
+            ["dtend", {"tzid": "Eastern Standard Time"}, "date-time", "2026-10-13T19:00:00"],
+            "mardi 13 octobre 2026 à 17 h (fuseau « W. Europe Standard Time »)",
+            id="from its start alone, its end in another zone the database lacks",
+        ),
+        pytest.param(
+            "Europe/Paris",
             paris("dtstart", "2026-10-13T23:00:00"),
             paris("dtend", "2026-10-14T01:00:00"),
             "du mardi 13 octobre 2026 à 23 h au mercredi 14 octobre 2026 à 1 h",

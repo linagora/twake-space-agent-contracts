@@ -81,12 +81,14 @@ def when_it_takes_place(
     ending = None
     if end is not None and isinstance(end.value, datetime):
         ending = _shown_time(end, zone)[0]
-    # An end written otherwise than its start, floating against zoned, tells nothing sure
-    if ending is not None and (ending.tzinfo is None) != (begins.tzinfo is None):
-        ending = None
-    # A zoned end in the zone of the start, which the preview names for both
-    if ending is not None and ending.tzinfo is not None:
-        ending = ending.astimezone(begins.tzinfo)
+        floating = ending.tzinfo is None
+        # An end written otherwise than its start, floating against zoned, or floating in another
+        # zone, tells nothing sure
+        if floating != (begins.tzinfo is None) or (floating and end.zone != start.zone):
+            ending = None
+        # A zoned end in the zone of the start, which the preview names for both
+        elif not floating:
+            ending = ending.astimezone(begins.tzinfo)
     if ending is None or ending <= begins:
         when = words.at.format(day=first, time=at)
     elif ending.date() == begins.date():

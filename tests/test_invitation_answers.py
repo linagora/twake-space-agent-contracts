@@ -767,6 +767,13 @@ async def test_a_preview_tells_an_invitation_ending_past_the_days_datetime_holds
             " (time zone “Europe/Paris”)",
             id="an end after year 9999 in another zone",
         ),
+        # Neither in a zone the IANA database has: the end tells nothing sure
+        pytest.param(
+            ["dtstart", {"tzid": "W. Europe Standard Time"}, "date-time", "2026-10-13T17:00:00"],
+            ["dtend", {"tzid": "Eastern Standard Time"}, "date-time", "2026-10-13T19:00:00"],
+            "Tuesday 13 October 2026 at 17:00 (time zone “W. Europe Standard Time”)",
+            id="an end floating in another zone",
+        ),
     ],
 )
 @pytest.mark.parametrize(
