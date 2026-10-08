@@ -30,6 +30,10 @@ from twake_space_agent_contracts.zones import midnight
 
 DESCRIPTION_START = 200
 """How much of the start of an event's description a list gives, at most."""
+LONGEST_DAYS = 31
+"""The most days a list reads; and how far before and after them, at most, it reads the
+occurrences that may overlap one crossing their edges, so that a long event does not have Calendar
+expand months of others."""
 
 
 def _within_range(day: date) -> date:
@@ -96,7 +100,8 @@ class ListedEvent(Occurrence):
     conflicts: list[Occurrence] = Field(
         description="The occurrences that overlap it, when both take the user's time: neither "
         "declined by the user, cancelled, nor of whole days. The list may not hold them: one "
-        "limit or needs_action leaves out, or one before or after the days."
+        "limit or needs_action leaves out, or one before or after the days, which are read "
+        f"{LONGEST_DAYS} days around them at most: one further is not named."
     )
     untrusted: ListedEventText
 
@@ -251,7 +256,8 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             ),
         ],
         days: Annotated[
-            int, Query(ge=1, le=31, description="How many days from the first, 1 by default.")
+            int,
+            Query(ge=1, le=LONGEST_DAYS, description="How many days from the first, 1 by default."),
         ] = 1,
         limit: Annotated[
             int, Query(ge=1, le=100, description="How many events to return, 20 by default.")
@@ -272,8 +278,10 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         occurrences = await _occurrences(calendar, user, zone, start, end)
         listed = _listed(occurrences, start, end, needs_action)
         # An occurrence of the days that starts before them or ends after them may overlap others
-        # out of them, which are read as far as it goes
+        # out of them, which are read as far as it goes, LONGEST_DAYS days around them at most
         since, until = _reach(listed[:limit], start, end)
+        since = max(since, midnight(first_day - timedelta(days=LONGEST_DAYS), zone))
+        until = min(until, midnight(first_day + timedelta(days=days + LONGEST_DAYS), zone))
         if (since, until) != (start, end):
             occurrences = await _occurrences(calendar, user, zone, since, until)
             listed = _listed(occurrences, start, end, needs_action)

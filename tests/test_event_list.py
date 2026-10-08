@@ -426,6 +426,29 @@ async def test_an_occurrence_before_the_first_day_that_overlaps_one_of_the_days_
     ]
 
 
+async def test_the_conflicts_out_of_the_days_are_read_31_days_around_them_at_most(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    keep(
+        boundary,
+        jcal_event("leave", "2026-09-01T09:00:00", "2026-12-31T18:00:00"),
+        jcal_event("too-early", "2026-09-07T10:00:00", "2026-09-07T11:00:00"),
+        jcal_event("early", "2026-09-08T10:00:00", "2026-09-08T11:00:00"),
+        jcal_event("late", "2026-11-09T10:00:00", "2026-11-09T11:00:00"),
+        jcal_event("too-late", "2026-11-10T10:00:00", "2026-11-10T11:00:00"),
+    )
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    # From midnight 31 days before the day to midnight 31 days after it, and no further
+    assert [(found["uid"], found["conflicts"]) for found in answer["events"]] == [
+        (
+            "leave",
+            [{"uid": "early", "recurrence_id": None}, {"uid": "late", "recurrence_id": None}],
+        )
+    ]
+
+
 async def test_the_users_own_calendars_are_read_and_no_one_elses(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
