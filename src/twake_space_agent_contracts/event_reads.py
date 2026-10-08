@@ -742,7 +742,9 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         zone = own_zone or ZoneInfo("UTC")
         time_zone = own_zone.key if own_zone is not None else None
         found = await calendar.find_event(user, uid)
-        if found is None or not found.split():
+        # Each event it holds gives its UID, which iCalendar requires, whichever is read: one
+        # without is Calendar answering in an unexpected form, with recurrence_id or without
+        if found is None or not {event.uid for event in found.split()}:
             raise _event_not_found()
         # Its times in zones of the IANA database, as Calendar reads them for the list
         found = found.zoned()

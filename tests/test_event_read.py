@@ -786,6 +786,30 @@ async def test_an_event_the_contract_cannot_read_is_an_answer_in_an_unexpected_f
 
 
 @pytest.mark.parametrize(
+    "recurrence_id",
+    [
+        pytest.param(None, id="the series"),
+        pytest.param("2026-10-12T17:00:00+02:00", id="an occurrence it gives"),
+        pytest.param("2026-10-12T18:00:00+02:00", id="an occurrence it does not give"),
+    ],
+)
+async def test_an_event_holding_one_without_its_uid_is_an_answer_in_an_unexpected_form(
+    client: AsyncClient, boundary: FakeBoundary, recurrence_id: str | None
+) -> None:
+    series = moved(weekly(5), "2026-10-19T17:00:00", "2026-10-19T18:00:00", "2026-10-19T19:00:00")
+    # The occurrence kept apart without its UID, whichever occurrence is read
+    kept = series[2][1]
+    kept[1] = [prop for prop in kept[1] if prop[0] != "uid"]
+    keep(boundary, series)
+    asked = {"uid": POINT} | ({"recurrence_id": recurrence_id} if recurrence_id else {})
+
+    response = await client.get(EVENT, params=asked, headers=AS_MMAUDET)
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "calendar_unavailable"
+
+
+@pytest.mark.parametrize(
     ("failure", "code"),
     [
         pytest.param("down", "calendar_unavailable", id="calendar down"),
