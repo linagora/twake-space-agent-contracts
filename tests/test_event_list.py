@@ -524,6 +524,22 @@ async def test_what_people_wrote_of_an_event_comes_under_untrusted_on_one_line(
     }
 
 
+async def test_an_organizer_longer_than_an_address_can_be_is_not_passed_on(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    longest = email_of("a" * 309)
+    keep(
+        boundary,
+        jcal_event("longest", *at(9), organized_by(longest)),
+        jcal_event("longer", *at(10), organized_by(email_of("a" * 310))),
+    )
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    # An address is 320 characters at most: 64 before the @ and 255 after it
+    assert [found["untrusted"]["organizer"] for found in answer["events"]] == [longest, None]
+
+
 async def test_private_events_are_read_in_full_and_said_private(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:

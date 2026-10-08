@@ -35,6 +35,9 @@ LONGEST_DAYS = 31
 """The most days a list reads; and how far before and after them, at most, it reads the
 occurrences that may overlap one crossing their edges, so that a long event does not have Calendar
 expand months of others."""
+LONGEST_ADDRESS = 320
+"""How long an email address can be, as mail takes one: 64 characters before the @ and 255 after
+it."""
 
 
 def _within_range(day: date) -> date:
@@ -67,7 +70,8 @@ class ListedEventText(EventText):
     )
     organizer: str | None = Field(
         description="The organizer's email address, as their calendar wrote it; null without "
-        "one, or when it gives anything but an address."
+        f"one, or when it gives anything but an address, which is {LONGEST_ADDRESS} characters "
+        "at most."
     )
 
 
@@ -164,7 +168,11 @@ def _placed(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Placed:
             location=one_line(event.location, LONGEST_LOCATION) or None,
             description=one_line(event.description, DESCRIPTION_START) or None,
             # What the organizer's calendar wrote, passed on when it is an address alone
-            organizer=organizer if organizer and EMAIL.fullmatch(organizer) else None,
+            organizer=(
+                organizer
+                if organizer and len(organizer) <= LONGEST_ADDRESS and EMAIL.fullmatch(organizer)
+                else None
+            ),
         ),
     )
     start, end = period.instants(zone)
