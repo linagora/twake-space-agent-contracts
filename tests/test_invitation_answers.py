@@ -719,6 +719,78 @@ async def test_a_preview_tells_an_invitation_ending_past_the_days_datetime_holds
     assert f", {when}, " in told.splitlines()[0]
 
 
+def written_at(index: int, name: str, time: str) -> Callable[[str, str], list[Any]]:
+    """Invitation A as a weekly series in the user's calendar, a time of its VEVENT at that index,
+    the series or the occurrence the organizer moved to 18:00, written at an offset from UTC:
+    neither RFC 5545 nor jCal writes one, nor Calendar as far as is known, but the contract reads
+    it. By the user's participation in each."""
+
+    def series(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
+        event = weekly_series(mmaudet_partstat, moved_partstat)
+        vevent = event[2][index]
+        vevent[1] = [
+            [name, {}, "date-time", time] if prop[0] == name else prop for prop in vevent[1]
+        ]
+        return event
+
+    return series
+
+
+@pytest.mark.parametrize(
+    ("event", "over"),
+    [
+        pytest.param(
+            written_at(0, "dtstart", "0001-01-01T00:00:00+05:00"),
+            False,
+            id="a series starting before year 1 in UTC",
+        ),
+        pytest.param(
+            written_at(1, "recurrence-id", "0001-01-01T00:00:00+05:00"),
+            False,
+            id="an occurrence named before year 1 in UTC",
+        ),
+        pytest.param(
+            written_at(1, "dtend", "9999-12-31T23:00:00-05:00"),
+            False,
+            id="an occurrence ending after year 9999 in UTC",
+        ),
+        pytest.param(
+            written_at(1, "dtend", "0001-01-01T00:00:00+05:00"),
+            True,
+            id="an occurrence ending before year 1 in UTC",
+        ),
+    ],
+)
+@pytest.mark.parametrize("zone", ["Europe/Paris", "America/Los_Angeles", "Pacific/Kiritimati"])
+@pytest.mark.parametrize(("operation", "partstat", "answered_before"), ANSWERED_BEFORE)
+async def test_a_time_at_an_offset_past_the_times_datetime_holds_is_answered_as_any_other(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    operation: str,
+    partstat: str,
+    answered_before: str,
+    zone: str,
+    event: Callable[[str, str], list[Any]],
+    over: bool,
+) -> None:
+    # Read as the first or last time datetime holds, as list_calendar_events reads it: the moved
+    # occurrence would end on 20 October
+    in_zone(boundary, zone)
+    clock.wall = datetime(2026, 10, 14, tzinfo=UTC)
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, event("NEEDS-ACTION", answered_before)
+    )
+
+    _, digest = preview_of(await preview(client, operation, UID, "en", series=True))
+    response = await answer(client, operation, UID, allowed_after(digest), series=True)
+
+    assert response.status_code == 200, response.text
+    assert boundary.calendar.objects[HREF].jcal == event(
+        partstat, answered_before if over else partstat
+    )
+
+
 @pytest.mark.parametrize(
     ("event", "moment"),
     [
