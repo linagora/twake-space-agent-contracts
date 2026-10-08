@@ -165,6 +165,22 @@ def lasting(duration: str) -> Callable[[str, str], list[Any]]:
     return series
 
 
+def lasting_from(start: str, duration: str) -> Callable[[str, str], list[Any]]:
+    """That series, the occurrence the organizer moved starting at that time instead, written at
+    an offset from UTC, and lasting that DURATION; by the user's participation in each."""
+
+    def series(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
+        event = lasting(duration)(mmaudet_partstat, moved_partstat)
+        moved = event[2][1]
+        moved[1] = [
+            ["dtstart", {}, "date-time", start] if prop[0] == "dtstart" else prop
+            for prop in moved[1]
+        ]
+        return event
+
+    return series
+
+
 def days_alone_ending_in_year_1(mmaudet_partstat: str, first_partstat: str) -> list[Any]:
     """The user's copy of the first two days of invitation A as a weekly series of whole days,
     which the organizer invited them to alone, the first ending on 0001-01-01, whose midnight in
@@ -784,6 +800,40 @@ async def test_a_time_at_an_offset_past_the_times_datetime_holds_is_answered_as_
 
     _, digest = preview_of(await preview(client, operation, UID, "en", series=True))
     response = await answer(client, operation, UID, allowed_after(digest), series=True)
+
+    assert response.status_code == 200, response.text
+    assert boundary.calendar.objects[HREF].jcal == event(
+        partstat, answered_before if over else partstat
+    )
+
+
+@pytest.mark.parametrize(
+    ("now", "over"),
+    [
+        pytest.param(datetime(2026, 10, 9, 9, 30, tzinfo=UTC), False, id="as it ends"),
+        pytest.param(datetime(2026, 10, 9, 9, 30, 1, tzinfo=UTC), True, id="after it ends"),
+    ],
+)
+@pytest.mark.parametrize(("operation", "partstat", "answered_before"), ANSWERED_BEFORE)
+async def test_a_duration_counts_from_a_start_at_an_offset_as_written(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    operation: str,
+    partstat: str,
+    answered_before: str,
+    now: datetime,
+    over: bool,
+) -> None:
+    # 739897 days and 14 hours 30 minutes after 0001-01-01 at 00:00 at +05:00, five hours before
+    # the first time UTC holds, is 2026-10-09 at 14:30 at +05:00: 9:30 in UTC
+    event = lasting_from("0001-01-01T00:00:00+05:00", "P739897DT14H30M")
+    clock.wall = now
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, event("NEEDS-ACTION", answered_before)
+    )
+
+    response = await answer(client, operation, UID, series=True)
 
     assert response.status_code == 200, response.text
     assert boundary.calendar.objects[HREF].jcal == event(

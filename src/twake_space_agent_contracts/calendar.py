@@ -203,7 +203,7 @@ def _over(vevent: list[Any], moment: datetime, zone: ZoneInfo) -> bool:
     if "recurrence-id" not in first:
         return False
     end = _event_time(first.get("dtend"))
-    start = _event_time(first.get("dtstart"))
+    start = _event_time(first.get("dtstart"), as_written=True)
     if "dtend" not in first and start is not None:
         end = _end_without_dtend(start, first.get("duration"))
     if end is None:
