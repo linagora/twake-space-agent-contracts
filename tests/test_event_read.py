@@ -776,6 +776,78 @@ async def test_a_user_calendar_does_not_know_is_not_found(client: AsyncClient) -
     assert response.json()["code"] == "calendar_user_not_found"
 
 
+async def test_an_occurrence_kept_apart_is_read_by_its_recurrence_id_as_written_past_year_9999(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # After year 9999 in UTC and in the user's zone, which the list gives as the event writes it
+    keep(boundary, kept_apart_in("America/Los_Angeles", "9999-12-31T23:00:00"))
+
+    event = (await read_event(client, uid=POINT, recurrence_id="9999-12-31T23:00:00-08:00"))[
+        "event"
+    ]
+
+    assert (event["recurrence_id"], event["start"]) == (
+        "9999-12-31T23:00:00-08:00",
+        "2026-10-19T18:00:00+02:00",
+    )
+
+
+def far_and_old(boundary: FakeBoundary) -> None:
+    """Keeps a weekly series of year 9999, named far, and a daily one at midnight in Paris from 30
+    December 1899, named old, of five occurrences each."""
+    for uid, start, end, frequency in (
+        ("far", "9999-01-01T10:00:00", "9999-01-01T11:00:00", "WEEKLY"),
+        ("old", "1899-12-30T00:00:00", "1899-12-30T01:00:00", "DAILY"),
+    ):
+        rule = ["rrule", {}, "recur", {"freq": frequency, "count": 5}]
+        keep(boundary, jcal_event(uid, start, end, rule))
+
+
+@pytest.mark.parametrize(
+    ("uid", "recurrence_id"),
+    [
+        # Which a list from 31 December 9998 reaches
+        pytest.param("far", "9999-01-15T10:00:00+01:00", id="of year 9999"),
+        # Midnight on 1 January 1900 in Paris, then 9 minutes 21 seconds ahead of UTC
+        pytest.param("old", "1899-12-31T23:50:39Z", id="of 1899 in UTC"),
+    ],
+)
+async def test_an_occurrence_its_series_gives_is_read_whatever_its_year(
+    client: AsyncClient, boundary: FakeBoundary, uid: str, recurrence_id: str
+) -> None:
+    far_and_old(boundary)
+
+    event = (await read_event(client, uid=uid, recurrence_id=recurrence_id))["event"]
+
+    assert (event["uid"], event["recurrence_id"], event["start"]) == (
+        uid,
+        recurrence_id,
+        recurrence_id,
+    )
+
+
+@pytest.mark.parametrize(
+    "recurrence_id",
+    [
+        pytest.param("0001-01-01T00:30:00+01:00", id="a time before year 1 in UTC"),
+        pytest.param("9999-12-31T23:00:00-08:00", id="a time after year 9999 in UTC"),
+        pytest.param("0001-01-01", id="the first day"),
+        pytest.param("9999-12-31", id="the last day"),
+    ],
+)
+async def test_an_occurrence_at_the_edges_of_the_years_is_not_found(
+    client: AsyncClient, boundary: FakeBoundary, recurrence_id: str
+) -> None:
+    far_and_old(boundary)
+
+    response = await client.get(
+        EVENT, params={"uid": "far", "recurrence_id": recurrence_id}, headers=AS_MMAUDET
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "event_not_found"
+
+
 @pytest.mark.parametrize(
     "params",
     [
@@ -787,8 +859,6 @@ async def test_a_user_calendar_does_not_know_is_not_found(client: AsyncClient) -
         pytest.param({"uid": POINT, "recurrence_id": "next monday"}, id="neither time nor day"),
         # Which pydantic would read as a count of seconds since 1970
         pytest.param({"uid": POINT, "recurrence_id": "20261019"}, id="a day without its dashes"),
-        pytest.param({"uid": POINT, "recurrence_id": "1899-12-31"}, id="a day before 1900"),
-        pytest.param({"uid": POINT, "recurrence_id": "9999-01-01T00:00:00Z"}, id="after 9998"),
     ],
 )
 async def test_a_uid_or_recurrence_id_in_another_form_is_refused(

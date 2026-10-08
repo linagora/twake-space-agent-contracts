@@ -68,12 +68,6 @@ def _within_range(day: date) -> date:
 FirstDay = Annotated[Day, AfterValidator(_within_range)]
 
 
-def _on_those_days(moment: date | datetime) -> date | datetime:
-    """A time, or a day, on one of the days create_event takes."""
-    _within_range(moment.date() if isinstance(moment, datetime) else moment)
-    return moment
-
-
 # A recurrence_id as list_calendar_events gives it: a day, or a time with its offset or Z, as RFC
 # 3339 writes it, which allows a lowercase t and z
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
@@ -84,8 +78,9 @@ _TIME = re.compile(
 
 def _recurrence_id(written: object) -> object:
     """A recurrence_id as list_calendar_events gives it, read here rather than by pydantic, which
-    reads a count of seconds as a time: a time with its offset or Z, or a day, such as
-    2026-10-19."""
+    reads a count of seconds as a time: a time with its offset or Z, or a day, such as 2026-10-19;
+    of any year datetime holds, as an occurrence kept apart may be named before year 1 or after
+    year 9999 in UTC."""
     if not isinstance(written, str):
         return written
     with contextlib.suppress(ValueError):
@@ -103,9 +98,7 @@ def _recurrence_id(written: object) -> object:
     )
 
 
-RecurrenceId = Annotated[
-    AwareDatetime | Day, BeforeValidator(_recurrence_id), AfterValidator(_on_those_days)
-]
+RecurrenceId = Annotated[AwareDatetime | Day, BeforeValidator(_recurrence_id)]
 
 
 class Occurrence(BaseModel):
@@ -571,6 +564,16 @@ def _is_occurrence_of(event: CalendarEvent, recurrence_id: date | datetime) -> b
     return not isinstance(found.value, datetime) and found.value == recurrence_id
 
 
+def _in_utc_between(since: timedelta, until: timedelta) -> tuple[datetime, datetime] | None:
+    """The times in UTC from one instant since 1970 to another, as datetime holds them: the first
+    or last it holds for one before or after them; None when it holds none of them."""
+    first = datetime.min.replace(tzinfo=UTC) - EPOCH
+    last = datetime.max.replace(tzinfo=UTC) - EPOCH
+    if until < first or last < since:
+        return None
+    return EPOCH + max(since, first), EPOCH + min(until, last)
+
+
 async def _occurrence(
     calendar: Calendar, user: User, found: CalendarEvent, recurrence_id: date | datetime
 ) -> CalendarEvent:
@@ -584,17 +587,20 @@ async def _occurrence(
     series = next((event for event in events if not event.is_occurrence), None)
     if series is None or not series.repeats:
         raise _occurrence_not_found()
+    # As times since 1970, which do not overflow before year 1 or after year 9999 in UTC
     if isinstance(recurrence_id, datetime):
-        start = end = recurrence_id.astimezone(UTC)
+        start = end = recurrence_id - EPOCH
     else:
         # A day, which Calendar reads in UTC as it floats, is read across every zone
-        utc = ZoneInfo("UTC")
-        start = midnight(recurrence_id, utc) - timedelta(hours=14)
-        end = midnight(recurrence_id + timedelta(days=1), utc) + timedelta(hours=14)
-    # Calendar leaves out of a time range an occurrence of no duration that starts when it starts
-    given = await calendar.events_beside(
-        user, found, start - timedelta(seconds=1), end + timedelta(seconds=1)
-    )
+        start = timedelta(days=recurrence_id.toordinal() - EPOCH.toordinal(), hours=-14)
+        end = start + timedelta(days=1, hours=28)
+    # Calendar leaves out of a time range an occurrence of no duration that starts when it starts.
+    # It is asked for times datetime holds alone: a list, which asks it for no others, was given no
+    # occurrence of the series out of them
+    asked = _in_utc_between(start - timedelta(seconds=1), end + timedelta(seconds=1))
+    if asked is None:
+        raise _occurrence_not_found()
+    given = await calendar.events_beside(user, found, *asked)
     for event in given:
         if _holds(event, series.uid) and _is_occurrence_of(event, recurrence_id):
             return event
