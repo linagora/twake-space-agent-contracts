@@ -552,6 +552,52 @@ async def test_a_list_holds_20_events_by_default(
     assert answer["truncated"] is True
 
 
+async def test_needs_action_keeps_the_invitations_waiting_for_an_answer_before_limit_cuts_the_list(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    alice = organized_by(ALICE), attendee(ALICE, "ACCEPTED")
+    keep(
+        boundary,
+        jcal_event(
+            "standup",
+            "2026-10-05T09:00:00",
+            "2026-10-05T09:30:00",
+            ["rrule", {}, "recur", {"freq": "DAILY", "count": 7}],
+        ),
+        jcal_event(
+            "planning",
+            "2026-10-08T14:00:00",
+            "2026-10-08T15:00:00",
+            *alice,
+            attendee(MMAUDET, "NEEDS-ACTION"),
+        ),
+        jcal_event(
+            "retro",
+            "2026-10-09T09:15:00",
+            "2026-10-09T10:00:00",
+            *alice,
+            attendee(MMAUDET, "NEEDS-ACTION"),
+        ),
+    )
+    # The week from Monday 5 October
+    week = {"from": "2026-10-05", "days": "7", "limit": "5"}
+
+    busy = await list_events(client, **week)
+    waiting = await list_events(client, **week, needs_action="true")
+    first = await list_events(client, **week | {"limit": "1", "needs_action": "true"})
+
+    assert [found["uid"] for found in busy["events"]] == ["standup"] * 4 + ["planning"]
+    assert busy["truncated"] is True
+    # A conflict with Friday's standup, which the list leaves out, is told all the same
+    assert [(found["uid"], found["conflicts"]) for found in waiting["events"]] == [
+        ("planning", []),
+        ("retro", [{"uid": "standup", "recurrence_id": "2026-10-09T09:00:00+02:00"}]),
+    ]
+    assert waiting["truncated"] is False
+    assert [found["uid"] for found in first["events"]] == ["planning"]
+    assert first["truncated"] is True
+
+
 @pytest.mark.parametrize("params", REFUSED)
 async def test_days_and_limits_out_of_range_are_refused(
     client: AsyncClient, params: dict[str, str]

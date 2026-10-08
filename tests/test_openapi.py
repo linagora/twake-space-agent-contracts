@@ -599,9 +599,13 @@ async def test_listing_events_takes_a_first_day_and_says_how_many_days_and_event
         "from": True,
         "days": False,
         "limit": False,
+        "needs_action": False,
     }
     assert parameters["days"]["schema"]["default"] == 1
     assert parameters["limit"]["schema"]["default"] == 20
+    # Every occurrence of the days, unless the call keeps the invitations waiting for an answer
+    assert parameters["needs_action"]["schema"]["type"] == "boolean"
+    assert parameters["needs_action"]["schema"]["default"] is False
 
 
 async def test_creating_and_changing_a_contact_are_low_risk_writes(client: AsyncClient) -> None:

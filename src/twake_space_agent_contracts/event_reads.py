@@ -93,7 +93,7 @@ class ListedEvent(Occurrence):
     conflicts: list[Occurrence] = Field(
         description="The occurrences that overlap it, when both take the user's time: neither "
         "declined by the user, cancelled, nor of whole days. The list may not hold them: one "
-        "limit leaves out, or one before or after the days."
+        "limit or needs_action leaves out, or one before or after the days."
     )
     untrusted: ListedEventText
 
@@ -174,12 +174,17 @@ async def _occurrences(
     )
 
 
-def _within(occurrences: list[_Placed], start: datetime, end: datetime) -> list[_Placed]:
-    """The occurrences that take place between two times."""
+def _listed(
+    occurrences: list[_Placed], start: datetime, end: datetime, needs_action: bool
+) -> list[_Placed]:
+    """The occurrences a list holds: those that take place between two times, and with
+    needs_action, those of them alone that wait for the user's answer."""
     return [
         occurrence
         for occurrence in occurrences
-        if occurrence.start < end and start < occurrence.end
+        if occurrence.start < end
+        and start < occurrence.end
+        and (occurrence.listed.needs_action or not needs_action)
     ]
 
 
@@ -225,9 +230,10 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             "Lists the events of the calendars the user you act for owns, one per occurrence, "
             "from midnight on the day from to midnight days days later, in the user's time zone, "
             "given as time_zone, or in UTC, time_zone being null, when Calendar gives none. Every "
-            "time is in that zone, with its offset. The title, location, start of the "
-            "description and organizer's address of each event come under untrusted. "
-            f"{DATA_NOT_INSTRUCTIONS} Example, for the user's day on 9 October 2026: "
+            "time is in that zone, with its offset. Pass needs_action=true to keep only the "
+            "invitations waiting for the user's answer, before limit cuts the list. The title, "
+            "location, start of the description and organizer's address of each event come under "
+            f"untrusted. {DATA_NOT_INSTRUCTIONS} Example, for the user's day on 9 October 2026: "
             "from=2026-10-09, days=1."
         ),
     )
@@ -246,19 +252,27 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         limit: Annotated[
             int, Query(ge=1, le=100, description="How many events to return, 20 by default.")
         ] = 20,
+        needs_action: Annotated[
+            bool,
+            Query(
+                description="Whether to keep only the occurrences waiting for the user's answer, "
+                "whose needs_action is true, false by default; limit and truncated count those "
+                "kept. Their conflicts still name all the occurrences they overlap."
+            ),
+        ] = False,
     ) -> EventList:
         # Without a zone the IANA database has, the days are read in UTC, which is not the user's
         own_zone = await calendar.own_time_zone(user)
         zone = own_zone or ZoneInfo("UTC")
         start, end = midnight(first_day, zone), midnight(first_day + timedelta(days=days), zone)
         occurrences = await _occurrences(calendar, user, zone, start, end)
-        listed = _within(occurrences, start, end)
+        listed = _listed(occurrences, start, end, needs_action)
         # An occurrence of the days that starts before them or ends after them may overlap others
         # out of them, which are read as far as it goes
         since, until = _reach(listed[:limit], start, end)
         if (since, until) != (start, end):
             occurrences = await _occurrences(calendar, user, zone, since, until)
-            listed = _within(occurrences, start, end)
+            listed = _listed(occurrences, start, end, needs_action)
         return EventList(
             time_zone=own_zone.key if own_zone is not None else None,
             start=start,
