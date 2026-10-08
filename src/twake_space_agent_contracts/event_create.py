@@ -292,7 +292,7 @@ def _written(event: CalendarEvent, uid: str) -> WrittenEvent:
         start=period.start,
         end=period.end,
         time_zone=period.zone,
-        all_day=not isinstance(period.start, datetime),
+        all_day=period.all_day,
         busy=event.busy,
         untrusted=EventText(
             title=event.title, location=event.location, description=event.description

@@ -1,7 +1,7 @@
 """calendar.event.read.v1: the events of the user's own calendars, over days of their time zone."""
 
 import re
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
@@ -19,6 +19,7 @@ from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.event_create import EARLIEST, LATEST
 from twake_space_agent_contracts.previews import one_line
 from twake_space_agent_contracts.text import EMAIL
+from twake_space_agent_contracts.zones import midnight
 
 LONGEST_TEXT = 500
 """How much of an event's title and of its location a list gives, at most: all create_event
@@ -115,12 +116,6 @@ class EventList(BaseModel):
     truncated: bool = Field(description="Whether more events are left out than the list holds.")
 
 
-def _midnight(day: date, zone: ZoneInfo) -> datetime:
-    """When the day starts in the zone: at midnight, or, on a day whose midnight the clocks skip,
-    when they go forward."""
-    return datetime.combine(day, time(), zone).astimezone(UTC).astimezone(zone)
-
-
 def _in_zone(moment: date | datetime, zone: ZoneInfo) -> date | datetime:
     """A time in the zone, with its offset, a floating one read in UTC as Calendar reads it; a
     day as it is."""
@@ -129,33 +124,23 @@ def _in_zone(moment: date | datetime, zone: ZoneInfo) -> date | datetime:
     return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(zone)
 
 
-def _instants(period: EventPeriod, zone: ZoneInfo) -> tuple[datetime, datetime]:
-    """When an event starts and ends: whole days from midnight on the first to midnight after the
-    last, in the zone."""
-    first, last = period.start, period.end
-    if isinstance(first, datetime) and isinstance(last, datetime):
-        return first, last
-    return _midnight(first, zone), _midnight(last + timedelta(days=1), zone)
-
-
 def _listed(event: CalendarEvent, period: EventPeriod, zone: ZoneInfo, email: str) -> ListedEvent:
     recurrence_id, my_partstat = event.recurrence_id, event.participation_of(email)
     organizer = event.organizer[1]
     # Twake Calendar lists the organizer among the attendees, whose answer nobody waits for
-    organizing = (organizer or "").lower() == email.lower()
-    status = event.status
+    unanswered = my_partstat == "NEEDS-ACTION" and not event.organized_by(email)
     return ListedEvent(
         uid=event.uid,
         recurrence_id=_in_zone(recurrence_id.value, zone) if recurrence_id else None,
         start=_in_zone(period.start, zone),
         end=_in_zone(period.end, zone),
-        all_day=not isinstance(period.start, datetime),
-        status=status,
+        all_day=period.all_day,
+        status=event.status,
         private=event.private,
         # What the organizer's calendar wrote, passed on when it is an address alone
         organizer=organizer if organizer and EMAIL.fullmatch(organizer) else None,
         my_partstat=my_partstat,
-        needs_action=my_partstat == "NEEDS-ACTION" and not organizing and status != "CANCELLED",
+        needs_action=unanswered and not event.cancelled,
         conflicts=[],
         untrusted=ListedEventText(
             title=one_line(event.title, LONGEST_TEXT) or None,
@@ -227,13 +212,13 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         # Without a zone the IANA database has, the days are read in UTC, which is not the user's
         own_zone = await calendar.own_time_zone(user)
         zone = own_zone or ZoneInfo("UTC")
-        start, end = _midnight(first_day, zone), _midnight(first_day + timedelta(days=days), zone)
+        start, end = midnight(first_day, zone), midnight(first_day + timedelta(days=days), zone)
         found = await calendar.events_between(user, start.astimezone(UTC), end.astimezone(UTC))
         # Occurrences without their series come whatever their days
         within = []
         for event in found:
             period = event.period
-            first, last = _instants(period, zone)
+            first, last = period.instants(zone)
             if first < end and last > start:
                 within.append((first, last, _listed(event, period, zone, user.email)))
         events = _with_conflicts(sorted(within, key=lambda found: found[0]))

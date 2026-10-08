@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
-from twake_space_agent_contracts.zones import JCAL_TIME, vtimezone, zone_named
+from twake_space_agent_contracts.zones import JCAL_TIME, midnight, vtimezone, zone_named
 
 # How esn-sabre (2.4.6 and later) writes UTC times in its JSON free/busy
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
@@ -70,6 +70,12 @@ def _is_component(value: Any) -> bool:
     )
 
 
+def _is_attendee(prop: list[Any], email: str) -> bool:
+    """Whether a property of an event lists that user among its attendees. Addresses compare
+    lowercased, as sabre's iTIP broker compares them."""
+    return prop[0] == "attendee" and str(prop[3]).lower() == f"mailto:{email.lower()}"
+
+
 @dataclass(frozen=True)
 class EventTime:
     """When an event starts or ends, as it writes it: a day, for an event of whole days; else a
@@ -90,6 +96,19 @@ class EventPeriod:
     end: date | datetime
     zone: str | None
     """The zone the event names, UTC for times in UTC; None for whole days."""
+
+    @property
+    def all_day(self) -> bool:
+        """Whether the event takes whole days rather than times."""
+        return not isinstance(self.start, datetime)
+
+    def instants(self, zone: ZoneInfo) -> tuple[datetime, datetime]:
+        """When the event starts and ends: its times, or whole days from midnight on the first to
+        midnight after the last, in the zone they are read in."""
+        first, last = self.start, self.end
+        if isinstance(first, datetime) and isinstance(last, datetime):
+            return first, last
+        return midnight(first, zone), midnight(last + timedelta(days=1), zone)
 
 
 def _event_time(prop: list[Any] | None) -> EventTime | None:
@@ -204,6 +223,11 @@ class CalendarEvent:
             address if isinstance(address, str) else None,
         )
 
+    def organized_by(self, email: str) -> bool:
+        """Whether that user organizes the event. Addresses compare lowercased, as sabre's iTIP
+        broker compares them."""
+        return (self.organizer[1] or "").lower() == email.lower()
+
     @property
     def starts(self) -> EventTime | None:
         return _event_time(self._prop("dtstart"))
@@ -228,12 +252,10 @@ class CalendarEvent:
     def participation_of(self, email: str) -> Participation | None:
         """The participation of that user, as the event lists them among its attendees,
         NEEDS-ACTION when it does not say or not in the words of iCalendar, which reads it so;
-        None when it does not list them. Addresses compare lowercased, as sabre's iTIP broker
-        compares them."""
-        address = f"mailto:{email.lower()}"
+        None when it does not list them."""
         for vevent in self._vevents():
             for prop in vevent[1]:
-                if prop[0] == "attendee" and str(prop[3]).lower() == address:
+                if _is_attendee(prop, email):
                     partstat = prop[1].get("partstat")
                     answer = partstat.upper() if isinstance(partstat, str) else ""
                     return _PARTICIPATIONS.get(answer, "NEEDS-ACTION")
@@ -276,16 +298,15 @@ class CalendarEvent:
         organize it, whom Twake Calendar lists among its attendees too, as its chair. Addresses
         compare lowercased, as sabre's iTIP broker compares them."""
         email = email.lower()
-        if (self.organizer[1] or "").lower() == email:
+        if self.organized_by(email):
             return None
-        address = f"mailto:{email}"
         jcal = copy.deepcopy(self.jcal)
         invited = False
         for component in jcal[2]:
             if component[0] != "vevent":
                 continue
             for prop in component[1]:
-                if prop[0] == "attendee" and str(prop[3]).lower() == address:
+                if _is_attendee(prop, email):
                     prop[1]["partstat"] = "ACCEPTED"
                     invited = True
         return CalendarEvent(self.href, jcal) if invited else None
@@ -346,6 +367,26 @@ def new_event(
             ),
         ],
     ]
+
+
+def _reported(found: Any, what: str) -> list[CalendarEvent]:
+    """The events esn-sabre answers a REPORT with, by their hrefs and their jCal, whose components
+    are checked; any other form is a problem, which names what was asked for."""
+    try:
+        items = [
+            (item["_links"]["self"]["href"], item["data"])
+            for item in found["_embedded"]["dav:item"]
+        ]
+    except (KeyError, TypeError) as error:
+        raise _unavailable(f"Calendar gave {what} in an unexpected form.") from error
+    for href, jcal in items:
+        if not (
+            isinstance(href, str)
+            and _is_component(jcal)
+            and all(_is_component(component) for component in jcal[2])
+        ):
+            raise _unavailable(f"Calendar gave {what} in an unexpected form.")
+    return [CalendarEvent(href, jcal) for href, jcal in items]
 
 
 class Calendar:
@@ -497,25 +538,12 @@ class Calendar:
                     "match": {"start": start.strftime(SABRE_TIME), "end": end.strftime(SABRE_TIME)}
                 },
             )
-            try:
-                items = [
-                    (item["_links"]["self"]["href"], item["data"])
-                    for item in found["_embedded"]["dav:item"]
-                ]
-            except (KeyError, TypeError) as error:
-                raise _unavailable("Calendar gave the events in an unexpected form.") from error
-            for href, jcal in items:
-                if not (
-                    isinstance(href, str)
-                    and _is_component(jcal)
-                    and all(_is_component(component) for component in jcal[2])
-                ):
-                    raise _unavailable("Calendar gave the events in an unexpected form.")
-                events += [
-                    CalendarEvent(href, [jcal[0], jcal[1], [component]])
-                    for component in jcal[2]
-                    if component[0] == "vevent"
-                ]
+            events += [
+                CalendarEvent(item.href, [item.jcal[0], item.jcal[1], [component]])
+                for item in _reported(found, "the events")
+                for component in item.jcal[2]
+                if component[0] == "vevent"
+            ]
         return events
 
     async def find_event(
@@ -529,18 +557,10 @@ class Calendar:
         )
         if found is None:
             return None
-        try:
-            item = found["_embedded"]["dav:item"][0]
-            href, jcal = item["_links"]["self"]["href"], item["data"]
-        except (IndexError, KeyError, TypeError) as error:
-            raise _unavailable("Calendar gave the event in an unexpected form.") from error
-        if not (
-            isinstance(href, str)
-            and _is_component(jcal)
-            and all(_is_component(component) for component in jcal[2])
-        ):
+        items = _reported(found, "the event")
+        if not items:
             raise _unavailable("Calendar gave the event in an unexpected form.")
-        return CalendarEvent(href, jcal)
+        return items[0]
 
     async def add_event(
         self, user: User, uid: str, jcal: list[Any], user_id: str | None = None

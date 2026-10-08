@@ -1,7 +1,7 @@
-"""IANA time zones: the names the contracts take, and how iCalendar describes one for the times of
-an event."""
+"""IANA time zones: the names the contracts take, when a day starts in one, and how iCalendar
+describes one for the times of an event."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -28,6 +28,12 @@ def known_zone(name: str) -> str:
     if zone_named(name) is None:
         raise ValueError(f"{name} is not an IANA time zone, such as Europe/Paris")
     return name
+
+
+def midnight(day: date, zone: ZoneInfo) -> datetime:
+    """When the day starts in the zone: at midnight, or, on a day whose midnight the clocks skip,
+    when they go forward."""
+    return datetime.combine(day, time(), zone).astimezone(UTC).astimezone(zone)
 
 
 def _utc_offset(offset: timedelta) -> str:
