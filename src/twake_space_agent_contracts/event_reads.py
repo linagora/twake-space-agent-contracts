@@ -53,6 +53,7 @@ MOST_EXCLUDED = 100
 MOST_EXCEPTIONS = 100
 """How many of the occurrences the calendar keeps apart from their series a read gives, at
 most."""
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def _within_range(day: date) -> date:
@@ -71,7 +72,7 @@ def _on_those_days(moment: date | datetime) -> date | datetime:
     return moment
 
 
-OccurrenceStart = Annotated[AwareDatetime | Day, AfterValidator(_on_those_days)]
+RecurrenceId = Annotated[AwareDatetime | Day, AfterValidator(_on_those_days)]
 
 
 class Occurrence(BaseModel):
@@ -219,8 +220,8 @@ class Recurrence(BaseModel):
         "for the last of them."
     )
     excluded: list[datetime | date] = Field(
-        description="The occurrences it leaves out, by the recurrence_id they would have, by "
-        f"start, the first {MOST_EXCLUDED} at most."
+        description="The occurrences it leaves out, by the recurrence_id they would have, once "
+        f"each, by the instant they name, the first {MOST_EXCLUDED} at most."
     )
     excluded_truncated: bool = Field(
         description=f"Whether it leaves out more occurrences than the {MOST_EXCLUDED} given."
@@ -231,8 +232,8 @@ class EventDetail(_Facts):
     """An event of the user's calendars in full."""
 
     recurrence: Recurrence | None = Field(
-        description="How it repeats; null for an event that does not, or for one occurrence of a "
-        "series."
+        description="How its rule, its RRULE, repeats it; null for an event without one, or for "
+        "one occurrence of a series."
     )
     description_truncated: bool = Field(
         description=f"Whether the description is cut at {LONGEST_DESCRIPTION} characters."
@@ -337,9 +338,11 @@ def _facts(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Facts:
     )
 
 
-def _instant(moment: date | datetime, zone: ZoneInfo) -> datetime:
-    """When a time or a day starts in the zone, which orders them."""
-    return moment if isinstance(moment, datetime) else midnight(moment, zone)
+def _instant(moment: date | datetime, zone: ZoneInfo) -> timedelta:
+    """When a time or a day starts in the zone, as the time since 1970 in UTC, which orders them
+    and tells them apart: two times of one zone compare by their clock alone, which shows the hour
+    the clocks go back twice."""
+    return (moment if isinstance(moment, datetime) else midnight(moment, zone)) - EPOCH
 
 
 def _listed_text(event: CalendarEvent) -> ListedEventText:
@@ -365,15 +368,19 @@ def _placed(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Placed:
     return _Placed(start, end, takes_time, listed)
 
 
+def _left_out(event: CalendarEvent, zone: ZoneInfo) -> list[date | datetime]:
+    """The occurrences a series leaves out, by the recurrence_id they would have."""
+    return [_named(time.value, zone) for time in event.excluded]
+
+
 def _recurrence(event: CalendarEvent, zone: ZoneInfo) -> Recurrence | None:
     """How a series repeats, in the zone of the answer; None for an event that does not."""
     rule = event.rule
     if rule is None:
         return None
-    excluded = sorted(
-        {_named(time.value, zone) for time in event.excluded},
-        key=lambda moment: _instant(moment, zone),
-    )
+    # One per instant, an EXDATE the series repeats or names in another zone given once
+    by_instant = {_instant(moment, zone): moment for moment in _left_out(event, zone)}
+    excluded = [by_instant[instant] for instant in sorted(by_instant)]
     return Recurrence(
         frequency=rule.frequency,
         interval=rule.interval,
@@ -662,7 +669,7 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             ),
         ],
         recurrence_id: Annotated[
-            OccurrenceStart | None,
+            RecurrenceId | None,
             Query(
                 description="Which occurrence of a series to read, by the recurrence_id "
                 "list_calendar_events gives it: an RFC 3339 time with its offset, or a day, such "

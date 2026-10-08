@@ -514,6 +514,24 @@ async def test_a_series_gives_the_first_100_occurrences_it_leaves_out_or_keeps_a
     assert answer["exceptions_truncated"] is True
 
 
+async def test_the_occurrences_left_out_in_the_hour_the_clocks_repeat_are_told_apart(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    hourly = jcal_event(
+        POINT,
+        "2026-10-24T22:30:00",
+        "2026-10-24T22:45:00",
+        ["rrule", {}, "recur", {"freq": "HOURLY"}],
+        # 02:30 in Paris twice, the night the clocks go back: an hour apart, the later first
+        ["exdate", {}, "date-time", "2026-10-25T01:30:00Z", "2026-10-25T00:30:00Z"],
+    )
+    keep(boundary, hourly)
+
+    recurrence = (await read_event(client, uid=POINT))["event"]["recurrence"]
+
+    assert recurrence["excluded"] == ["2026-10-25T02:30:00+02:00", "2026-10-25T02:30:00+01:00"]
+
+
 async def test_an_occurrence_a_series_leaves_out_is_named_as_its_recurrence_id_never_moved(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
