@@ -12,9 +12,10 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import parse_qs, unquote
+from zoneinfo import ZoneInfo
 
 import httpx
 import jwt
@@ -162,14 +163,147 @@ def is_calendar_object(jcal: list[Any]) -> bool:
     )
 
 
+# A calendar of a home, whose events in a time range esn-sabre gives to a JSON REPORT
+CALENDAR = re.compile(r"/dav/calendars/[^/]+/[^/]+\.json")
+# How esn-sabre takes the bounds of a time range, and writes UTC times in jCal
+SABRE_RANGE = "%Y%m%dT%H%M%SZ"
+JCAL_UTC = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def _local(prop: list[Any]) -> datetime:
+    """The time of a property, as sabre/vobject reads it: in its zone, or, a day or a floating
+    time, in UTC."""
+    moment = datetime.fromisoformat(prop[3])
+    if moment.tzinfo is None:
+        zone = prop[1].get("tzid")
+        moment = moment.replace(tzinfo=ZoneInfo(zone) if zone else UTC)
+    return moment
+
+
+def _moment(prop: list[Any]) -> datetime:
+    return _local(prop).astimezone(UTC)
+
+
+def _has(component: list[Any], name: str) -> bool:
+    return any(prop[0] == name for prop in component[1])
+
+
+def _in_utc(prop: list[Any]) -> list[Any]:
+    """A property as sabre/vobject expands it: a time in UTC, without its zone; a day as it is."""
+    if prop[2] != "date-time":
+        return prop
+    params = {name: value for name, value in prop[1].items() if name != "tzid"}
+    times = [_moment([prop[0], prop[1], prop[2], value]).strftime(JCAL_UTC) for value in prop[3:]]
+    return [prop[0], params, prop[2], *times]
+
+
+def _all_in_utc(component: list[Any]) -> list[Any]:
+    """A component as sabre/vobject expands it: its times, and those of its own, in UTC."""
+    return [
+        component[0],
+        [_in_utc(prop) for prop in component[1]],
+        [_all_in_utc(inner) for inner in component[2]],
+    ]
+
+
+def _duration(written: str) -> timedelta:
+    """A duration of weeks, days, hours, minutes and seconds, such as PT1H30M."""
+    found = re.fullmatch(r"P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", written)
+    assert found is not None, written
+    weeks, days, hours, minutes, seconds = (int(part or 0) for part in found.groups())
+    return timedelta(weeks=weeks, days=days, hours=hours, minutes=minutes, seconds=seconds)
+
+
+def _times(vevent: list[Any]) -> tuple[datetime, datetime]:
+    """When an event starts and ends in UTC, as sabre/vobject compares it to a time range: without
+    an end, after its duration; without either, a day lasts until the next one, and a time not at
+    all."""
+    props = {prop[0]: prop for prop in vevent[1]}
+    start = _moment(props["dtstart"])
+    if "dtend" in props:
+        return start, _moment(props["dtend"])
+    if "duration" in props:
+        return start, start + _duration(props["duration"][3])
+    return start, (start + timedelta(days=1) if props["dtstart"][2] == "date" else start)
+
+
+def _takes_place(vevent: list[Any], start: datetime, end: datetime) -> bool:
+    first, last = _times(vevent)
+    return first < end and last > start
+
+
+def _at(prop: list[Any], name: str, moment: datetime) -> list[Any]:
+    """A property of that name at a UTC time, as sabre/vobject writes an occurrence: in UTC, or
+    its day for a day."""
+    if prop[2] == "date":
+        return [name, {}, "date", moment.date().isoformat()]
+    return [name, {}, "date-time", moment.strftime(JCAL_UTC)]
+
+
+def _occurrences(series: list[list[Any]], end: datetime) -> list[list[Any]]:
+    """The occurrences of a series that start before a UTC time, as sabre/vobject expands it: each
+    time its daily or weekly RRULE repeats it, at the same time of day in its zone, but those an
+    EXDATE or a moved occurrence takes out, with their start as their RECURRENCE-ID; then the
+    moved occurrences, as they are."""
+    master = next(vevent for vevent in series if not _has(vevent, "recurrence-id"))
+    moved = [vevent for vevent in series if vevent is not master]
+    props = {prop[0]: prop for prop in master[1]}
+    rule = props["rrule"][3]
+    step = timedelta(days=7 if rule["freq"] == "WEEKLY" else 1) * rule.get("interval", 1)
+    taken_out = {
+        _moment([prop[0], prop[1], prop[2], value])
+        for prop in master[1]
+        if prop[0] == "exdate"
+        for value in prop[3:]
+    } | {_moment(prop) for vevent in moved for prop in vevent[1] if prop[0] == "recurrence-id"}
+    first, last = _times(master)
+    kept = [prop for prop in master[1] if prop[0] not in ("dtstart", "dtend", "rrule", "exdate")]
+    occurrences = []
+    local, made = _local(props["dtstart"]), 0
+    while local.astimezone(UTC) < end and made < rule.get("count", made + 1):
+        start = local.astimezone(UTC)
+        if start not in taken_out:
+            times = [_at(props["dtstart"], "dtstart", start)]
+            if "dtend" in props:
+                times.append(_at(props["dtend"], "dtend", start + (last - first)))
+            recurrence_id = _at(props["dtstart"], "recurrence-id", start)
+            occurrences.append(_all_in_utc(["vevent", [*kept, *times, recurrence_id], master[2]]))
+        local, made = local + step, made + 1
+    return occurrences + [_all_in_utc(vevent) for vevent in moved]
+
+
+def expanded(jcal: list[Any], start: datetime, end: datetime) -> list[Any] | None:
+    """A calendar object as esn-sabre answers a time range with it, from sabre/vobject's
+    expansion, with no VTIMEZONE: None unless one of its events takes place then. Its events, and
+    occurrences of a series, that do, their times in UTC. Occurrences without their series, as an
+    invitation to some occurrences of a series leaves them, sabre/vobject does not expand: esn-sabre
+    gives them all as they are, those of other days too, but for their start and end in UTC."""
+    vevents = [component for component in jcal[2] if component[0] == "vevent"]
+    if all(_has(vevent, "recurrence-id") for vevent in vevents):
+        if not any(_takes_place(vevent, start, end) for vevent in vevents):
+            return None
+        ends_in_utc = [
+            ["vevent", [_in_utc(p) if p[0] in ("dtstart", "dtend") else p for p in v[1]], v[2]]
+            for v in vevents
+        ]
+        return [jcal[0], jcal[1], ends_in_utc]
+    if any(_has(vevent, "rrule") for vevent in vevents):
+        found = _occurrences(vevents, end)
+    else:
+        found = [_all_in_utc(vevent) for vevent in vevents]
+    kept = [vevent for vevent in found if _takes_place(vevent, start, end)]
+    return [jcal[0], jcal[1], kept] if kept else None
+
+
 class FakeCalendar:
     """The Calendar side service, as the contracts go through it with the bearer's token.
 
     The user lookup by email; the user's settings, of which their time zone, always given, the
     deployment's when they set none; the JSON free/busy of esn-sabre, which leaves out the events
-    whose UIDs it is given, with times written as esn-sabre writes them, 20261006T150000Z; and the
+    whose UIDs it is given, with times written as esn-sabre writes them, 20261006T150000Z; the
     user's own events, found by UID with esn-sabre's JSON REPORT, and written back, or added to
-    their default calendar, with PUT.
+    their default calendar, with PUT; and the calendars of their home, in JSON, with the events of
+    one of them in a time range, expanded as sabre/vobject expands them.
     """
 
     def __init__(self) -> None:
@@ -190,6 +324,9 @@ class FakeCalendar:
         self.free_busy_requests: list[dict[str, Any]] = []
         self.objects: dict[str, CalendarObject] = {}
         """Events by href, as esn-sabre writes it: without the /dav of the side service."""
+        self.subscriptions: dict[str, str] = {}
+        """The calendars of others that users subscribe to, by their path in the subscriber's
+        home: the path of the calendar each shows."""
         self.writes: list[str] = []
         """The hrefs written, in order."""
         self.failing_writes: Literal["landed", "lost"] | None = None
@@ -222,8 +359,14 @@ class FakeCalendar:
             return self._configurations(request, caller)
         if request.method == "POST" and request.url.path == "/dav/calendars/freebusy":
             return self._free_busy(request, self.users.get(caller))
+        # esn-sabre answers a REPORT on a calendar home with the event of a UID, and on one of its
+        # calendars with the events of a time range
+        if request.method == "REPORT" and CALENDAR.fullmatch(request.url.path):
+            return self._events_between(request, self.users.get(caller))
         if request.method == "REPORT" and request.url.path.endswith(".json"):
             return self._find_by_uid(request, self.users.get(caller))
+        if request.method == "GET" and request.url.path.startswith("/dav/calendars/"):
+            return self._calendars(request, self.users.get(caller))
         if request.method == "PUT" and request.url.path.startswith("/dav/calendars/"):
             return self._write(request, self.users.get(caller))
         if request.url.path.startswith("/dav/addressbooks/") or request.url.path.startswith(
@@ -270,6 +413,80 @@ class FakeCalendar:
                 item = {"_links": {"self": {"href": href}}, "etag": '"1"', "data": stored.jcal}
                 return httpx.Response(200, json={"_embedded": {"dav:item": [item]}})
         return httpx.Response(404)
+
+    def _own_calendars(self, user: str) -> list[str]:
+        """The calendars of the user's home they own: their default one, whose id esn-sabre makes
+        their own, and each that holds one of their events."""
+        home = f"/calendars/{user}/"
+        held = {
+            posixpath.dirname(href)
+            for href, stored in self.objects.items()
+            if stored.owner == user and href.startswith(home)
+        }
+        return sorted(held | {home + user})
+
+    def _subscriptions_of(self, user: str) -> list[str]:
+        return [path for path in self.subscriptions if path.startswith(f"/calendars/{user}/")]
+
+    def _calendars(self, request: httpx.Request, user: str | None) -> httpx.Response:
+        """The calendars of the caller's home, as esn-sabre lists them in JSON: those they own and
+        those they subscribe to, or those they own alone with personal=true."""
+        if request.headers.get("accept") != "application/json":
+            return httpx.Response(406)
+        if user is None or request.url.path != f"/dav/calendars/{user}.json":
+            return httpx.Response(403)
+        personal = request.url.params.get("personal")
+        calendars = self._own_calendars(user) if personal in (None, "true") else []
+        if personal is None:
+            calendars += self._subscriptions_of(user)
+        listed = [
+            {
+                "_links": {"self": {"href": f"{calendar}.json"}},
+                "dav:name": posixpath.basename(calendar),
+            }
+            for calendar in calendars
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "_links": {"self": {"href": f"/calendars/{user}.json"}},
+                "_embedded": {"dav:calendar": listed},
+            },
+        )
+
+    def _events_between(self, request: httpx.Request, user: str | None) -> httpx.Response:
+        """The events of one of the caller's calendars that take place in a time range, as
+        esn-sabre answers its JSON REPORT: each calendar object that has some, expanded."""
+        if request.headers.get("accept") != "application/json":
+            return httpx.Response(406)
+        calendar = request.url.path.removeprefix("/dav").removesuffix(".json")
+        if user is None or calendar not in self._own_calendars(user) + self._subscriptions_of(user):
+            return httpx.Response(403)
+        # A subscription shows the events of the calendar subscribed to
+        calendar = self.subscriptions.get(calendar, calendar)
+        match = json.loads(request.content).get("match") or {}
+        try:
+            start, end = (
+                datetime.strptime(match[bound], SABRE_RANGE).replace(tzinfo=UTC)
+                for bound in ("start", "end")
+            )
+        except (KeyError, TypeError, ValueError):
+            return httpx.Response(400)
+        items = []
+        for href, stored in self.objects.items():
+            if posixpath.dirname(href) != calendar:
+                continue
+            found = expanded(stored.jcal, start, end)
+            if found is not None:
+                link = {"self": {"href": href}}
+                items.append({"_links": link, "etag": '"1"', "data": found, "status": 200})
+        return httpx.Response(
+            200,
+            json={
+                "_links": {"self": {"href": f"{calendar}.json"}},
+                "_embedded": {"dav:item": items},
+            },
+        )
 
     def _write(self, request: httpx.Request, user: str | None) -> httpx.Response:
         href = request.url.path.removeprefix("/dav")

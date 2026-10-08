@@ -13,6 +13,7 @@ from twake_space_agent_contracts import (
     drive_create,
     drive_files,
     event_create,
+    event_reads,
     freebusy,
     invitations,
     projects,
@@ -81,6 +82,7 @@ def _calendar(context: Context) -> list[APIRouter]:
     calendar = Calendar(context.settings.calendar_url, context.http)
     return [
         freebusy.router(calendar, context.caller),
+        event_reads.router(calendar, context.caller),
         invitations.router(calendar, context.caller),
         event_create.router(calendar, context.caller),
     ]
@@ -171,8 +173,10 @@ APPLICATIONS = (
         domain="calendar",
         name=Words(en="Twake Calendar", fr="Twake Agenda"),
         read=Words(
-            en="see your free and busy times in your calendars",
-            fr="voir tes créneaux libres et occupés dans tes agendas",
+            en="see your free and busy times and read your events, private ones included, in your"
+            " calendars",
+            fr="voir tes créneaux libres et occupés et lire tes événements, privés compris, dans"
+            " tes agendas",
         ),
         write=Words(
             en="accept the invitations you received, which tells their organizer, and add events"

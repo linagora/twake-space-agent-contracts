@@ -2,9 +2,10 @@
 
 import copy
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, get_args
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -18,6 +19,9 @@ from twake_space_agent_contracts.zones import JCAL_TIME, vtimezone, zone_named
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
 # The properties of an event that repeats, or of one occurrence of a series
 RECURRENCE = {"rrule", "rdate", "recurrence-id"}
+# How long an event lasts, as iCalendar writes it (RFC 5545, 3.3.6): weeks, or days then hours,
+# minutes and seconds
+DURATION = re.compile(r"\+?P(?:(\d+)W|(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?)")
 # Who wrote the events the contracts add, as iCalendar asks every calendar to say
 PRODID = "-//Linagora//Twake Space agent contracts//EN"
 INVITATION_UID = (
@@ -26,6 +30,13 @@ INVITATION_UID = (
 )
 """Where agents find the UID of an invitation, which accept_invitation takes and read_freebusy
 may leave out."""
+
+EventStatus = Literal["TENTATIVE", "CONFIRMED", "CANCELLED"]
+"""Whether an event takes place, in the words iCalendar gives its organizer."""
+_STATUSES: dict[str, EventStatus] = {status: status for status in get_args(EventStatus)}
+Participation = Literal["NEEDS-ACTION", "ACCEPTED", "DECLINED", "TENTATIVE", "DELEGATED"]
+"""An attendee's answer to an event, in the words iCalendar gives it."""
+_PARTICIPATIONS: dict[str, Participation] = {answer: answer for answer in get_args(Participation)}
 
 
 class BusySlot(BaseModel):
@@ -103,6 +114,24 @@ def _event_time(prop: list[Any] | None) -> EventTime | None:
     return EventTime(time, tzid if isinstance(tzid, str) and tzid else None)
 
 
+def _end_without_dtend(start: EventTime, duration: list[Any] | None) -> EventTime | None:
+    """When an event without a DTEND ends, as iCalendar reads it: after its DURATION; without one,
+    after its day, or when it starts. None for a duration in any other form, or not of whole days
+    after a day."""
+    if duration is None:
+        if isinstance(start.value, datetime):
+            return start
+        return EventTime(start.value + timedelta(days=1), None)
+    found = DURATION.fullmatch(duration[3]) if isinstance(duration[3], str) else None
+    if found is None or not any(found.groups()):
+        return None
+    weeks, days, hours, minutes, seconds = (int(part or 0) for part in found.groups())
+    length = timedelta(weeks=weeks, days=days, hours=hours, minutes=minutes, seconds=seconds)
+    if not isinstance(start.value, datetime) and length % timedelta(days=1):
+        return None
+    return EventTime(start.value + length, start.zone)
+
+
 @dataclass(frozen=True)
 class CalendarEvent:
     """An event in one of the user's calendars: its href as esn-sabre writes it, without the
@@ -127,6 +156,15 @@ class CalendarEvent:
         return prop[3] if prop is not None and isinstance(prop[3], str) else None
 
     @property
+    def uid(self) -> str:
+        """Its UID, which iCalendar requires of every event: without one, Calendar answered in an
+        unexpected form."""
+        uid = self._text("uid")
+        if not uid:
+            raise _unavailable("Calendar gave an event without its UID.")
+        return uid
+
+    @property
     def title(self) -> str | None:
         """Its title, as written in it."""
         return self._text("summary")
@@ -145,6 +183,12 @@ class CalendarEvent:
     def busy(self) -> bool:
         """Whether it makes the user look busy, as free/busy counts it: unless it is transparent."""
         return (self._text("transp") or "OPAQUE").upper() != "TRANSPARENT"
+
+    @property
+    def private(self) -> bool:
+        """Whether it is private or confidential, as iCalendar reads a class it does not know:
+        unless it is public."""
+        return (self._text("class") or "PUBLIC").upper() != "PUBLIC"
 
     @property
     def organizer(self) -> tuple[str | None, str | None]:
@@ -169,11 +213,40 @@ class CalendarEvent:
         return _event_time(self._prop("dtend"))
 
     @property
+    def recurrence_id(self) -> EventTime | None:
+        """Which occurrence of a series it is, by the start the series gives it; None for an event
+        that does not repeat."""
+        return _event_time(self._prop("recurrence-id"))
+
+    @property
+    def status(self) -> EventStatus | None:
+        """Whether it takes place, as its organizer says; None when they do not, or not in the
+        words of iCalendar."""
+        status = self._text("status")
+        return _STATUSES.get(status.upper()) if status is not None else None
+
+    def participation_of(self, email: str) -> Participation | None:
+        """The participation of that user, as the event lists them among its attendees,
+        NEEDS-ACTION when it does not say or not in the words of iCalendar, which reads it so;
+        None when it does not list them. Addresses compare lowercased, as sabre's iTIP broker
+        compares them."""
+        address = f"mailto:{email.lower()}"
+        for vevent in self._vevents():
+            for prop in vevent[1]:
+                if prop[0] == "attendee" and str(prop[3]).lower() == address:
+                    partstat = prop[1].get("partstat")
+                    answer = partstat.upper() if isinstance(partstat, str) else ""
+                    return _PARTICIPATIONS.get(answer, "NEEDS-ACTION")
+        return None
+
+    @property
     def period(self) -> EventPeriod:
-        """When the event takes place, as the contracts answer it. Times in any other form than
-        aware ones, floating or in a zone the IANA database lacks, are Calendar answering in an
-        unexpected form."""
+        """When the event takes place, as the contracts answer it: until its DTEND, or as
+        iCalendar reads an event without one. Times in any other form than aware ones, floating or
+        in a zone the IANA database lacks, are Calendar answering in an unexpected form."""
         start, end = self.starts, self.ends
+        if start is not None and self._prop("dtend") is None:
+            end = _end_without_dtend(start, self._prop("duration"))
         if start is not None and end is not None:
             first, last = start.value, end.value
             if isinstance(first, datetime) and isinstance(last, datetime):
@@ -390,6 +463,60 @@ class Calendar:
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Calendar gave free/busy in an unexpected form.") from error
         return sorted(slots, key=lambda slot: slot.start)
+
+    async def _calendars(self, user: User, user_id: str) -> list[str]:
+        """The calendars the user owns, by the hrefs of their JSON, as esn-sabre lists them."""
+        # Asked for personal calendars, esn-sabre leaves out those of others the user subscribes to
+        found = await self._call(
+            user, "GET", f"/dav/calendars/{user_id}.json", params={"personal": "true"}
+        )
+        try:
+            listed = found["_embedded"]["dav:calendar"] if found else []
+            hrefs = [calendar["_links"]["self"]["href"] for calendar in listed]
+        except (KeyError, TypeError) as error:
+            raise _unavailable("Calendar gave the user's calendars in an unexpected form.") from (
+                error
+            )
+        if not all(isinstance(href, str) for href in hrefs):
+            raise _unavailable("Calendar gave the user's calendars in an unexpected form.")
+        return hrefs
+
+    async def events_between(
+        self, user: User, start: datetime, end: datetime
+    ) -> list[CalendarEvent]:
+        """The events of the user's calendars that take place between two UTC times, one per
+        occurrence, as esn-sabre gives them: expanded, their times in UTC."""
+        user_id = await self.user_id(user)
+        events = []
+        for calendar in await self._calendars(user, user_id):
+            found = await self._call(
+                user,
+                "REPORT",
+                "/dav" + calendar,
+                json={
+                    "match": {"start": start.strftime(SABRE_TIME), "end": end.strftime(SABRE_TIME)}
+                },
+            )
+            try:
+                items = [
+                    (item["_links"]["self"]["href"], item["data"])
+                    for item in found["_embedded"]["dav:item"]
+                ]
+            except (KeyError, TypeError) as error:
+                raise _unavailable("Calendar gave the events in an unexpected form.") from error
+            for href, jcal in items:
+                if not (
+                    isinstance(href, str)
+                    and _is_component(jcal)
+                    and all(_is_component(component) for component in jcal[2])
+                ):
+                    raise _unavailable("Calendar gave the events in an unexpected form.")
+                events += [
+                    CalendarEvent(href, [jcal[0], jcal[1], [component]])
+                    for component in jcal[2]
+                    if component[0] == "vevent"
+                ]
+        return events
 
     async def find_event(
         self, user: User, uid: str, user_id: str | None = None
