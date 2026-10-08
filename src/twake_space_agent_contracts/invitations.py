@@ -52,8 +52,9 @@ class Invitation(BaseModel):
     ] = False
 
 
-class Accepted(BaseModel):
-    """The user's answer to the invitation, as their calendar now has it: accepted."""
+class Answer(BaseModel):
+    """The user's answer to the invitation, as their calendar now has it: accepted. Its name is
+    the one accept_invitation published it under before declining came."""
 
     uid: str
     partstat: Literal["ACCEPTED"]
@@ -144,7 +145,7 @@ def _summary(
     return ", ".join(parts) + "\n" + told
 
 
-async def _answer[Reply: (Accepted, Declined)](
+async def _answer[Reply: (Answer, Declined)](
     calendar: Calendar,
     invitation: Invitation,
     user: User,
@@ -242,7 +243,7 @@ def _accept(calendar: Calendar, caller: CallerDependency, now: Callable[[], date
             "it, or whose occurrences are each over or cancelled, with nothing_to_answer: the "
             f'organizer would not be told. Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
-        response_model=Accepted,
+        response_model=Answer,
         # The user's own answer, though Calendar tells the organizer: the owner's consent to write
         # in Calendar covers it, and they are not asked to confirm each one. It tells what it
         # would do, for when they are.
@@ -252,8 +253,8 @@ def _accept(calendar: Calendar, caller: CallerDependency, now: Callable[[], date
         invitation: Invitation,
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
-    ) -> Accepted | JSONResponse:
-        return await _answer(calendar, invitation, user, preview, "ACCEPTED", Accepted, now)
+    ) -> Answer | JSONResponse:
+        return await _answer(calendar, invitation, user, preview, "ACCEPTED", Answer, now)
 
     return routes
 

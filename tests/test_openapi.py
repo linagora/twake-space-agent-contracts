@@ -620,6 +620,19 @@ async def test_answering_an_invitation_names_what_it_refuses_to_answer(
     assert [code for code in refusals if code not in answering["description"]] == []
 
 
+async def test_accepting_an_invitation_keeps_the_name_its_answer_was_published_under(
+    client: AsyncClient,
+) -> None:
+    # accept_invitation published its answer as Answer before declining came: a client made from
+    # the document keeps its type
+    document = (await client.get("/openapi.json")).json()
+
+    accepting = document["paths"]["/contracts/v1/calendar/invitations/accept"]["post"]
+    schema = accepting["responses"]["200"]["content"]["application/json"]["schema"]
+
+    assert schema == {"$ref": "#/components/schemas/Answer"}
+
+
 async def test_creating_an_event_is_a_low_risk_write(client: AsyncClient) -> None:
     # The user's own time, with nobody invited: once the owner allowed writing in Calendar, it runs
     # without asking
