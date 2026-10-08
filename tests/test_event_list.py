@@ -858,6 +858,123 @@ async def test_a_start_before_the_times_every_zone_can_show_is_given_to_the_seco
     assert times_of(answer) == [("ages", "0001-01-02T00:00:00Z", "2026-10-09T03:00:00-07:00")]
 
 
+def moved_apart(*occurrences: tuple[list[Any], str, str]) -> list[Any]:
+    """Occurrences of one series without it, as an invitation to some of them leaves them, each
+    named by its RECURRENCE-ID and moved to times in UTC."""
+    events = [
+        jcal_event("sync", start, end, recurrence_id, zone="UTC")
+        for recurrence_id, start, end in occurrences
+    ]
+    return [events[0][0], events[0][1], [event[2][0] for event in events]]
+
+
+@pytest.mark.parametrize(
+    ("zone", "named"),
+    [
+        pytest.param(
+            "Europe/Paris",
+            [
+                "9999-12-31T13:00:00+01:00",
+                "9999-12-31T14:00:00+01:00",
+                "9999-12-31T23:59:59-08:00",
+                "9999-12-31T23:00:00Z",
+                "0001-01-01T00:00:01+09:19",
+            ],
+            id="Paris",
+        ),
+        pytest.param(
+            "America/Los_Angeles",
+            [
+                "9999-12-31T04:00:00-08:00",
+                "9999-12-31T05:00:00-08:00",
+                "9999-12-31T23:59:59-08:00",
+                "9999-12-31T15:00:00-08:00",
+                "0001-01-01T00:00:01+09:19",
+            ],
+            id="Los Angeles",
+        ),
+        pytest.param(
+            "Pacific/Kiritimati",
+            [
+                "9999-12-31T12:00:00Z",
+                "9999-12-31T13:00:00Z",
+                "9999-12-31T23:59:59-08:00",
+                "9999-12-31T23:00:00Z",
+                "0001-01-01T00:00:01+09:19",
+            ],
+            id="Kiritimati",
+        ),
+    ],
+)
+async def test_a_recurrence_id_the_zone_cannot_show_is_given_as_written_never_moved(
+    client: AsyncClient, boundary: FakeBoundary, zone: str, named: list[str]
+) -> None:
+    boundary.calendar.time_zones[MMAUDET] = zone
+    keep(
+        boundary,
+        moved_apart(
+            (
+                ["recurrence-id", {}, "date-time", "9999-12-31T12:00:00Z"],
+                "2026-10-09T07:30:00",
+                "2026-10-09T08:00:00",
+            ),
+            (
+                ["recurrence-id", {}, "date-time", "9999-12-31T13:00:00Z"],
+                "2026-10-09T07:30:00",
+                "2026-10-09T08:00:00",
+            ),
+            (
+                [
+                    "recurrence-id",
+                    {"tzid": "America/Los_Angeles"},
+                    "date-time",
+                    "9999-12-31T23:59:59",
+                ],
+                "2026-10-09T08:00:00",
+                "2026-10-09T08:30:00",
+            ),
+            # Floating, which Calendar reads in UTC
+            (
+                ["recurrence-id", {}, "date-time", "9999-12-31T23:00:00"],
+                "2026-10-09T08:30:00",
+                "2026-10-09T09:00:00",
+            ),
+            # Before the first time UTC holds, at an offset of 9 hours 18 minutes 59 seconds
+            (
+                ["recurrence-id", {"tzid": "Asia/Tokyo"}, "date-time", "0001-01-01T00:00:00"],
+                "2026-10-09T09:00:00",
+                "2026-10-09T09:30:00",
+            ),
+        ),
+    )
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    # In the user's zone when it shows them, else as written, and to the second: the first two,
+    # which overlap, are two occurrences, not one conflicting with itself
+    first, second = ({"uid": "sync", "recurrence_id": name} for name in named[:2])
+    assert [(found["recurrence_id"], found["conflicts"]) for found in answer["events"]] == [
+        (named[0], [second]),
+        (named[1], [first]),
+        *((name, []) for name in named[2:]),
+    ]
+
+
+async def test_an_occurrence_never_conflicts_with_itself(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Two of the user's calendars hold the event
+    keep(boundary, jcal_event("review", *at(10)))
+    keep(boundary, jcal_event("review", *at(10)), calendar=f"{DEFAULT_CALENDAR}-team")
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    assert [(found["uid"], found["conflicts"]) for found in answer["events"]] == [
+        ("review", []),
+        ("review", []),
+    ]
+
+
 async def test_the_days_are_read_in_utc_when_calendar_gives_no_zone_the_iana_database_has(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:

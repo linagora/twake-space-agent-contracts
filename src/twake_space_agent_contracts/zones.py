@@ -1,7 +1,7 @@
 """IANA time zones: the names the contracts take, when a day starts in one, and how iCalendar
 describes one for the times of an event."""
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -43,12 +43,23 @@ def bounded(moment: datetime) -> datetime:
 
 
 def exact(moment: datetime) -> datetime:
-    """An aware time at an offset RFC 3339 writes, and pydantic, to the minute: as it is, or in UTC
+    """An aware time at an offset RFC 3339 writes, and pydantic, to the minute: as it is; in UTC
     when its offset counts seconds, as zones did before they kept to whole minutes, such as Paris,
-    9 minutes 21 seconds ahead of UTC until 1911."""
-    if not (moment.utcoffset() or timedelta(0)) % timedelta(minutes=1):
+    9 minutes 21 seconds ahead of UTC until 1911; or, for one before or after the times UTC holds,
+    at its offset rounded away from UTC to the minute, the time moved as much."""
+    offset = moment.utcoffset() or timedelta(0)
+    seconds = offset % timedelta(minutes=1)
+    if not seconds:
         return moment
-    return moment.astimezone(UTC)
+    try:
+        return moment.astimezone(UTC)
+    except OverflowError:
+        # Only an offset ahead of UTC puts a time before the first it holds, and only one behind
+        # it after the last: rounded away from UTC, it moves the time back among them
+        rounded = offset - seconds
+        if offset > timedelta(0):
+            rounded += timedelta(minutes=1)
+        return (moment.replace(tzinfo=None) + (rounded - offset)).replace(tzinfo=timezone(rounded))
 
 
 def midnight(day: date, zone: ZoneInfo) -> datetime:

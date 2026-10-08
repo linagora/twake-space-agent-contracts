@@ -56,7 +56,8 @@ class Occurrence(BaseModel):
     uid: str
     recurrence_id: datetime | date | None = Field(
         description="Which occurrence of a recurring event it is, by the start the series gives "
-        "it, in the zone the days are read in; null for an event that does not repeat."
+        "it, in the zone the days are read in, or as the event writes it where that zone cannot "
+        "show it, never moved; null for an event that does not repeat."
     )
 
 
@@ -141,6 +142,25 @@ class _Placed:
     nor declined by the user."""
     listed: ListedEvent
 
+    @property
+    def name(self) -> tuple[str, date | datetime | None]:
+        """Which occurrence it is, by its uid and recurrence_id, however often Calendar gives it."""
+        return self.listed.uid, self.listed.recurrence_id
+
+
+def _named(moment: date | datetime, zone: ZoneInfo) -> date | datetime:
+    """A recurrence_id, which names its occurrence: a time in the zone, else, where the zone cannot
+    show it, as the event writes it, a floating one in UTC as Calendar reads it; to the second,
+    and never moved to the first or last time every zone can show, which would give two
+    occurrences one name. A day as it is."""
+    if not isinstance(moment, datetime):
+        return moment
+    written = moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+    try:
+        return exact(written.astimezone(zone))
+    except OverflowError:
+        return exact(written)
+
 
 def _in_zone(moment: date | datetime, zone: ZoneInfo) -> date | datetime:
     """A time in the zone, with its offset, or in UTC when that offset counts seconds; a floating
@@ -159,7 +179,7 @@ def _placed(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Placed:
     unanswered = my_partstat == "NEEDS-ACTION" and not event.organized_by(email)
     listed = ListedEvent(
         uid=event.uid,
-        recurrence_id=_in_zone(recurrence_id.value, zone) if recurrence_id else None,
+        recurrence_id=_named(recurrence_id.value, zone) if recurrence_id else None,
         start=_in_zone(period.start, zone),
         end=_in_zone(period.end, zone),
         all_day=period.all_day,
@@ -263,7 +283,7 @@ def _with_conflicts(listed: list[_Placed], occurrences: list[_Placed]) -> list[L
                 "conflicts": [
                     Occurrence(uid=other.listed.uid, recurrence_id=other.listed.recurrence_id)
                     for other in occurrences
-                    if other is not occurrence
+                    if other.name != occurrence.name
                     and occurrence.takes_time
                     and other.takes_time
                     and other.start < occurrence.end
@@ -287,7 +307,8 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             "from midnight on the day from to midnight days days later, in the user's time zone, "
             "given as time_zone, or in UTC, time_zone being null, when Calendar gives none. Every "
             "time is in that zone, with its offset, or in UTC where that offset counts seconds, "
-            "which RFC 3339 does not write. Pass needs_action=true to keep only the "
+            "which RFC 3339 does not write; a recurrence_id that zone cannot show comes as the "
+            "event writes it. Pass needs_action=true to keep only the "
             "invitations waiting for the user's answer, before limit cuts the list. The title, "
             "location, start of the description and organizer's address of each event come under "
             f"untrusted. {DATA_NOT_INSTRUCTIONS} Example, for the user's day on 9 October 2026: "
