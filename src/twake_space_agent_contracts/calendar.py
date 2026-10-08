@@ -229,6 +229,12 @@ def _event_time(prop: list[Any] | None, *, as_written: bool = False) -> EventTim
     return EventTime(time, tzid if isinstance(tzid, str) and tzid else None)
 
 
+def _in_unknown_zone(time: EventTime) -> bool:
+    """Whether a time is written in a zone the IANA database lacks, which leaves unknown when it
+    is."""
+    return isinstance(time.value, datetime) and time.value.tzinfo is None and time.zone is not None
+
+
 @dataclass(frozen=True)
 class RecurrenceRule:
     """How a series repeats, as its RRULE says."""
@@ -450,8 +456,14 @@ class CalendarEvent:
     @property
     def recurrence_id(self) -> EventTime | None:
         """Which occurrence of a series it is, by the start the series gives it, as written; None
-        for an event that does not repeat."""
-        return _event_time(self._prop("recurrence-id"), as_written=True)
+        for an event that does not repeat. One in a zone the IANA database lacks, which leaves
+        unknown which occurrence it is, is Calendar answering in an unexpected form."""
+        found = _event_time(self._prop("recurrence-id"), as_written=True)
+        if found is not None and _in_unknown_zone(found):
+            raise _unavailable(
+                "Calendar gave the recurrence ID of the event in an unexpected form."
+            )
+        return found
 
     @property
     def is_occurrence(self) -> bool:
@@ -554,13 +566,7 @@ class CalendarEvent:
                     continue
                 for value in prop[3:]:
                     time = _event_time([*prop[:3], value], as_written=True)
-                    unknown_zone = (
-                        time is not None
-                        and isinstance(time.value, datetime)
-                        and time.value.tzinfo is None
-                        and time.zone is not None
-                    )
-                    if time is None or unknown_zone:
+                    if time is None or _in_unknown_zone(time):
                         raise _unavailable(
                             "Calendar gave the occurrences the event leaves out in an unexpected "
                             "form."

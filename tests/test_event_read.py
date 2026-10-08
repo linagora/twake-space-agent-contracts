@@ -687,6 +687,14 @@ HOUR = "2026-10-13T17:00:00", "2026-10-13T18:00:00"
 SHOWN_ZONE = "(UTC+01:00) Brussels, Copenhagen, Madrid, Paris"
 
 
+def kept_apart_in(zone: str) -> list[Any]:
+    """The weekly series with its second occurrence moved, its RECURRENCE-ID written in that
+    zone."""
+    series = moved(weekly(5), "2026-10-19T17:00:00", "2026-10-19T18:00:00", "2026-10-19T19:00:00")
+    series[2][1][1][-1][1] = {"tzid": zone}
+    return series
+
+
 @pytest.mark.parametrize(
     "odd",
     [
@@ -708,6 +716,16 @@ SHOWN_ZONE = "(UTC+01:00) Brussels, Copenhagen, Madrid, Paris"
         ),
         # Its offset, the contract cannot tell
         pytest.param(jcal_event(POINT, *HOUR, zone=SHOWN_ZONE), id="a zone no database names"),
+        pytest.param(
+            jcal_event(
+                POINT,
+                *HOUR,
+                ["rrule", {}, "recur", {"freq": "WEEKLY"}],
+                ["exdate", {"tzid": SHOWN_ZONE}, "date-time", "2026-10-20T17:00:00"],
+            ),
+            id="an occurrence left out in a zone no database names",
+        ),
+        pytest.param(kept_apart_in(SHOWN_ZONE), id="an occurrence kept apart in such a zone"),
         pytest.param(
             moved(weekly(5), "2026-10-19T17:00:00", "2026-10-19T18:00:00", "soon"),
             id="an occurrence kept apart of times in another form",
