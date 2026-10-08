@@ -4,10 +4,8 @@ import pytest
 from httpx import AsyncClient, Response
 
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
-from tests.fakes import MMAUDET_CALENDAR_ID, FakeBoundary, email_of
+from tests.fakes import DEFAULT_CALENDAR, FakeBoundary, email_of
 
-# The user's default calendar, whose id esn-sabre makes the user's own
-DEFAULT_CALENDAR = f"/calendars/{MMAUDET_CALENDAR_ID}/{MMAUDET_CALENDAR_ID}"
 LUNCH = {
     "title": "Lunch with the team",
     "start": "2026-10-13T12:00:00+02:00",

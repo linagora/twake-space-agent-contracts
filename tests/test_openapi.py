@@ -223,6 +223,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
     assert document["info"]["title"] == "Twake Space agent contracts"
     assert {name: operation["tags"] for name, operation in operations.items()} == {
         "read_freebusy": ["calendar.freebusy.read.v1"],
+        "list_calendar_events": ["calendar.event.read.v1"],
         "accept_invitation": ["calendar.invitation.accept.v1"],
         "create_event": ["calendar.event.create.v1"],
         "list_rooms": ["chat.rooms.read.v1"],
@@ -386,6 +387,10 @@ WRITES_NAMED = {
 # What the words of an application for reading name beyond the user's own data, in English and in
 # French
 READS_NAMED = {
+    # Events in full, private ones too, beyond the free and busy times
+    "calendar": [
+        ("read your events, private ones included", "lire tes événements, privés compris")
+    ],
     "contacts": [
         ("your organization's directory", "l'annuaire de ton organisation"),
         ("the address books shared with you", "les carnets partagés avec toi"),
@@ -578,6 +583,29 @@ async def test_the_body_of_a_new_event_is_whole_and_closed(client: AsyncClient) 
     )
     assert sorted(schema["required"]) == ["end", "start", "title"]
     assert schema["additionalProperties"] is False
+
+
+async def test_listing_events_takes_a_first_day_and_says_how_many_days_and_events_by_default(
+    client: AsyncClient,
+) -> None:
+    # A call may give from alone: the document tells the model, and whoever logs the call, how many
+    # days and events it then reads
+    document = (await client.get("/openapi.json")).json()
+
+    listing = document["paths"]["/contracts/v1/calendar/events"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in listing["parameters"]}
+
+    assert {name: parameter["required"] for name, parameter in parameters.items()} == {
+        "from": True,
+        "days": False,
+        "limit": False,
+        "needs_action": False,
+    }
+    assert parameters["days"]["schema"]["default"] == 1
+    assert parameters["limit"]["schema"]["default"] == 20
+    # Every occurrence of the days, unless the call keeps the invitations waiting for an answer
+    assert parameters["needs_action"]["schema"]["type"] == "boolean"
+    assert parameters["needs_action"]["schema"]["default"] is False
 
 
 async def test_creating_and_changing_a_contact_are_low_risk_writes(client: AsyncClient) -> None:
