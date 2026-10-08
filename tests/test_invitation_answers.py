@@ -735,6 +735,62 @@ async def test_a_preview_tells_an_invitation_ending_past_the_days_datetime_holds
     assert f", {when}, " in told.splitlines()[0]
 
 
+@pytest.mark.parametrize(
+    ("start", "end", "when"),
+    [
+        # Told as the first or last time every zone can show, as list_calendar_events gives it
+        pytest.param(
+            ["dtstart", {}, "date-time", "0001-01-01T00:00:00Z"],
+            ["dtend", {}, "date-time", "2026-10-13T18:00:00Z"],
+            "from Tuesday 2 January 1 at 00:00 to Tuesday 13 October 2026 at 18:00"
+            " (time zone “UTC”)",
+            id="a start before year 1",
+        ),
+        pytest.param(
+            paris("dtstart", "2026-10-13T17:00:00"),
+            paris("dtend", "9999-12-31T23:59:00"),
+            "from Tuesday 13 October 2026 at 17:00 to Friday 31 December 9999 at 01:00"
+            " (time zone “Europe/Paris”)",
+            id="an end after 9999-12-31 at midnight UTC",
+        ),
+        # The end in the zone of the start, which the preview names for both
+        pytest.param(
+            paris("dtstart", "2026-10-13T17:00:00"),
+            ["dtend", {"tzid": "America/New_York"}, "date-time", "2026-10-13T12:00:00"],
+            "Tuesday 13 October 2026 from 17:00 to 18:00 (time zone “Europe/Paris”)",
+            id="an end in another zone",
+        ),
+        pytest.param(
+            paris("dtstart", "2026-10-13T17:00:00"),
+            ["dtend", {"tzid": "America/New_York"}, "date-time", "9999-12-31T23:59:00"],
+            "from Tuesday 13 October 2026 at 17:00 to Friday 31 December 9999 at 01:00"
+            " (time zone “Europe/Paris”)",
+            id="an end after year 9999 in another zone",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "zone", [None, "Mars/Olympus_Mons"], ids=["no zone", "a zone the database lacks"]
+)
+@pytest.mark.parametrize("operation", OPERATIONS)
+async def test_a_preview_without_the_users_zone_tells_the_times_in_the_zone_of_the_start(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    zone: str | None,
+    start: list[Any],
+    end: list[Any],
+    when: str,
+) -> None:
+    in_zone(boundary, zone)
+    event = with_props(invitation_a(), dtstart=start, dtend=end)
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
+
+    told, _ = preview_of(await preview(client, operation, UID, "en"))
+
+    assert f", {when}, " in told.splitlines()[0]
+
+
 def written_at(index: int, name: str, time: str) -> Callable[[str, str], list[Any]]:
     """Invitation A as a weekly series in the user's calendar, a time of its VEVENT at that index,
     the series or the occurrence the organizer moved to 18:00, written at an offset from UTC:

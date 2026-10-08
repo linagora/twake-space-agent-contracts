@@ -43,13 +43,16 @@ _WORDS: dict[Language, _Words] = {
 
 
 def _shown_time(moment: EventTime, zone: ZoneInfo | None) -> tuple[datetime, str | None]:
-    """A time as the owner reads it, in their zone, or the first or last time every zone can show
-    for one before or after them, as the list of events gives it; else as the event writes it, with
-    the zone to name beside it, if any."""
+    """A time as the owner reads it, in their zone, else in its own, with the zone to name beside
+    it; the first or last time every zone can show for one before or after them, as the list of
+    events gives it. A floating time as the event writes it, with the zone to name, if any."""
     assert isinstance(moment.value, datetime)
-    if zone is not None and moment.value.tzinfo is not None:
-        return bounded(moment.value).astimezone(zone), None
-    return moment.value, moment.zone
+    if moment.value.tzinfo is None:
+        return moment.value, moment.zone
+    shown = bounded(moment.value)
+    if zone is not None:
+        return shown.astimezone(zone), None
+    return shown.astimezone(moment.value.tzinfo), moment.zone
 
 
 def _days(start: date, end: EventTime | None, language: Language) -> str:
@@ -81,6 +84,9 @@ def when_it_takes_place(
     # An end written otherwise than its start, floating against zoned, tells nothing sure
     if ending is not None and (ending.tzinfo is None) != (begins.tzinfo is None):
         ending = None
+    # A zoned end in the zone of the start, which the preview names for both
+    if ending is not None and ending.tzinfo is not None:
+        ending = ending.astimezone(begins.tzinfo)
     if ending is None or ending <= begins:
         when = words.at.format(day=first, time=at)
     elif ending.date() == begins.date():
