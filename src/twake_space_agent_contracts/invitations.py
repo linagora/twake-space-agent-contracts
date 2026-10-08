@@ -43,7 +43,8 @@ class Invitation(BaseModel):
         Field(
             description="true to answer for the whole series of a recurring invitation, each of "
             "its occurrences, those answered already included, once the user said so; false by "
-            "default, which refuses a recurring invitation."
+            "default, which refuses a recurring invitation. An occurrence the user was invited to "
+            "without the rest of its series is answered either way."
         ),
     ] = False
 
@@ -149,21 +150,22 @@ async def _answer(
             detail="The organizer cancelled this event: there is nothing to answer.",
         )
     # A UID names a whole series, not which of its occurrences the invitation is about: the user
-    # answers for all of them, or in Calendar
-    if event.recurring and not invitation.series:
+    # answers for all of them, or in Calendar. An occurrence they were invited to alone is all
+    # their copy holds, which they answer as an event that does not repeat.
+    if event.repeats and not invitation.series:
         raise Problem(
             status=409,
             code="recurring_invitation",
             title="Recurring invitation",
-            detail="The invitation repeats, or is one occurrence of a series: once the user said"
-            " yes to answering for the whole series, call again with series true; else they"
+            detail="The invitation repeats, or holds several occurrences of a series: once the user"
+            " said yes to answering for the whole series, call again with series true; else they"
             " answer it in Calendar.",
         )
     # What the owner allows: the event as the user would answer it, where it is
     digest = digest_of(answered.href, answered.jcal)
     if preview.asked:
         zone = await calendar.time_zone(user)
-        whole_series = invitation.series and event.recurring
+        whole_series = invitation.series and event.repeats
         summary = _summary(answered, partstat, zone, preview.language, whole_series=whole_series)
         return preview.answer(summary, digest)
     preview.check(digest)
@@ -186,8 +188,10 @@ def _accept(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             "Calendar tells the organizer. Nothing else in the event changes. Call it only once "
             "the user has said yes to this very invitation. A recurring invitation is refused "
             "unless series is true, which accepts every occurrence of the series: set it only "
-            "once the user has said yes to the whole series; one occurrence alone, they answer in "
-            f'Calendar. Example: body={{"uid": "{EXAMPLE_UID}"}}.'
+            "once the user has said yes to the whole series; one occurrence apart from the "
+            "others, they answer in Calendar. An occurrence the user was invited to without the "
+            "rest of its series is accepted as an invitation that does not repeat. "
+            f'Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
         response_model=Answer,
         # The user's own answer, though Calendar tells the organizer: the owner's consent to write
@@ -221,7 +225,9 @@ def _decline(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             "Call it only once the user has said no to this very invitation. A recurring "
             "invitation is refused unless series is true, which declines every occurrence of the "
             "series: set it only once the user has said no to the whole series; one occurrence "
-            f'alone, they answer in Calendar. Example: body={{"uid": "{EXAMPLE_UID}"}}.'
+            "apart from the others, they answer in Calendar. An occurrence the user was invited "
+            "to without the rest of its series is declined as an invitation that does not repeat. "
+            f'Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
         response_model=Answer,
         # The user's own answer, as accepting is: low, and it tells what it would do

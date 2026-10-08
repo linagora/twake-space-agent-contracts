@@ -53,6 +53,22 @@ async def preview(
     return await answer(client, operation, uid, asking_preview(language), **body)
 
 
+def occurrence_alone(mmaudet_partstat: str) -> list[Any]:
+    """The user's copy of the second occurrence of invitation A, which the organizer moved to 18:00
+    and invited them to alone, as esn-sabre writes it: without the series; their participation."""
+    event = weekly_series("NEEDS-ACTION", mmaudet_partstat)
+    del event[2][0]
+    return event
+
+
+def occurrences_alone() -> list[Any]:
+    """The user's copy of the first two occurrences of invitation A, which the organizer invited
+    them to alone, as esn-sabre writes it: without the series."""
+    event = invitation_a("NEEDS-ACTION", ONE_OCCURRENCE)
+    event[2].append(occurrence_alone("NEEDS-ACTION")[2][0])
+    return event
+
+
 @pytest.mark.parametrize("uid", UIDS)
 @pytest.mark.parametrize(("operation", "partstat"), ANSWERS)
 async def test_answering_by_the_events_uid_sets_only_the_users_participation(
@@ -144,22 +160,68 @@ async def test_a_user_not_invited_is_answered_as_for_an_unknown_invitation(
 
 
 @pytest.mark.parametrize(
-    "recurrence", [WEEKLY, ONE_OCCURRENCE], ids=["a weekly series", "one occurrence of a series"]
+    "event",
+    [
+        pytest.param(invitation_a("NEEDS-ACTION", WEEKLY), id="a weekly series"),
+        pytest.param(
+            weekly_series("NEEDS-ACTION", "NEEDS-ACTION"), id="a series, one occurrence moved"
+        ),
+        pytest.param(occurrences_alone(), id="occurrences without their series"),
+    ],
 )
 @pytest.mark.parametrize("operation", OPERATIONS)
 async def test_a_recurring_invitation_is_refused_unless_for_the_whole_series(
-    client: AsyncClient, boundary: FakeBoundary, operation: str, recurrence: list[Any]
+    client: AsyncClient, boundary: FakeBoundary, operation: str, event: list[Any]
 ) -> None:
     # The UID names the whole series, not which of its occurrences the user would answer
-    boundary.calendar.objects[HREF] = CalendarObject(
-        MMAUDET_CALENDAR_ID, invitation_a("NEEDS-ACTION", recurrence)
-    )
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
 
     response = await answer(client, operation, UID)
 
     assert response.status_code == 409
     assert response.json()["code"] == "recurring_invitation"
     assert boundary.calendar.writes == []
+
+
+@pytest.mark.parametrize("series", [False, True], ids=["once", "for the whole series"])
+@pytest.mark.parametrize(("operation", "partstat"), ANSWERS)
+async def test_an_occurrence_the_user_was_invited_to_alone_is_answered_as_an_event(
+    client: AsyncClient, boundary: FakeBoundary, operation: str, partstat: str, series: bool
+) -> None:
+    # Their copy holds that occurrence without its series: it is all there is to answer
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, occurrence_alone("NEEDS-ACTION")
+    )
+
+    response = await answer(client, operation, UID, series=series)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"uid": UID, "partstat": partstat}
+    assert boundary.calendar.objects[HREF].jcal == occurrence_alone(partstat)
+
+
+@pytest.mark.parametrize("series", [False, True], ids=["once", "for the whole series"])
+@pytest.mark.parametrize(
+    ("operation", "answer_words"),
+    [
+        pytest.param("accept", "Accepter", id="accept"),
+        pytest.param("decline", "Refuser", id="decline"),
+    ],
+)
+async def test_a_preview_tells_of_an_occurrence_the_user_was_invited_to_alone(
+    client: AsyncClient, boundary: FakeBoundary, operation: str, answer_words: str, series: bool
+) -> None:
+    # When that occurrence takes place, not the series it belongs to
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, occurrence_alone("NEEDS-ACTION")
+    )
+
+    told, _ = preview_of(await preview(client, operation, UID, series=series))
+
+    assert told.splitlines()[0] == (
+        f"{answer_words} « Point Twake Space E2E », mardi 20 octobre 2026 de 18 h à 19 h,"
+        " invitation de « E2E » <e2e.organizer@twake.test>"
+    )
 
 
 @pytest.mark.parametrize(("operation", "partstat"), ANSWERS)

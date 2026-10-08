@@ -17,8 +17,8 @@ from twake_space_agent_contracts.zones import JCAL_TIME, formatted, midnight, vt
 
 # How esn-sabre (2.4.6 and later) writes UTC times in its JSON free/busy
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
-# The properties of an event that repeats, or of one occurrence of a series
-RECURRENCE = {"rrule", "rdate", "recurrence-id"}
+# The properties of an event that repeats
+REPETITION = {"rrule", "rdate"}
 # How long an event lasts, as iCalendar writes it (RFC 5545, 3.3.6): weeks, or days then hours,
 # minutes and seconds
 DURATION = re.compile(r"\+?P(?:(\d+)W|(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?)")
@@ -325,9 +325,14 @@ class CalendarEvent:
         raise _unavailable("Calendar gave the times of the event in an unexpected form.")
 
     @property
-    def recurring(self) -> bool:
-        """Whether the event repeats, or holds occurrences of a series."""
-        return any(prop[0] in RECURRENCE for vevent in self._vevents() for prop in vevent[1])
+    def repeats(self) -> bool:
+        """Whether the event holds more than one occurrence: a series, which repeats, or several of
+        its occurrences. A copy of one occurrence alone, which its organizer invited the user to
+        without the rest of the series, is that occurrence."""
+        vevents = self._vevents()
+        return len(vevents) > 1 or any(
+            prop[0] in REPETITION for vevent in vevents for prop in vevent[1]
+        )
 
     @property
     def cancelled(self) -> bool:
