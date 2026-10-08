@@ -191,6 +191,10 @@ def _end_without_dtend(start: EventTime, duration: list[Any] | None) -> EventTim
     return _as_read(EventTime(_later(start.value, length), start.zone))
 
 
+Partstat = Literal["ACCEPTED", "DECLINED"]
+"""A user's answer to an invitation, as iCalendar writes their participation."""
+
+
 @dataclass(frozen=True)
 class CalendarEvent:
     """An event in one of the user's calendars: its href as esn-sabre writes it, without the
@@ -333,7 +337,7 @@ class CalendarEvent:
             for prop in vevent[1]
         )
 
-    def answered_by(self, email: str, partstat: str) -> "CalendarEvent | None":
+    def answered_by(self, email: str, partstat: Partstat) -> "CalendarEvent | None":
         """The event with the participation of that user set to their answer, such as ACCEPTED,
         wherever it lists them, and nothing else changed; None if it does not invite them: if it
         does not list them as an attendee, or if they organize it, whom Twake Calendar lists among

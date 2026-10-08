@@ -2,14 +2,14 @@
 an invitation they received, as themselves."""
 
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from twake_space_agent_contracts.calendar import INVITATION_UID, Calendar, CalendarEvent
+from twake_space_agent_contracts.calendar import INVITATION_UID, Calendar, CalendarEvent, Partstat
 from twake_space_agent_contracts.calendar_previews import when_it_takes_place
 from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.previews import (
@@ -25,9 +25,6 @@ from twake_space_agent_contracts.problems import Problem
 
 EXAMPLE_UID = "5c4e9f2a-7b1d-4c3e-9a8f-2d6b0e1f3a7c"
 """The UID of an event, for the worked call."""
-
-Partstat = Literal["ACCEPTED", "DECLINED"]
-"""The user's answer to an invitation, as iCalendar writes their participation."""
 
 
 # In the body, which holds any text iCalendar allows in a UID, slashes included: the gateway
@@ -58,12 +55,17 @@ class Answer(BaseModel):
     partstat: Partstat
 
 
+# What a preview of each answer tells the owner, in each language
+_ANSWERS: dict[Partstat, dict[Language, str]] = {
+    "ACCEPTED": {"fr": "Accepter {what}", "en": "Accept {what}"},
+    "DECLINED": {"fr": "Refuser {what}", "en": "Decline {what}"},
+}
+
+
 @dataclass(frozen=True)
 class _Words:
     """What a preview of answering tells the owner, in one language."""
 
-    accept: str
-    decline: str
     untitled: str
     series: str
     untitled_series: str
@@ -74,8 +76,6 @@ class _Words:
 
 _WORDS: dict[Language, _Words] = {
     "fr": _Words(
-        accept="Accepter {what}",
-        decline="Refuser {what}",
         untitled="l'invitation sans titre",
         series="toute la série {title}",
         untitled_series="toute la série sans titre",
@@ -84,8 +84,6 @@ _WORDS: dict[Language, _Words] = {
         told="Twake Agenda prévient l'organisateur.",
     ),
     "en": _Words(
-        accept="Accept {what}",
-        decline="Decline {what}",
         untitled="the untitled invitation",
         series="the whole series {title}",
         untitled_series="the whole untitled series",
@@ -99,9 +97,10 @@ _WORDS: dict[Language, _Words] = {
 def _summary(
     event: CalendarEvent,
     partstat: Partstat,
-    series: bool,
     zone: ZoneInfo | None,
     language: Language,
+    *,
+    whole_series: bool,
 ) -> str:
     """What answering the invitation does, as the owner reads it: the answer, for the whole series
     or not, the event's title, which its organizer wrote, when it takes place, the first time for a
@@ -109,16 +108,15 @@ def _summary(
     words = _WORDS[language]
     title = one_line(event.title)
     if not title:
-        what = words.untitled_series if series else words.untitled
-    elif series:
+        what = words.untitled_series if whole_series else words.untitled
+    elif whole_series:
         what = words.series.format(title=quoted(title, language))
     else:
         what = quoted(title, language)
-    answer = words.accept if partstat == "ACCEPTED" else words.decline
-    parts = [answer.format(what=what)]
+    parts = [_ANSWERS[partstat][language].format(what=what)]
     when = when_it_takes_place(event, zone, language)
     if when is not None:
-        parts.append(words.first_time.format(when=when) if series else when)
+        parts.append(words.first_time.format(when=when) if whole_series else when)
     organizer = person(*event.organizer, language)
     if organizer is not None:
         parts.append(words.invited_by.format(organizer=organizer))
@@ -164,8 +162,9 @@ async def _answer(
     digest = digest_of(answered.href, answered.jcal)
     if preview.asked:
         zone = await calendar.time_zone(user)
-        series = invitation.series and event.recurring
-        return preview.answer(_summary(answered, partstat, series, zone, preview.language), digest)
+        whole_series = invitation.series and event.recurring
+        summary = _summary(answered, partstat, zone, preview.language, whole_series=whole_series)
+        return preview.answer(summary, digest)
     preview.check(digest)
     await calendar.save_event(user, answered)
     return Answer(uid=invitation.uid, partstat=partstat)
