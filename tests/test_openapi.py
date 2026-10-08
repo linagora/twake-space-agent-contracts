@@ -225,6 +225,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "read_freebusy": ["calendar.freebusy.read.v1"],
         "list_calendar_events": ["calendar.event.read.v1"],
         "accept_invitation": ["calendar.invitation.accept.v1"],
+        "decline_invitation": ["calendar.invitation.decline.v1"],
         "create_event": ["calendar.event.create.v1"],
         "list_rooms": ["chat.rooms.read.v1"],
         "read_room": ["chat.rooms.read.v1"],
@@ -364,6 +365,7 @@ WRITES_NAMED = {
     },
     "calendar": {
         "accept_invitation": ("accept", "accepter"),
+        "decline_invitation": ("decline", "refuser"),
         "create_event": ("add events", "ajouter des événements"),
     },
     "tasks": {
@@ -497,6 +499,7 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
 
     assert declared == {
         "accept_invitation": ("post", True),
+        "decline_invitation": ("post", True),
         "create_event": ("post", True),
         "create_reply_draft": ("post", True),
         "move_email": ("post", True),
@@ -532,31 +535,102 @@ async def test_the_harness_alone_asks_for_a_preview(client: AsyncClient) -> None
     assert not parameters & {"x-twake-preview", "x-twake-preview-digest", "accept-language"}
 
 
-async def test_accepting_an_invitation_is_a_low_risk_write(client: AsyncClient) -> None:
-    # The user's own answer: once the owner allowed writing in Calendar, it runs without asking
+async def test_accepting_and_declining_an_invitation_are_low_risk_writes(
+    client: AsyncClient,
+) -> None:
+    # The user's own answer, yes or no: once the owner allowed writing in Calendar, it runs
+    # without asking
     document = (await client.get("/openapi.json")).json()
 
-    accept = document["paths"]["/contracts/v1/calendar/invitations/accept"]["post"]
+    risks = {
+        operation["operationId"]: operation.get("x-twake-risk")
+        for _, _, operation in operations_of(document)
+        if operation["operationId"] in ("accept_invitation", "decline_invitation")
+    }
 
-    assert accept["x-twake-risk"] == "low"
+    assert risks == {"accept_invitation": "low", "decline_invitation": "low"}
 
 
-async def test_the_body_of_accepting_an_invitation_is_whole_and_closed(
-    client: AsyncClient,
+@pytest.mark.parametrize("answer", ["accept", "decline"])
+async def test_the_body_of_answering_an_invitation_is_whole_and_closed(
+    client: AsyncClient, answer: str
 ) -> None:
     # The UID comes in the body, which holds any text iCalendar allows in one, slashes included,
     # where the gateway routes a path parameter as one segment: the model gets the body whole,
-    # taking the UID and no other field
+    # taking the UID, whether the answer goes for the whole series, never unless asked, and no
+    # other field
     document = (await client.get("/openapi.json")).json()
 
-    accept = document["paths"]["/contracts/v1/calendar/invitations/accept"]["post"]
-    schema = accept["requestBody"]["content"]["application/json"]["schema"]
+    answering = document["paths"][f"/contracts/v1/calendar/invitations/{answer}"]["post"]
+    schema = answering["requestBody"]["content"]["application/json"]["schema"]
 
-    assert "parameters" not in accept
+    assert "parameters" not in answering
     assert "$ref" not in json.dumps(schema)
-    assert sorted(schema["properties"]) == ["uid"]
+    assert sorted(schema["properties"]) == ["series", "uid"]
     assert schema["required"] == ["uid"]
+    assert schema["properties"]["series"]["type"] == "boolean"
+    assert schema["properties"]["series"]["default"] is False
     assert schema["additionalProperties"] is False
+
+
+@pytest.mark.parametrize(
+    ("answer", "partstat", "other"),
+    [("accept", "ACCEPTED", "DECLINED"), ("decline", "DECLINED", "ACCEPTED")],
+)
+async def test_answering_an_invitation_publishes_its_own_answer_only(
+    client: AsyncClient, answer: str, partstat: str, other: str
+) -> None:
+    # Accepting never answers that the user declined, nor declining that they accepted
+    document = (await client.get("/openapi.json")).json()
+
+    answering = document["paths"][f"/contracts/v1/calendar/invitations/{answer}"]["post"]
+    schema = answering["responses"]["200"]["content"]["application/json"]["schema"]
+
+    assert refusal({"uid": "a", "partstat": partstat}, schema, document) is None
+    assert refusal({"uid": "a", "partstat": other}, schema, document) is not None
+
+
+@pytest.mark.parametrize("answer", ["accept", "decline"])
+async def test_answering_an_invitation_says_when_calendar_may_not_tell_the_organizer(
+    client: AsyncClient, answer: str
+) -> None:
+    # esn-sabre may send the organizer no reply for a copy that holds a cancelled occurrence: the
+    # model is not told that Calendar always tells them
+    document = (await client.get("/openapi.json")).json()
+
+    answering = document["paths"][f"/contracts/v1/calendar/invitations/{answer}"]["post"]
+
+    assert (
+        "; it may not when the user's copy of the event holds a cancelled occurrence."
+        in answering["description"]
+    )
+
+
+@pytest.mark.parametrize("answer", ["accept", "decline"])
+async def test_answering_an_invitation_names_what_it_refuses_to_answer(
+    client: AsyncClient, answer: str
+) -> None:
+    # The model is told why a call answered 409, and that calling again the same way changes
+    # nothing: a recurring invitation without series, a cancelled one, one answered already
+    document = (await client.get("/openapi.json")).json()
+
+    answering = document["paths"][f"/contracts/v1/calendar/invitations/{answer}"]["post"]
+    refusals = ["recurring_invitation", "invitation_cancelled", "nothing_to_answer"]
+
+    assert [code for code in refusals if code not in answering["description"]] == []
+
+
+async def test_accepting_an_invitation_keeps_the_name_its_answer_was_published_under(
+    client: AsyncClient,
+) -> None:
+    # accept_invitation published its answer as Answer before declining came: a client made from
+    # the document keeps its type
+    document = (await client.get("/openapi.json")).json()
+
+    accepting = document["paths"]["/contracts/v1/calendar/invitations/accept"]["post"]
+    schema = accepting["responses"]["200"]["content"]["application/json"]["schema"]
+
+    assert schema == {"$ref": "#/components/schemas/Answer"}
 
 
 async def test_creating_an_event_is_a_low_risk_write(client: AsyncClient) -> None:

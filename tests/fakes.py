@@ -109,13 +109,19 @@ def as_drive_owner() -> dict[str, str]:
 
 
 class FakeClock:
-    """Seconds, as time.monotonic counts them, moved forward by the tests."""
+    """Seconds, as time.monotonic counts them, moved forward by the tests; and the date and time,
+    as datetime.now gives them in UTC, which they set: before the events they write, unless they
+    move it."""
 
     def __init__(self) -> None:
         self.now = 1_000.0
+        self.wall = datetime(2026, 10, 8, 7, tzinfo=UTC)
 
     def __call__(self) -> float:
         return self.now
+
+    def wall_time(self) -> datetime:
+        return self.wall
 
 
 class FakeIssuer:

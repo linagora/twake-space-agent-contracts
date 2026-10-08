@@ -140,6 +140,7 @@ async def test_without_applications_set_calendar_is_published(
         "read_freebusy",
         "list_calendar_events",
         "accept_invitation",
+        "decline_invitation",
         "create_event",
     }
     assert set(document["x-twake-domains"]) == {"calendar"}

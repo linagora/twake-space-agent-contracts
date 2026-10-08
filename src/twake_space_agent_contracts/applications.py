@@ -3,6 +3,7 @@ its contracts belong to, the words the harness names it with, and the routers of
 
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, dataclass
+from datetime import datetime
 
 import httpx
 from fastapi import APIRouter
@@ -47,6 +48,8 @@ class Context:
     clock: Callable[[], float]
     """Seconds, as time.monotonic counts them, by which what an application keeps for a while
     expires."""
+    now: Callable[[], datetime]
+    """The date and time, aware in UTC, by which an application tells what is over."""
 
 
 @dataclass(frozen=True)
@@ -83,7 +86,7 @@ def _calendar(context: Context) -> list[APIRouter]:
     return [
         freebusy.router(calendar, context.caller),
         event_reads.router(calendar, context.caller),
-        invitations.router(calendar, context.caller),
+        *invitations.routers(calendar, context.caller, context.now),
         event_create.router(calendar, context.caller),
     ]
 
@@ -179,10 +182,11 @@ APPLICATIONS = (
             " tes agendas",
         ),
         write=Words(
-            en="accept the invitations you received, which tells their organizer, and add events"
-            " to your calendar, with nobody invited",
-            fr="accepter les invitations que tu as reçues, ce qui prévient leur organisateur, et"
-            " ajouter des événements à ton agenda, sans y inviter personne",
+            en="accept or decline the invitations you received, even for a whole series, which"
+            " tells their organizer, and add events to your calendar, with nobody invited",
+            fr="accepter ou refuser les invitations que tu as reçues, même pour toute une série, ce"
+            " qui prévient leur organisateur, et ajouter des événements à ton agenda, sans y"
+            " inviter personne",
         ),
         routers=_calendar,
     ),

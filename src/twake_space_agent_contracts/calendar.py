@@ -17,8 +17,10 @@ from twake_space_agent_contracts.zones import JCAL_TIME, formatted, midnight, vt
 
 # How esn-sabre (2.4.6 and later) writes UTC times in its JSON free/busy
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
-# The properties of an event that repeats, or of one occurrence of a series
-RECURRENCE = {"rrule", "rdate", "recurrence-id"}
+# The properties of an event that repeats
+REPETITION = {"rrule", "rdate"}
+# The properties that say when an event takes place
+TIMES = {"dtstart", "dtend", "duration"}
 # How long an event lasts, as iCalendar writes it (RFC 5545, 3.3.6): weeks, or days then hours,
 # minutes and seconds
 DURATION = re.compile(r"\+?P(?:(\d+)W|(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?)")
@@ -32,8 +34,8 @@ INVITATION_UID = (
     "An invitation's UID is that of its calendar event, as the harness gives it with the "
     "invitation."
 )
-"""Where agents find the UID of an invitation, which accept_invitation takes and read_freebusy
-may leave out."""
+"""Where agents find the UID of an invitation, which accept_invitation and decline_invitation take
+and read_freebusy may leave out."""
 
 EventStatus = Literal["TENTATIVE", "CONFIRMED", "CANCELLED"]
 """Whether an event takes place, in the words iCalendar gives its organizer."""
@@ -191,6 +193,43 @@ def _end_without_dtend(start: EventTime, duration: list[Any] | None) -> EventTim
     return _as_read(EventTime(_later(start.value, length), start.zone))
 
 
+def _over(vevent: list[Any], moment: datetime, zone: ZoneInfo) -> bool:
+    """Whether a VEVENT is an occurrence of a series, written apart from it, that ended before that
+    time: at its DTEND, else as iCalendar reads an event without one, after its DURATION, or when
+    it starts, or at the end of its day for a day. The midnight a day ends at, and a time in no
+    zone the IANA database has, floating or in a zone it lacks, are read in the given zone. An
+    occurrence whose end cannot be read is not over."""
+    first = {prop[0]: prop for prop in reversed(vevent[1])}
+    if "recurrence-id" not in first:
+        return False
+    end = _event_time(first.get("dtend"))
+    start = _event_time(first.get("dtstart"), as_written=True)
+    if "dtend" not in first and start is not None:
+        end = _end_without_dtend(start, first.get("duration"))
+    if end is None:
+        return False
+    if not isinstance(end.value, datetime):
+        return midnight(end.value, zone) < moment
+    if end.value.tzinfo is None:
+        return end.value.replace(tzinfo=zone) < moment
+    return end.value < moment
+
+
+def _cancelled(vevent: list[Any]) -> bool:
+    """Whether a VEVENT is cancelled, as its STATUS says."""
+    return any(prop[0] == "status" and str(prop[3]).upper() == "CANCELLED" for prop in vevent[1])
+
+
+def _apart(vevent: list[Any]) -> bool:
+    """Whether a VEVENT is an occurrence written apart from its series, which its RECURRENCE-ID
+    names."""
+    return any(prop[0] == "recurrence-id" for prop in vevent[1])
+
+
+Partstat = Literal["ACCEPTED", "DECLINED"]
+"""A user's answer to an invitation, as iCalendar writes their participation."""
+
+
 @dataclass(frozen=True)
 class CalendarEvent:
     """An event in one of the user's calendars: its href as esn-sabre writes it, without the
@@ -321,36 +360,122 @@ class CalendarEvent:
         raise _unavailable("Calendar gave the times of the event in an unexpected form.")
 
     @property
-    def recurring(self) -> bool:
-        """Whether the event repeats, or holds occurrences of a series."""
-        return any(prop[0] in RECURRENCE for vevent in self._vevents() for prop in vevent[1])
+    def repeats(self) -> bool:
+        """Whether the event holds more than one occurrence: a series, which repeats, or several of
+        its occurrences. A copy of one occurrence alone, which its organizer invited the user to
+        without the rest of the series, is that occurrence."""
+        vevents = self._vevents()
+        return len(vevents) > 1 or any(
+            prop[0] in REPETITION for vevent in vevents for prop in vevent[1]
+        )
 
     @property
     def cancelled(self) -> bool:
-        return any(
-            prop[0] == "status" and str(prop[3]).upper() == "CANCELLED"
-            for vevent in self._vevents()
-            for prop in vevent[1]
-        )
+        """Whether its organizer cancelled the event itself: the event, or the series, as esn-sabre
+        cancels each occurrence of a series cancelled whole; in a copy without the series, each
+        occurrence the user was invited to. An occurrence cancelled alone leaves the others to
+        answer."""
+        vevents = self._vevents()
+        series = [
+            vevent for vevent in vevents if all(prop[0] != "recurrence-id" for prop in vevent[1])
+        ]
+        return bool(vevents) and all(_cancelled(vevent) for vevent in series or vevents)
 
-    def accepted_by(self, email: str) -> "CalendarEvent | None":
-        """The event with the participation of that user accepted, and nothing else changed;
-        None if it does not invite them: if it does not list them as an attendee, or if they
+    @property
+    def holds_cancelled(self) -> bool:
+        """Whether one of its VEVENTs at least is cancelled: the event itself, or an occurrence
+        cancelled alone."""
+        return any(_cancelled(vevent) for vevent in self._vevents())
+
+    def invites(self, email: str) -> bool:
+        """Whether the event invites that user: it lists them as an attendee, and they do not
         organize it, whom Twake Calendar lists among its attendees too, as its chair. Addresses
         compare lowercased, as sabre's iTIP broker compares them."""
-        email = email.lower()
-        if self.organized_by(email):
-            return None
+        return self.participation_of(email) is not None and not self.organized_by(email)
+
+    def earliest(self, zone: ZoneInfo) -> "CalendarEvent":
+        """The VEVENT whose DTSTART is the earliest the copy writes that takes place, as an event of
+        its own: the series' own, or that of an occurrence written apart, wherever the copy holds
+        it. Neither the series' RRULE nor its RDATE is read: the earliest start the copy writes may
+        not be the series' first, such as when its first occurrence moved after the second, or when
+        an RDATE adds a date before its DTSTART. The series' own start does not take place when an
+        EXDATE excludes it, as esn-sabre cancels one occurrence, or when an occurrence written apart
+        replaces it, with that start as its RECURRENCE-ID; nor does that of an occurrence cancelled
+        alone. A day starts at its midnight, and a time in no zone the IANA database has, floating
+        or in a zone it lacks, is read, in the given zone; of those that start together, the first
+        in the copy. With no start that takes place, the series' own VEVENT, or the copy's first,
+        without its times: it tells the series by its title alone."""
+
+        def instant(prop: list[Any] | None) -> datetime | None:
+            """The time a property gives, as written, never moved: a day from its midnight, and a
+            time in no zone the IANA database has, in the given zone. None when unreadable."""
+            found = _event_time(prop, as_written=True)
+            if found is None:
+                return None
+            if not isinstance(found.value, datetime):
+                return midnight(found.value, zone)
+            return found.value if found.value.tzinfo else found.value.replace(tzinfo=zone)
+
+        def instants(vevent: list[Any], name: str) -> set[datetime]:
+            """The times its properties of that name give, each of their values."""
+            found = (
+                instant([prop[0], prop[1], prop[2], value])
+                for prop in vevent[1]
+                if prop[0] == name
+                for value in prop[3:]
+            )
+            return {moment for moment in found if moment is not None}
+
+        vevents = self._vevents()
+        replaced = {moment for vevent in vevents for moment in instants(vevent, "recurrence-id")}
+        starts = []
+        for vevent in vevents:
+            start = instant(next((prop for prop in vevent[1] if prop[0] == "dtstart"), None))
+            if start is None or _cancelled(vevent):
+                continue
+            if not _apart(vevent) and (start in replaced or start in instants(vevent, "exdate")):
+                continue
+            starts.append((start, vevent))
+        if starts:
+            first = min(starts, key=lambda found: found[0])[1]
+            return CalendarEvent(self.href, [self.jcal[0], self.jcal[1], [first]])
+        series = [vevent for vevent in vevents if not _apart(vevent)]
+        untimed = [
+            [vevent[0], [prop for prop in vevent[1] if prop[0] not in TIMES], vevent[2]]
+            for vevent in (series or vevents)[:1]
+        ]
+        return CalendarEvent(self.href, [self.jcal[0], self.jcal[1], untimed])
+
+    def answered_by(
+        self,
+        email: str,
+        partstat: Partstat,
+        *,
+        series_from: datetime | None = None,
+        zone: ZoneInfo | None = None,
+    ) -> "CalendarEvent":
+        """The event with the participation of that user set to their answer, such as ACCEPTED,
+        wherever it lists them, and nothing else changed. Addresses compare lowercased, as sabre's
+        iTIP broker compares them.
+
+        An answer for the whole series, given at series_from, changes it as Twake Calendar answers
+        a series: in the series itself, and in its occurrences written apart that are not over by
+        then. Those over keep the answer they have, of which their organizer is not told again; so
+        do those the organizer cancelled alone, which there is nothing to answer in. Their days,
+        and their times in no zone the IANA database has, are read in the given zone, the user's,
+        else in UTC."""
         jcal = copy.deepcopy(self.jcal)
-        invited = False
         for component in jcal[2]:
             if component[0] != "vevent":
                 continue
+            if series_from is not None and (
+                _cancelled(component) or _over(component, series_from, zone or ZoneInfo("UTC"))
+            ):
+                continue
             for prop in component[1]:
                 if _is_attendee(prop, email):
-                    prop[1]["partstat"] = "ACCEPTED"
-                    invited = True
-        return CalendarEvent(self.href, jcal) if invited else None
+                    prop[1]["partstat"] = partstat
+        return CalendarEvent(self.href, jcal)
 
 
 def new_event(

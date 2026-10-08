@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from twake_space_agent_contracts.calendar import CalendarEvent, EventTime
 from twake_space_agent_contracts.previews import Language, day, one_line, quoted, time_of_day
+from twake_space_agent_contracts.zones import bounded
 
 
 @dataclass(frozen=True)
@@ -42,20 +43,25 @@ _WORDS: dict[Language, _Words] = {
 
 
 def _shown_time(moment: EventTime, zone: ZoneInfo | None) -> tuple[datetime, str | None]:
-    """A time as the owner reads it, in their zone; else as the event writes it, with the zone to
-    name beside it, if any."""
+    """A time as the owner reads it, in their zone, else in its own, with the zone to name beside
+    it; the first or last time every zone can show for one before or after them, as the list of
+    events gives it. A floating time as the event writes it, with the zone to name, if any."""
     assert isinstance(moment.value, datetime)
-    if zone is not None and moment.value.tzinfo is not None:
-        return moment.value.astimezone(zone), None
-    return moment.value, moment.zone
+    if moment.value.tzinfo is None:
+        return moment.value, moment.zone
+    shown = bounded(moment.value)
+    if zone is not None:
+        return shown.astimezone(zone), None
+    return shown.astimezone(moment.value.tzinfo), moment.zone
 
 
 def _days(start: date, end: EventTime | None, language: Language) -> str:
-    """When an event of whole days takes place: its end is the day after its last."""
+    """When an event of whole days takes place: its end is the day after its last, and one that is
+    not after its first, such as 0001-01-01, or that is a time, ends it on that day."""
     words = _WORDS[language]
-    last = end.value - timedelta(days=1) if end is not None else start
-    if isinstance(last, datetime) or last <= start:
+    if end is None or isinstance(end.value, datetime) or end.value - start <= timedelta(days=1):
         return words.all_day.format(day=day(start, language))
+    last = end.value - timedelta(days=1)
     return words.days.format(first=day(start, language), last=day(last, language))
 
 
@@ -75,9 +81,14 @@ def when_it_takes_place(
     ending = None
     if end is not None and isinstance(end.value, datetime):
         ending = _shown_time(end, zone)[0]
-    # An end written otherwise than its start, floating against zoned, tells nothing sure
-    if ending is not None and (ending.tzinfo is None) != (begins.tzinfo is None):
-        ending = None
+        floating = ending.tzinfo is None
+        # An end written otherwise than its start, floating against zoned, or floating in another
+        # zone, tells nothing sure
+        if floating != (begins.tzinfo is None) or (floating and end.zone != start.zone):
+            ending = None
+        # A zoned end in the zone of the start, which the preview names for both
+        elif not floating:
+            ending = ending.astimezone(begins.tzinfo)
     if ending is None or ending <= begins:
         when = words.at.format(day=first, time=at)
     elif ending.date() == begins.date():
