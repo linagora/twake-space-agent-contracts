@@ -641,6 +641,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
 | 404 | `invitation_not_found` | no invitation to an event of this UID was sent to the user: their calendars have no copy of the event, their copy does not list them as an attendee, or they organize it |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
+| 404 | `person_not_found` | Calendar has no user with an email `find_meeting_slots` is given, whose free/busy it cannot read |
 | 404 | `chat_account_not_found` | Chat has no account for the user's email |
 | 404 | `room_not_found` | the user has joined no room with this id |
 | 404 | `mailbox_not_found` | the user has no mailbox of their own with this id or name, none with the role archive or trash, or no Drafts mailbox for a draft |
