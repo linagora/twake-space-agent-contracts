@@ -74,7 +74,7 @@ Every contract keeps the rules of the capability catalog:
 
 ### `events.read.v1`, retired
 
-`read_event` and `list_events` read the workplace events stored for the user, which a Kafka bus brought and its storage wrote in the `workplace_events` table of a PostgreSQL database. Nothing writes that table since the bus was removed in October 2026: the harness now hears from RabbitMQ of what concerns an assistant, such as an invitation, with the UID of its event, which `accept_invitation` takes. The two contracts are gone from the service and from its OpenAPI document, and the service's only use of a database with them:
+`read_event` and `list_events` read the workplace events stored for the user, which a Kafka bus brought and its storage wrote in the `workplace_events` table of a PostgreSQL database. Nothing writes that table since the bus was removed in October 2026: the harness now hears from RabbitMQ of what concerns an assistant, such as an invitation, with the UID of its event, which `accept_invitation` and `decline_invitation` take. The two contracts are gone from the service and from its OpenAPI document, and the service's only use of a database with them:
 
 - `events` is no longer an application of the service. It is not published whatever `PUBLISHED_APPS` says, as it was, and a setting that still names it stops the service from starting.
 - An operator takes `events` out of `PUBLISHED_APPS` with the new image, gives the OpenAPI document a new address, then removes the gateway's routes of `events`, as for [switching an application off](#putting-an-application-in-service).
