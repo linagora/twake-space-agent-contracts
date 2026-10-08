@@ -1320,12 +1320,22 @@ def floating_moved_to_a_time() -> list[Any]:
             "mardi 13 octobre 2026 de 18 h à 19 h",
             id="the first occurrence moved later",
         ),
-        # The series' rule is not expanded: the earliest start the copy writes
+        # Neither the series' RRULE nor its RDATE is read: the earliest DTSTART the copy writes
         pytest.param(
             first_moved_after_the_second(),
             "Point Twake Space E2E, reporté",
             "jeudi 22 octobre 2026 de 17 h à 18 h",
             id="the first occurrence moved after the second",
+        ),
+        pytest.param(
+            invitation_a(
+                "NEEDS-ACTION",
+                WEEKLY,
+                ["rdate", {"tzid": "Europe/Paris"}, "date-time", "2026-10-10T17:00:00"],
+            ),
+            "Point Twake Space E2E",
+            "mardi 13 octobre 2026 de 17 h à 18 h",
+            id="a date its RDATE adds before its start",
         ),
         # The second occurrence, which the organizer moved to 18:00, is the first that takes place
         pytest.param(
@@ -1421,6 +1431,15 @@ async def test_a_preview_of_answering_the_whole_series_tells_of_its_earliest_occ
             later_first(first_cancelled(invitation_a("NEEDS-ACTION", WEEKLY))),
             id="its first occurrence cancelled alone, written before it",
         ),
+        pytest.param(
+            first_excluded(
+                invitation_a(
+                    "NEEDS-ACTION",
+                    ["rdate", {"tzid": "Europe/Paris"}, "date-time", "2026-10-20T17:00:00"],
+                )
+            ),
+            id="the dates its RDATE adds alone taking place",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -1433,7 +1452,8 @@ async def test_a_preview_of_answering_the_whole_series_tells_of_its_earliest_occ
 async def test_a_preview_tells_a_series_writing_no_start_that_takes_place_by_its_title_alone(
     client: AsyncClient, boundary: FakeBoundary, operation: str, answer_words: str, event: list[Any]
 ) -> None:
-    # The series' rule is not expanded: the copy writes no other start than its first
+    # Neither the series' RRULE nor its RDATE is read: the copy writes no other DTSTART than its
+    # first
     boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
 
     told, _ = preview_of(await preview(client, operation, UID, series=True))

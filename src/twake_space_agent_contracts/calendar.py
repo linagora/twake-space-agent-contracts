@@ -396,15 +396,15 @@ class CalendarEvent:
     def earliest(self, zone: ZoneInfo) -> "CalendarEvent":
         """The VEVENT whose DTSTART is the earliest the copy writes that takes place, as an event of
         its own: the series' own, or that of an occurrence written apart, wherever the copy holds
-        it. The series' rule is not expanded: the earliest start the copy writes may not be the
-        series' first, such as when its first occurrence moved after the second. The series' own
-        start does not take place when an EXDATE excludes it, as esn-sabre cancels one occurrence,
-        or when an occurrence written apart replaces it, with that start as its RECURRENCE-ID; nor
-        does that of an occurrence cancelled alone. A day starts at its midnight, and a time in no
-        zone the IANA database has, floating or in a zone it lacks, is read, in the given zone; of
-        those that start together, the first in the copy. With no start that takes place, the
-        series' own VEVENT, or the copy's first, without its times: it tells the series by its
-        title alone."""
+        it. Neither the series' RRULE nor its RDATE is read: the earliest start the copy writes may
+        not be the series' first, such as when its first occurrence moved after the second, or when
+        an RDATE adds a date before its DTSTART. The series' own start does not take place when an
+        EXDATE excludes it, as esn-sabre cancels one occurrence, or when an occurrence written apart
+        replaces it, with that start as its RECURRENCE-ID; nor does that of an occurrence cancelled
+        alone. A day starts at its midnight, and a time in no zone the IANA database has, floating
+        or in a zone it lacks, is read, in the given zone; of those that start together, the first
+        in the copy. With no start that takes place, the series' own VEVENT, or the copy's first,
+        without its times: it tells the series by its title alone."""
 
         def instant(prop: list[Any] | None) -> datetime | None:
             """The time a property gives, as written, never moved: a day from its midnight, and a
