@@ -192,7 +192,10 @@ async def _occurrences(
     """The occurrences of the user's calendars between two times, placed in time, by start; those
     without their series come whatever their days. An event the contract cannot read fails them
     all, unless they are to leave it out."""
-    events = await calendar.events_between(user, since.astimezone(UTC), until.astimezone(UTC))
+    # Calendar leaves out of a time range an occurrence of no duration that starts when it starts
+    events = await calendar.events_between(
+        user, (since - timedelta(seconds=1)).astimezone(UTC), until.astimezone(UTC)
+    )
     occurrences: list[_Placed] = []
     for event in events:
         try:
@@ -206,13 +209,13 @@ async def _occurrences(
 def _listed(
     occurrences: list[_Placed], start: datetime, end: datetime, needs_action: bool
 ) -> list[_Placed]:
-    """The occurrences a list holds: those that take place between two times, and with
-    needs_action, those of them alone that wait for the user's answer."""
+    """The occurrences a list holds: those that start between two times, or before them and end
+    after the first, so that one of no duration is listed when it starts; and with needs_action,
+    those of them alone that wait for the user's answer."""
     return [
         occurrence
         for occurrence in occurrences
-        if occurrence.start < end
-        and start < occurrence.end
+        if (start <= occurrence.start < end or occurrence.start < start < occurrence.end)
         and (occurrence.listed.needs_action or not needs_action)
     ]
 

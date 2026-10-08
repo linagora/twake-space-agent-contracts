@@ -80,6 +80,20 @@ async def test_a_day_runs_from_midnight_to_midnight_in_the_user_time_zone(
     ]
 
 
+async def test_an_occurrence_of_no_duration_is_listed_on_the_day_it_starts_even_at_midnight(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    keep(boundary, jcal_event("midnight", "2026-10-10T00:00:00", "2026-10-10T00:00:00"))
+
+    day_before = await list_events(client, **{"from": "2026-10-09"})
+    its_day = await list_events(client, **{"from": "2026-10-10"})
+
+    assert times_of(day_before) == []
+    assert times_of(its_day) == [
+        ("midnight", "2026-10-10T00:00:00+02:00", "2026-10-10T00:00:00+02:00")
+    ]
+
+
 async def test_the_days_are_those_of_the_user_time_zone_whatever_the_zone_of_the_events(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
