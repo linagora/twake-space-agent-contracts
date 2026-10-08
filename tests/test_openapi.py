@@ -590,6 +590,22 @@ async def test_answering_an_invitation_publishes_its_own_answer_only(
     assert refusal({"uid": "a", "partstat": other}, schema, document) is not None
 
 
+@pytest.mark.parametrize("answer", ["accept", "decline"])
+async def test_answering_an_invitation_says_when_calendar_may_not_tell_the_organizer(
+    client: AsyncClient, answer: str
+) -> None:
+    # esn-sabre may send the organizer no reply for a copy that holds a cancelled occurrence: the
+    # model is not told that Calendar always tells them
+    document = (await client.get("/openapi.json")).json()
+
+    answering = document["paths"][f"/contracts/v1/calendar/invitations/{answer}"]["post"]
+
+    assert (
+        "; it may not when the user's copy of the event holds a cancelled occurrence."
+        in answering["description"]
+    )
+
+
 async def test_creating_an_event_is_a_low_risk_write(client: AsyncClient) -> None:
     # The user's own time, with nobody invited: once the owner allowed writing in Calendar, it runs
     # without asking

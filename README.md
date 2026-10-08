@@ -117,7 +117,7 @@ Lists the events of the calendars the user owns, one per occurrence, over days o
 
 ### `calendar.invitation.accept.v1`
 
-Accepts, as the user, an invitation the user received: only their own participation changes, and Calendar tells the organizer.
+Accepts, as the user, an invitation the user received: only their own participation changes, and Calendar tells the organizer; it may not when the user's copy of the event holds a cancelled occurrence.
 
 | Operation | Request | Answer |
 |---|---|---|
@@ -141,7 +141,7 @@ Accepts, as the user, an invitation the user received: only their own participat
 
 ### `calendar.invitation.decline.v1`
 
-Declines, as the user, an invitation the user received: only their own participation changes, and Calendar tells the organizer.
+Declines, as the user, an invitation the user received: only their own participation changes, and Calendar tells the organizer; it may not when the user's copy of the event holds a cancelled occurrence.
 
 | Operation | Request | Answer |
 |---|---|---|

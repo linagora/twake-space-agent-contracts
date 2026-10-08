@@ -225,7 +225,8 @@ def _accept(calendar: Calendar, caller: CallerDependency, now: Callable[[], date
         description=(
             "Accepts an invitation that the user you act for received, named by the UID of its "
             "event in Calendar: their own participation becomes accepted in their calendar, and "
-            "Calendar tells the organizer. Nothing else in the event changes. Call it only once "
+            "Calendar tells the organizer; it may not when the user's copy of the event holds a "
+            "cancelled occurrence. Nothing else in the event changes. Call it only once "
             "the user has said yes to this very invitation. A recurring invitation is refused "
             "unless series is true, which accepts the series and each of its occurrences "
             "neither over nor cancelled: set it only once the user has said yes to the whole "
@@ -263,7 +264,8 @@ def _decline(
         description=(
             "Declines an invitation that the user you act for received, named by the UID of its "
             "event in Calendar: their own participation becomes declined in their calendar, and "
-            "Calendar tells the organizer, without a comment. Nothing else in the event changes. "
+            "Calendar tells the organizer, without a comment; it may not when the user's copy of "
+            "the event holds a cancelled occurrence. Nothing else in the event changes. "
             "Call it only once the user has said no to this very invitation. A recurring "
             "invitation is refused unless series is true, which declines the series and each of "
             "its occurrences neither over nor cancelled: set it only once the user has said no "
