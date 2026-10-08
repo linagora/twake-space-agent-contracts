@@ -974,6 +974,8 @@ CREATION = {
     "textBody",
     "bodyValues",
 }
+# The one form of a header field Email/get gives here: its text, the field named whatever its case
+HEADER_TEXT = re.compile(r"header:([^:]+):asText")
 
 
 def account_of(username: str) -> str:
@@ -1074,7 +1076,8 @@ class FakeTMail:
             ]
         }
         self.emails: dict[str, dict[str, Any]] = {}
-        """Emails by id, as JMAP gives them, with the text of their only part as body."""
+        """Emails by id, as JMAP gives them, with the text of their only part as body, and the
+        text of their other header fields by name as headers."""
         self.identities: dict[str, list[dict[str, Any]]] = {
             MMAUDET: [{"id": "identity-mmaudet", "name": "Michel-Marie", "email": MMAUDET}]
         }
@@ -1122,6 +1125,7 @@ class FakeTMail:
             "messageId": [f"{email_id}@twake.test"],
             "inReplyTo": None,
             "references": None,
+            "headers": {},
         } | jmap
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -1283,7 +1287,8 @@ class FakeTMail:
     @staticmethod
     def _properties(email: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
         """The email as Email/get gives it: its only text part, cut at maxBodyValueBytes, counted
-        in characters, which are bytes in the ASCII of the tests' long bodies."""
+        in characters, which are bytes in the ASCII of the tests' long bodies, and the text of
+        each header field asked for, null when the email has none (RFC 8621)."""
         body = email["body"]
         cut = arguments.get("maxBodyValueBytes") or len(body)
         parts = {
@@ -1300,7 +1305,14 @@ class FakeTMail:
                 else {}
             ),
         }
-        return _present({key: (email | parts).get(key) for key in arguments["properties"]})
+        found = _present({key: (email | parts).get(key) for key in arguments["properties"]})
+        texts = {name.lower(): text for name, text in email["headers"].items()}
+        headers = {
+            key: texts.get(match[1].lower())
+            for key in arguments["properties"]
+            if (match := HEADER_TEXT.fullmatch(key))
+        }
+        return found | headers
 
     def _threads(self, owner: str, arguments: dict[str, Any]) -> dict[str, Any]:
         threads = {
@@ -1375,6 +1387,7 @@ class FakeTMail:
                 "messageId": [f"{email_id}@twake.test"],
                 "inReplyTo": None,
                 "references": None,
+                "headers": {},
             } | {key: email[key] for key in email.keys() - {"textBody", "bodyValues"}}
             self.emails[email_id]["body"] = body
             self.created.append(email_id)
