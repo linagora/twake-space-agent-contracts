@@ -202,9 +202,11 @@ async def _answer[Reply: (Accepted, Declined)](
             " the organizer nothing: the user gave that answer already wherever the call gives it,"
             " or each occurrence their copy holds without the series is over or cancelled.",
         )
-    # What the owner allows: the answer to the event as their calendar holds it, where it is. Not
-    # the occurrences over by then, which only time changes, not the organizer.
-    digest = digest_of(event.href, event.jcal, partstat)
+    # What the owner allows: the answer to the event as their calendar holds it, where it is, and
+    # for a whole series the zone its days and floating times end in, the user's or none for UTC.
+    # Not the occurrences over by then, which only time changes, not the organizer.
+    over_in = zone.key if whole_series and zone is not None else None
+    digest = digest_of(event.href, event.jcal, partstat, over_in)
     if preview.asked:
         summary = _summary(answered, partstat, zone, preview.language, whole_series=whole_series)
         return preview.answer(summary, digest)

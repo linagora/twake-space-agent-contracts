@@ -906,6 +906,47 @@ async def test_an_occurrence_that_ends_after_the_preview_leaves_what_the_owner_a
 
 
 @pytest.mark.parametrize(
+    ("previewed_in", "called_in"),
+    [
+        pytest.param(None, "America/Los_Angeles", id="given after failing for the preview"),
+        pytest.param("America/Los_Angeles", None, id="failing after given for the preview"),
+        pytest.param("Europe/Paris", "America/Los_Angeles", id="another, set since the preview"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("operation", "answered_before"),
+    [("accept", "DECLINED"), ("decline", "ACCEPTED")],
+    ids=["accept", "decline"],
+)
+async def test_a_series_whose_user_zone_changed_since_the_preview_is_not_answered(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    operation: str,
+    answered_before: str,
+    previewed_in: str | None,
+    called_in: str | None,
+) -> None:
+    # 18:00 in Los Angeles, 1:00 in UTC, 3:00 in Paris: the day the organizer retitled, which the
+    # user answered already, is over in UTC and in Paris, not in Los Angeles. Read in another zone
+    # than for the preview, the call would answer it otherwise than the owner allowed.
+    clock.wall = datetime(2026, 10, 21, 1, tzinfo=UTC)
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, weekly_days("NEEDS-ACTION", answered_before)
+    )
+    in_zone(boundary, previewed_in)
+    _, digest = preview_of(await preview(client, operation, UID, series=True))
+    boundary.calendar.settings_down = False
+    in_zone(boundary, called_in)
+
+    response = await answer(client, operation, UID, allowed_after(digest), series=True)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "changed_since_preview"
+    assert boundary.calendar.writes == []
+
+
+@pytest.mark.parametrize(
     ("previewed", "called"),
     [("accept", "decline"), ("decline", "accept")],
     ids=["accept", "decline"],
