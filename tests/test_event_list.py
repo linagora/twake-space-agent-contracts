@@ -832,6 +832,32 @@ async def test_an_occurrence_past_the_days_and_times_datetime_holds_is_read_all_
     ]
 
 
+async def test_a_time_whose_offset_counts_seconds_is_given_in_utc(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Paris kept its mean time, 9 minutes 21 seconds ahead of UTC, until 1911
+    keep(boundary, jcal_event("old", "1900-01-01T10:00:00", "1900-01-01T11:00:00"))
+
+    answer = await list_events(client, **{"from": "1900-01-01"})
+
+    # RFC 3339 writes an offset to the minute: such a time comes in UTC, to the second
+    assert (answer["start"], answer["end"]) == ("1899-12-31T23:50:39Z", "1900-01-01T23:50:39Z")
+    assert times_of(answer) == [("old", "1900-01-01T09:50:39Z", "1900-01-01T10:50:39Z")]
+
+
+async def test_a_start_before_the_times_every_zone_can_show_is_given_to_the_second(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Los Angeles was 7 hours 52 minutes 58 seconds behind UTC in year 1
+    boundary.calendar.time_zones[MMAUDET] = "America/Los_Angeles"
+    keep(boundary, jcal_event("ages", "0001-01-01T00:00:00", "2026-10-09T10:00:00", zone="UTC"))
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    # The first time every zone can show, not a minute's seconds before it
+    assert times_of(answer) == [("ages", "0001-01-02T00:00:00Z", "2026-10-09T03:00:00-07:00")]
+
+
 async def test_the_days_are_read_in_utc_when_calendar_gives_no_zone_the_iana_database_has(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:

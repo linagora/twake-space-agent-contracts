@@ -42,6 +42,15 @@ def bounded(moment: datetime) -> datetime:
     return min(max(moment, FIRST_TIME), LAST_TIME)
 
 
+def exact(moment: datetime) -> datetime:
+    """An aware time at an offset RFC 3339 writes, and pydantic, to the minute: as it is, or in UTC
+    when its offset counts seconds, as zones did before they kept to whole minutes, such as Paris,
+    9 minutes 21 seconds ahead of UTC until 1911."""
+    if not (moment.utcoffset() or timedelta(0)) % timedelta(minutes=1):
+        return moment
+    return moment.astimezone(UTC)
+
+
 def midnight(day: date, zone: ZoneInfo) -> datetime:
     """When the day starts in the zone: at midnight, or, on a day whose midnight the clocks skip,
     when they go forward; on the first day datetime holds, whose midnight is before its first time
