@@ -376,6 +376,74 @@ async def test_answering_the_whole_series_answers_an_occurrence_not_over(
     assert boundary.calendar.objects[HREF].jcal == series(partstat, partstat)
 
 
+@pytest.mark.parametrize(
+    ("event", "moment"),
+    [
+        # The two occurrences end on 13 and 20 October
+        pytest.param(occurrences_alone(), datetime(2026, 11, 1, tzinfo=UTC), id="each over"),
+        pytest.param(
+            occurrences_one_cancelled("NEEDS-ACTION"),
+            datetime(2026, 10, 14, tzinfo=UTC),
+            id="over, or cancelled",
+        ),
+    ],
+)
+@pytest.mark.parametrize("asked", [{}, asking_preview("fr")], ids=["answering", "a preview"])
+@pytest.mark.parametrize("operation", OPERATIONS)
+async def test_a_whole_series_with_no_occurrence_left_to_answer_is_refused(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    operation: str,
+    asked: dict[str, str],
+    event: list[Any],
+    moment: datetime,
+) -> None:
+    # The user's copy holds occurrences without their series, each over or cancelled: the call
+    # would change nothing, while its answer would say that the calendar holds the user's
+    clock.wall = moment
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
+
+    response = await answer(client, operation, UID, asked, series=True)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "nothing_to_answer"
+    assert "x-twake-preview" not in response.headers
+    assert boundary.calendar.writes == []
+
+
+@pytest.mark.parametrize(
+    ("event", "series"),
+    [
+        pytest.param(invitation_a, False, id="once"),
+        pytest.param(
+            lambda partstat: weekly_series(partstat, partstat), True, id="for the whole series"
+        ),
+    ],
+)
+@pytest.mark.parametrize("asked", [{}, asking_preview("fr")], ids=["answering", "a preview"])
+@pytest.mark.parametrize(("operation", "partstat"), ANSWERS)
+async def test_answering_as_the_user_answered_already_is_refused(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    partstat: str,
+    asked: dict[str, str],
+    event: Callable[[str], list[Any]],
+    series: bool,
+) -> None:
+    # esn-sabre tells the organizer of a participation that changes, and of no other: the call
+    # would write the event as it is, and tell nobody
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event(partstat))
+
+    response = await answer(client, operation, UID, asked, series=series)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "nothing_to_answer"
+    assert "x-twake-preview" not in response.headers
+    assert boundary.calendar.writes == []
+
+
 CANCELLED_SERIES = with_props(
     weekly_series("NEEDS-ACTION", "NEEDS-ACTION", CANCELLED), status=CANCELLED
 )

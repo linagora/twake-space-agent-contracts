@@ -192,6 +192,17 @@ async def _answer[Reply: (Accepted, Declined)](
             " said yes to answering for the whole series, call again with series true; else they"
             " answer it in Calendar.",
         )
+    # esn-sabre tells the organizer of a participation that changes, and of no other: an answer
+    # that changes nothing would tell nobody, and its reply would say that the calendar holds it
+    if answered.jcal == event.jcal:
+        raise Problem(
+            status=409,
+            code="nothing_to_answer",
+            title="Nothing to answer",
+            detail="Answering would change nothing in the user's calendar, and Calendar would tell"
+            " the organizer nothing: the user gave that answer already wherever the call gives it,"
+            " or each occurrence their copy holds without the series is over or cancelled.",
+        )
     # What the owner allows: the answer to the event as their calendar holds it, where it is. Not
     # the occurrences over by then, which only time changes, not the organizer.
     digest = digest_of(event.href, event.jcal, partstat)

@@ -132,6 +132,7 @@ Accepts, as the user, an invitation the user received: only their own participat
 - A cancelled event is refused too (`invitation_cancelled`), whether it repeats or not, before `series` is looked at: it stays in the user's calendar, but esn-sabre would not tell its organizer, and the owner is not asked about the whole series of a cancelled event. The event is cancelled when its organizer cancelled the invitation itself: the event that does not repeat, or the series, whose own `VEVENT` has `STATUS:CANCELLED`, as esn-sabre writes it in each occurrence of a series its organizer cancels whole; in a copy without the series, each occurrence the user was invited to.
 - An occurrence cancelled alone does not refuse the call. esn-sabre takes one its organizer cancels out of the user's copy and adds it to the series' `EXDATE`, but a copy may hold one with `STATUS:CANCELLED`: with `series` true, it keeps the participation it has, and the user answers the rest of the series; without, the series is refused as any recurring invitation. esn-sabre reads the status of an event in the last of its `VEVENT`s that has one, and sends no reply when it is `CANCELLED`: when that is an occurrence cancelled alone, the user's answer stays in their calendar, and the organizer is not told.
 - The preview of a copy that holds a cancelled occurrence, wherever it is in the copy, says that Calendar may not tell the organizer, rather than that it does; the answer is given all the same.
+- An answer that would change nothing in the user's copy is refused (`nothing_to_answer`), its preview too: one the user gave already wherever the call would give it, or one for a whole series whose occurrences, which their copy holds without the series, are each over or cancelled. esn-sabre tells the organizer of a participation that changes and of no other, and the contract never answers that the calendar holds an answer it did not write.
 - The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
 - Agents call it only once the user has said yes to this invitation, and with `series` only once they said yes to the whole series; approval happens in the conversation for now.
 - It is a low-risk write (`x-twake-risk: low`): the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
@@ -146,7 +147,7 @@ Declines, as the user, an invitation the user received: only their own participa
 |---|---|---|
 | `decline_invitation` | `POST /contracts/v1/calendar/invitations/decline` `{"uid", "series"}` | `{"uid", "partstat": "DECLINED"}` |
 
-- It keeps every rule of `accept_invitation`: its body, `series` included, the user not invited answered as for an unknown UID, and the recurring and cancelled invitations it refuses. It sets `PARTSTAT=DECLINED` on the user's `ATTENDEE` instead, and esn-sabre sends the iTIP reply to the organizer.
+- It keeps every rule of `accept_invitation`: its body, `series` included, the user not invited answered as for an unknown UID, and the recurring and cancelled invitations and the answers changing nothing it refuses. It sets `PARTSTAT=DECLINED` on the user's `ATTENDEE` instead, and esn-sabre sends the iTIP reply to the organizer.
 - The reply carries no comment from the user: the body takes none. Answering a single occurrence of a series, and a comment to the organizer, come later.
 - Agents call it only once the user has said no to this invitation, and with `series` only once they said no to the whole series.
 - It is a low-risk write (`x-twake-risk: low`), as accepting is: the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
@@ -617,6 +618,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `changed_since_preview` | what the call acts on changed since its owner was shown what it would do: nothing was done |
 | 409 | `recurring_invitation` | the invitation repeats, or holds several occurrences of a series, and the call does not answer for the whole series |
 | 409 | `invitation_cancelled` | the organizer cancelled the invitation itself: the event that does not repeat, the whole series, or each occurrence the user was invited to without the series; an occurrence cancelled alone is not refused for the whole series |
+| 409 | `nothing_to_answer` | answering the invitation would change nothing in the user's calendar, of which Calendar would tell the organizer nothing: the user gave that answer already, or each occurrence their copy holds without the series is over or cancelled |
 | 409 | `identity_ambiguous` | the Chat account named after the user's email does not list that email |
 | 409 | `room_encrypted` | the room is encrypted, so its messages cannot be read; `room` gives what it shows of itself |
 | 409 | `file_encrypted` | the file is encrypted on the user's devices, or the document is protected by a password |
