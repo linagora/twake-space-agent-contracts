@@ -83,7 +83,7 @@ def _calendar(context: Context) -> list[APIRouter]:
     return [
         freebusy.router(calendar, context.caller),
         event_reads.router(calendar, context.caller),
-        invitations.router(calendar, context.caller),
+        *invitations.routers(calendar, context.caller),
         event_create.router(calendar, context.caller),
     ]
 
@@ -179,10 +179,11 @@ APPLICATIONS = (
             " tes agendas",
         ),
         write=Words(
-            en="accept the invitations you received, which tells their organizer, and add events"
-            " to your calendar, with nobody invited",
-            fr="accepter les invitations que tu as reçues, ce qui prévient leur organisateur, et"
-            " ajouter des événements à ton agenda, sans y inviter personne",
+            en="accept or decline the invitations you received, even for a whole series, which"
+            " tells their organizer, and add events to your calendar, with nobody invited",
+            fr="accepter ou refuser les invitations que tu as reçues, même pour toute une série, ce"
+            " qui prévient leur organisateur, et ajouter des événements à ton agenda, sans y"
+            " inviter personne",
         ),
         routers=_calendar,
     ),

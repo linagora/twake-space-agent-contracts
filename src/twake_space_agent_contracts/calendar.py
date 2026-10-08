@@ -32,8 +32,8 @@ INVITATION_UID = (
     "An invitation's UID is that of its calendar event, as the harness gives it with the "
     "invitation."
 )
-"""Where agents find the UID of an invitation, which accept_invitation takes and read_freebusy
-may leave out."""
+"""Where agents find the UID of an invitation, which accept_invitation and decline_invitation take
+and read_freebusy may leave out."""
 
 EventStatus = Literal["TENTATIVE", "CONFIRMED", "CANCELLED"]
 """Whether an event takes place, in the words iCalendar gives its organizer."""
@@ -333,11 +333,12 @@ class CalendarEvent:
             for prop in vevent[1]
         )
 
-    def accepted_by(self, email: str) -> "CalendarEvent | None":
-        """The event with the participation of that user accepted, and nothing else changed;
-        None if it does not invite them: if it does not list them as an attendee, or if they
-        organize it, whom Twake Calendar lists among its attendees too, as its chair. Addresses
-        compare lowercased, as sabre's iTIP broker compares them."""
+    def answered_by(self, email: str, partstat: str) -> "CalendarEvent | None":
+        """The event with the participation of that user set to their answer, such as ACCEPTED,
+        wherever it lists them, and nothing else changed; None if it does not invite them: if it
+        does not list them as an attendee, or if they organize it, whom Twake Calendar lists among
+        its attendees too, as its chair. Addresses compare lowercased, as sabre's iTIP broker
+        compares them."""
         email = email.lower()
         if self.organized_by(email):
             return None
@@ -348,7 +349,7 @@ class CalendarEvent:
                 continue
             for prop in component[1]:
                 if _is_attendee(prop, email):
-                    prop[1]["partstat"] = "ACCEPTED"
+                    prop[1]["partstat"] = partstat
                     invited = True
         return CalendarEvent(self.href, jcal) if invited else None
 

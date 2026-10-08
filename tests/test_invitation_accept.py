@@ -53,13 +53,17 @@ def invitation_a(mmaudet_partstat: str | None = "NEEDS-ACTION", *more: list[Any]
     )
 
 
-async def accept(client: AsyncClient, uid: str, headers: dict[str, str] | None = None) -> Response:
-    return await client.post(ACCEPT, json={"uid": uid}, headers=AS_MMAUDET | (headers or {}))
+async def accept(
+    client: AsyncClient, uid: str, headers: dict[str, str] | None = None, **body: Any
+) -> Response:
+    return await client.post(
+        ACCEPT, json={"uid": uid, **body}, headers=AS_MMAUDET | (headers or {})
+    )
 
 
-async def preview(client: AsyncClient, uid: str, language: str = "fr") -> Response:
+async def preview(client: AsyncClient, uid: str, language: str = "fr", **body: Any) -> Response:
     """The harness asks what accepting would do, before it asks the owner."""
-    return await accept(client, uid, asking_preview(language))
+    return await accept(client, uid, asking_preview(language), **body)
 
 
 def with_props(event: list[Any], **props: list[Any] | None) -> list[Any]:
@@ -94,6 +98,22 @@ def paris(name: str, time: str) -> list[Any]:
 
 def with_uid(event: list[Any], uid: str) -> list[Any]:
     return with_props(event, uid=["uid", {}, "text", uid])
+
+
+def weekly_series(
+    mmaudet_partstat: str, moved_partstat: str, *more: list[Any], moved_hour: int = 18
+) -> list[Any]:
+    """Invitation A as a weekly series in the user's calendar: its occurrences, then the second,
+    which the organizer moved from 17:00 to that hour, with any more properties; the user's
+    participation in each."""
+    series = invitation_a(mmaudet_partstat, WEEKLY)
+    moved = with_props(
+        invitation_a(moved_partstat, paris("recurrence-id", "2026-10-20T17:00:00"), *more),
+        dtstart=paris("dtstart", f"2026-10-20T{moved_hour}:00:00"),
+        dtend=paris("dtend", f"2026-10-20T{moved_hour + 1}:00:00"),
+    )
+    series[2].append(moved[2][0])
+    return series
 
 
 @pytest.mark.parametrize(
@@ -188,7 +208,7 @@ async def test_a_user_not_invited_is_answered_as_for_an_unknown_invitation(
 @pytest.mark.parametrize(
     "recurrence", [WEEKLY, ONE_OCCURRENCE], ids=["a weekly series", "one occurrence of a series"]
 )
-async def test_a_recurring_invitation_is_left_for_the_user_to_answer(
+async def test_a_recurring_invitation_is_refused_unless_for_the_whole_series(
     client: AsyncClient, boundary: FakeBoundary, recurrence: list[Any]
 ) -> None:
     # The UID names the whole series, not which of its occurrences the user would accept
@@ -201,6 +221,21 @@ async def test_a_recurring_invitation_is_left_for_the_user_to_answer(
     assert response.status_code == 409
     assert response.json()["code"] == "recurring_invitation"
     assert boundary.calendar.writes == []
+
+
+async def test_accepting_the_whole_series_accepts_each_of_its_occurrences(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The user's answer to one occurrence included, once they said yes to the whole series
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, weekly_series("NEEDS-ACTION", "DECLINED")
+    )
+
+    response = await accept(client, UID, series=True)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"uid": UID, "partstat": "ACCEPTED"}
+    assert boundary.calendar.objects[HREF].jcal == weekly_series("ACCEPTED", "ACCEPTED")
 
 
 async def test_a_cancelled_invitation_is_not_accepted(
@@ -264,6 +299,25 @@ async def test_a_preview_tells_the_owner_what_accepting_would_do_and_does_nothin
     assert told == summary
     assert boundary.calendar.writes == []
     assert boundary.calendar.objects[HREF].jcal == invitation_a()
+
+
+async def test_the_owner_who_allowed_accepting_the_whole_series_accepts_it(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, weekly_series("NEEDS-ACTION", "DECLINED")
+    )
+    told, digest = preview_of(await preview(client, UID, series=True))
+
+    response = await accept(client, UID, allowed_after(digest), series=True)
+
+    assert told == (
+        "Accepter toute la série « Point Twake Space E2E », mardi 13 octobre 2026 de 17 h à 18 h"
+        " la première fois, invitation de « E2E » <e2e.organizer@twake.test>\n"
+        "Twake Agenda prévient l'organisateur."
+    )
+    assert response.status_code == 200, response.text
+    assert boundary.calendar.objects[HREF].jcal == weekly_series("ACCEPTED", "ACCEPTED")
 
 
 @pytest.mark.parametrize(
