@@ -682,9 +682,10 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         zone = own_zone or ZoneInfo("UTC")
         time_zone = own_zone.key if own_zone is not None else None
         found = await calendar.find_event(user, uid)
-        events = found.split() if found is not None else []
-        if found is None or not events:
+        if found is None or not found.split():
             raise _event_not_found()
+        # Its times in zones of the IANA database, as Calendar reads them for the list
+        found = found.zoned()
         if recurrence_id is not None:
             occurrence = await _occurrence(calendar, user, found, recurrence_id)
             return EventRead(
@@ -693,6 +694,7 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
                 exceptions=[],
                 exceptions_truncated=False,
             )
+        events = found.split()
         series = next((event for event in events if not event.is_occurrence), None)
         exceptions = sorted(
             (_exception(event, zone, user.email) for event in events if event.is_occurrence),

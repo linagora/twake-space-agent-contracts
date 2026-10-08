@@ -5,6 +5,8 @@ from datetime import UTC, date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from twake_space_agent_contracts.windows_zones import WINDOWS_ZONES
+
 ZONE = r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"
 """An IANA time zone name, such as Europe/Paris or Etc/GMT+1: a pattern any OpenAPI validator
 checks."""
@@ -34,6 +36,12 @@ def zone_named(name: Any) -> ZoneInfo | None:
         return ZoneInfo(name)
     except (KeyError, ValueError, OSError):
         return None
+
+
+def windows_zone(name: Any) -> ZoneInfo | None:
+    """The IANA time zone Unicode CLDR gives a name Windows gives a zone, as Outlook writes it in
+    the TZID of an event, if the IANA database has it."""
+    return zone_named(WINDOWS_ZONES.get(name)) if isinstance(name, str) else None
 
 
 def known_zone(name: str) -> str:

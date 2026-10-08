@@ -591,7 +591,57 @@ async def test_the_event_is_read_in_utc_when_calendar_gives_no_zone_the_iana_dat
     )
 
 
+async def test_times_in_a_zone_windows_names_are_read_in_the_iana_zone_cldr_gives_it(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The zone of Los Angeles, as Outlook writes it
+    keep(
+        boundary,
+        jcal_event(
+            POINT, "2026-10-13T09:00:00", "2026-10-13T10:00:00", zone="Pacific Standard Time"
+        ),
+    )
+
+    event = (await read_event(client, uid=POINT))["event"]
+
+    # In the user's zone, Paris, nine hours ahead
+    assert (event["start"], event["end"]) == (
+        "2026-10-13T18:00:00+02:00",
+        "2026-10-13T19:00:00+02:00",
+    )
+
+
+async def test_a_series_in_a_zone_windows_names_keeps_to_its_changes_of_offset(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.calendar.time_zones[MMAUDET] = "America/New_York"
+    # On Mondays at 17:00 in Berlin, as Outlook writes its zone, but the second
+    series = jcal_event(
+        POINT,
+        "2026-10-12T17:00:00",
+        "2026-10-12T18:00:00",
+        ["rrule", {}, "recur", {"freq": "WEEKLY", "count": 5}],
+        zone="W. Europe Standard Time",
+    )
+    keep(boundary, left_out(series, "2026-10-19T17:00:00"))
+
+    whole = await read_event(client, uid=POINT)
+    # Once Berlin turned its clocks back, a week before New York
+    one = await read_event(client, uid=POINT, recurrence_id="2026-10-26T16:00:00Z")
+
+    assert (whole["event"]["start"], whole["event"]["recurrence"]["excluded"]) == (
+        "2026-10-12T11:00:00-04:00",
+        ["2026-10-19T11:00:00-04:00"],
+    )
+    assert (one["event"]["recurrence_id"], one["event"]["start"]) == (
+        "2026-10-26T12:00:00-04:00",
+        "2026-10-26T12:00:00-04:00",
+    )
+
+
 HOUR = "2026-10-13T17:00:00", "2026-10-13T18:00:00"
+# The name Windows shows for the zone of Paris, which neither the IANA database nor CLDR gives
+SHOWN_ZONE = "(UTC+01:00) Brussels, Copenhagen, Madrid, Paris"
 
 
 @pytest.mark.parametrize(
@@ -613,11 +663,8 @@ HOUR = "2026-10-13T17:00:00", "2026-10-13T18:00:00"
             without_end(jcal_event(POINT, *HOUR), ["dtend", {}, "date", "2026-10-14"]),
             id="from a time to a day",
         ),
-        # The name Windows gives the time zone of Paris: its offset, the contract cannot tell
-        pytest.param(
-            jcal_event(POINT, *HOUR, zone="Romance Standard Time"),
-            id="a zone the IANA database lacks",
-        ),
+        # Its offset, the contract cannot tell
+        pytest.param(jcal_event(POINT, *HOUR, zone=SHOWN_ZONE), id="a zone no database names"),
         pytest.param(
             moved(weekly(5), "2026-10-19T17:00:00", "2026-10-19T18:00:00", "soon"),
             id="an occurrence kept apart of times in another form",

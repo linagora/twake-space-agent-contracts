@@ -13,7 +13,14 @@ from pydantic import BaseModel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
-from twake_space_agent_contracts.zones import JCAL_TIME, formatted, midnight, vtimezone, zone_named
+from twake_space_agent_contracts.zones import (
+    JCAL_TIME,
+    formatted,
+    midnight,
+    vtimezone,
+    windows_zone,
+    zone_named,
+)
 
 # How esn-sabre (2.4.6 and later) writes UTC times in its JSON free/busy
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
@@ -324,6 +331,21 @@ class CalendarEvent:
         """The events it holds, one per VEVENT, as Calendar keeps a series and its occurrences
         that differ from it under one UID, at one href."""
         return [CalendarEvent(self.href, [*self.jcal[:2], [vevent]]) for vevent in self._vevents()]
+
+    def zoned(self) -> "CalendarEvent":
+        """The event with its times in zones of the IANA database, as Calendar reads them for the
+        list: a time in a zone Windows names, as Outlook writes it, in the IANA zone Unicode CLDR
+        gives that name. One in a zone neither names stays as written."""
+        jcal = copy.deepcopy(self.jcal)
+        for component in jcal[2]:
+            if component[0] != "vevent":
+                continue
+            for prop in component[1]:
+                tzid = prop[1].get("tzid")
+                zone = zone_named(tzid) or windows_zone(tzid)
+                if prop[2] == "date-time" and zone is not None:
+                    prop[1]["tzid"] = zone.key
+        return CalendarEvent(self.href, jcal)
 
     def _prop(self, name: str) -> list[Any] | None:
         """The first property of that name of the event, which is not a series."""
