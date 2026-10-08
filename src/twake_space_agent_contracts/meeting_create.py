@@ -234,7 +234,7 @@ def _holds(event: CalendarEvent, title: str, new: NewMeeting, addresses: list[st
         event.title == title
         and period.start == new.start
         and period.end == new.end
-        and event.attendees == set(addresses)
+        and event.invitees == set(addresses)
         and event.location == _trimmed(new.location)
         and event.description == _trimmed(new.description)
     )
@@ -248,7 +248,7 @@ def _written(event: CalendarEvent, uid: str) -> WrittenMeeting:
         start=period.start,
         end=period.end,
         time_zone=period.zone,
-        attendees=sorted(event.attendees),
+        attendees=sorted(event.invitees),
         untrusted=EventText(
             title=event.title, location=event.location, description=event.description
         ),

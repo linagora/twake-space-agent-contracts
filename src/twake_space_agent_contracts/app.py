@@ -1,6 +1,7 @@
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -51,10 +52,15 @@ class Contracts(FastAPI):
         return document | {"x-twake-domains": self.domains}
 
 
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
 def create_app(
     settings: Settings,
     http: httpx.AsyncClient | None = None,
     clock: Callable[[], float] = time.monotonic,
+    now: Callable[[], datetime] = _now,
 ) -> FastAPI:
     published = applications.published(settings.published_apps)
     http = http or httpx.AsyncClient(timeout=10)
@@ -73,7 +79,7 @@ def create_app(
         lifespan=lifespan,
     )
     problems.install(app)
-    context = applications.Context(settings, http, caller, clock)
+    context = applications.Context(settings, http, caller, clock, now)
     for application in published:
         for router in application.routers(context):
             app.include_router(router)
