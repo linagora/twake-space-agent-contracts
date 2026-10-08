@@ -31,8 +31,8 @@ Before an assistant first reads in an application, and before it first writes th
   "calendar": {
     "name": { "en": "Twake Calendar", "fr": "Twake Agenda" },
     "read": {
-      "en": "see your free and busy times in your calendars",
-      "fr": "voir tes créneaux libres et occupés dans tes agendas"
+      "en": "see your free and busy times and read your events, private ones included, in your calendars",
+      "fr": "voir tes créneaux libres et occupés et lire tes événements, privés compris, dans tes agendas"
     },
     "write": {
       "en": "accept the invitations you received, which tells their organizer, and add events to your calendar, with nobody invited",
@@ -92,6 +92,26 @@ Tells whether the user is free over a period, from all their calendars, as Calen
 - `start` and `end` are RFC 3339 times with their offset; the period must end after it starts and last at most 31 days.
 - `exclude`, repeated, lists the UIDs of the events to leave out, such as the invitation being decided about, which already sits in the user's calendar.
 - The service goes through the Calendar side service with the user's token: `GET /api/users?email=` for the user's id, then `POST /dav/calendars/freebusy`, the JSON free/busy of esn-sabre 2.4.6 or later, which writes its times in UTC.
+
+### `calendar.event.read.v1`
+
+Lists the events of the calendars the user owns, one per occurrence, over days of their time zone.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_calendar_events` | `GET /contracts/v1/calendar/events?from=…&days=…&limit=…` | `{"time_zone", "start", "end", "events": [{"uid", "recurrence_id", "start", "end", "all_day", "status", "private", "organizer", "my_partstat", "needs_action", "conflicts": [{"uid", "recurrence_id"}], "untrusted": {"title", "location", "description"}}], "truncated"}` |
+
+- `from` is the first day, written as `2026-10-09`, between 1900-01-01 and 9998-12-31 as for `create_event`: a time, even at midnight, is an invalid request. `days`, optional, 1 by default and 31 at most, is how many days are read from it, so that a call giving `from` alone reads that day; `limit`, 20 by default and 100 at most, how many events come back. The OpenAPI document gives both defaults.
+- The days are those of the user's time zone, the one Calendar gives (`POST /api/configurations`, `core.datetime`), the deployment's when the user set none, which the answer names in `time_zone`. They run from midnight on the first to midnight after the last, which the answer gives as `start` and `end`: the day the clocks go back lasts 25 hours, and a day whose midnight they skip starts when they go forward. When Calendar gives no zone the IANA database has, the days are read in UTC and `time_zone` is null: UTC is then not the user's zone, which a caller may keep. Calendar failing to give one answers `calendar_unavailable`.
+- Every time comes in the zone of the days, with its offset; an event of whole days gives its first and last days, as `create_event` takes them.
+- The service lists the calendars the user owns with `GET /dav/calendars/<user id>.json?personal=true`, which leaves out the calendars of others that the user subscribes to or was delegated, then asks each with the JSON `REPORT` of esn-sabre on `{"match": {"start", "end"}}`, in UTC. esn-sabre expands a repeating event into its occurrences between those times, each with its `RECURRENCE-ID`, their times in UTC. It gives an occurrence whose series the calendar does not hold, as when the user is invited to one occurrence only, whatever its days: the service keeps those of the days.
+- An event without `DTEND` lasts its `DURATION`, or without one its whole day, or no time at all, as iCalendar reads it.
+- `uid` and `recurrence_id` name an occurrence: `recurrence_id` is the start the series gives it, null for an event that does not repeat. `status` is the organizer's `STATUS`, null without one. `organizer` is the organizer's email address, null without one or when the event gives anything else. `my_partstat` is the user's `PARTSTAT` as the event lists them among its attendees, `NEEDS-ACTION` when it says none or not in the words of iCalendar, null when it does not list them.
+- `needs_action` tells the invitations waiting for the user's answer, which Calendar keeps no list of: their `PARTSTAT` is `NEEDS-ACTION`, they do not organize the event, whom Twake Calendar lists among its attendees too, and it is not cancelled.
+- `conflicts` names, for each occurrence, the occurrences of the days that overlap it, those `limit` leaves out included, when both take the user's time: neither declined by the user, cancelled, nor of whole days. Events that follow each other without a gap do not overlap; a transparent event counts.
+- `private` is true for an event of any class but `PUBLIC`: `PRIVATE`, `CONFIDENTIAL`, or one iCalendar does not know, which it reads as private. esn-sabre hides private and confidential events from whoever reads a calendar they do not own, the members of a team calendar aside, and gives them whole to its owner: the contract, which reads the user's own calendars only, gives them in full, for the user. The words of Calendar for reading say so, in `x-twake-domains`: "see your free and busy times and read your events, private ones included, in your calendars".
+- `untrusted` holds what people wrote, on one line, without what a reader does not see: the title and the location, 500 characters at most, as many as `create_event` writes, and the start of the description, 200 characters at most, ending with `…` when it goes on.
+- The events come by start; `truncated` is true when `limit` left some out.
 
 ### `calendar.invitation.accept.v1`
 
