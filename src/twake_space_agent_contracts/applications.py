@@ -14,6 +14,7 @@ from twake_space_agent_contracts import (
     drive_contents,
     drive_create,
     drive_files,
+    drive_shares,
     event_create,
     event_reads,
     freebusy,
@@ -144,6 +145,7 @@ def _drive(context: Context) -> list[APIRouter]:
     drive_owner = drive_owner_dependency(context.caller, domain)
     return [
         drive_files.router(drive, drive_owner),
+        drive_shares.router(drive, drive_owner),
         drive_contents.router(drive, drive_owner),
         drive_create.router(drive, drive_owner),
     ]

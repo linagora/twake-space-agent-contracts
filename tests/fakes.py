@@ -1807,6 +1807,83 @@ class Link:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
+@dataclass
+class Sharing:
+    """A sharing of files and folders, as cozy-stack keeps it on the owner's instance: one the
+    owner sent, or one another member sent them, as that member's instance wrote it, the sharer
+    first among its members."""
+
+    id: str
+    updated_at: str
+    """When the owner's instance wrote it last: for a sharing another member sent them, when its
+    invitation reached it, which it keeps once they accept; for one they sent, when they created
+    it."""
+    rules: list[dict[str, Any]]
+    members: list[dict[str, Any]]
+    owner: bool = False
+    """Whether the owner sent it."""
+    active: bool = True
+    """Whether it goes on: from when its recipient accepts it until it is revoked."""
+    drive: bool = False
+    """Whether it is a shared drive, whose files stay on the sharer's instance."""
+    created_at: str | None = None
+    """When the sharer created it, as their instance wrote it; updated_at without it, as when the
+    owner was invited as the sharer created it."""
+
+
+# Who shares with the owner: another member, whose instance gives their name and address
+ALICE_SHARER = {
+    "status": "owner",
+    "public_name": "Alice",
+    "email": "alice@twake.test",
+    "instance": "https://alice.twake.test",
+}
+
+
+def shared_item(title: str, value: str, *, mime: str = "", sync: bool = True) -> dict[str, Any]:
+    """A rule of a sharing on a file or folder by its id, the one such a rule names, as a
+    recipient's instance keeps it: its id there, and its type when it is a file, which the
+    sharer's instance gives. Changes go both ways when it syncs, else from the sharer only."""
+    action = "sync" if sync else "push"
+    rule = {
+        "title": title,
+        "doctype": "io.cozy.files",
+        "values": [value],
+        "add": action,
+        "update": action,
+        "remove": "revoke",
+    }
+    return rule | ({"mime": mime} if mime else {})
+
+
+def received_sharing(
+    sharing_id: str,
+    received_at: str,
+    *rules: dict[str, Any],
+    sharer: dict[str, Any] = ALICE_SHARER,
+    read_only: bool = False,
+    **more: Any,
+) -> Sharing:
+    """A sharing another member sent the owner, whose invitation reached their instance at
+    received_at, and which they accepted: its members are the sharer, then a recipient who got it
+    first and may only read, whose instance the sharer's keeps to itself, then the owner, the one
+    recipient whose instance it gives, who may only read when read_only says so."""
+    bob = {"status": "ready", "public_name": "Bob", "email": "bob@twake.test", "read_only": True}
+    owner = {
+        "status": "ready",
+        "email": MMAUDET,
+        "instance": f"https://{MMAUDET_INSTANCE}",
+    } | ({"read_only": True} if read_only else {})
+    return Sharing(sharing_id, received_at, list(rules), [sharer, bob, owner], **more)
+
+
+def sent_sharing(sharing_id: str, created_at: str, *rules: dict[str, Any]) -> Sharing:
+    """A sharing the owner sent Alice, who accepted it."""
+    owner = {"status": "owner", "public_name": "Michel-Marie", "email": MMAUDET}
+    alice = ALICE_SHARER | {"status": "ready"}
+    return Sharing(sharing_id, created_at, list(rules), [owner, alice], owner=True)
+
+
 def folder(doc_id: str, name: str, parent: str = ROOT_ID, **more: Any) -> DriveDoc:
     return DriveDoc(doc_id, "directory", name, parent, **more)
 
@@ -1865,7 +1942,8 @@ class FakeDrive:
     gives items with their path. POST /files/_find evaluates a Mango selector, sorts only along an
     index made with POST /data/io.cozy.files/_index, as CouchDB does, and pages with bookmarks.
     POST /files/:dir-id creates a file, never over another item of its name. GET
-    /permissions/doctype/io.cozy.files/shared-by-link pages the links. Also GET
+    /permissions/doctype/io.cozy.files/shared-by-link pages the links. GET
+    /sharings/doctype/io.cozy.files gives every sharing of files at once. Also GET
     /files/download/:id and the capabilities.
     """
 
@@ -1888,6 +1966,7 @@ class FakeDrive:
         self.trashed_meanwhile: set[str] = set()
         """Ids of the folders that someone trashes once read, before a file is written there."""
         self.links: list[Link] = []
+        self.sharings: list[Sharing] = []
         self.indexes: dict[str, dict[str, Any]] = {}
         """Mango indexes, by design document."""
         self.bookmarks: dict[str, int] = {}
@@ -1935,6 +2014,8 @@ class FakeDrive:
             return self._define_index(json.loads(request.content))
         if (method, path) == ("GET", "/permissions/doctype/io.cozy.files/shared-by-link"):
             return self._links_page(request)
+        if (method, path) == ("GET", "/sharings/doctype/io.cozy.files"):
+            return self._sharings(request)
         if method == "POST" and re.fullmatch(r"/files/[^/]+", path):
             return self._create(request, path.removeprefix("/files/"))
         if method == "GET" and path.startswith("/files/download/"):
@@ -2067,6 +2148,45 @@ class FakeDrive:
             for link in page
         ]
         return httpx.Response(200, json={"data": data, "links": links})
+
+    def _sharings(self, request: httpx.Request) -> httpx.Response:
+        """Every sharing with a rule on files, sent or received, whatever its state, in one page
+        and in no order of time, as the stack gives them from a map: with the documents each
+        shares unless the request says shared_docs=false. Like the stack, it writes owner,
+        active and drive only when they are true."""
+        shared_docs = request.url.params.get("shared_docs") != "false"
+        data = [
+            {
+                "type": "io.cozy.sharings",
+                "id": sharing.id,
+                "attributes": {
+                    "triggers": {},
+                    "app_slug": "drive",
+                    "created_at": sharing.created_at or sharing.updated_at,
+                    "updated_at": sharing.updated_at,
+                    "rules": sharing.rules,
+                    "members": sharing.members,
+                }
+                | ({"owner": True} if sharing.owner else {})
+                | ({"active": True} if sharing.active else {})
+                | ({"drive": True, "drive_root_type": "directory"} if sharing.drive else {}),
+                "meta": {"rev": "2-9f86d0"},
+                "links": {"self": f"/sharings/{sharing.id}"},
+                "relationships": {
+                    "shared_docs": {
+                        "data": [
+                            {"type": rule["doctype"], "id": value}
+                            for rule in sharing.rules
+                            for value in rule["values"]
+                        ]
+                        if shared_docs
+                        else None
+                    }
+                },
+            }
+            for sharing in self.sharings
+        ]
+        return httpx.Response(200, json={"data": data, "meta": {"count": len(data)}})
 
     def _read(self, request: httpx.Request, doc_id: str) -> httpx.Response:
         doc = self.docs.get(doc_id)
