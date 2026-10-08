@@ -447,6 +447,47 @@ async def test_answering_the_whole_series_leaves_an_occurrence_cancelled_alone_a
     assert boundary.calendar.objects[HREF].jcal == event(partstat)
 
 
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(series_one_cancelled, id="in a series"),
+        pytest.param(occurrences_one_cancelled, id="among occurrences without their series"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("language", "told"),
+    [
+        pytest.param(
+            "fr",
+            "Au moins une occurrence est annulée : Twake Agenda pourrait ne pas prévenir"
+            " l'organisateur.",
+            id="fr",
+        ),
+        pytest.param(
+            "en",
+            "At least one occurrence is cancelled: Twake Calendar may not tell the organizer.",
+            id="en",
+        ),
+    ],
+)
+@pytest.mark.parametrize("operation", OPERATIONS)
+async def test_a_preview_of_a_series_holding_a_cancelled_occurrence_says_who_may_not_be_told(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    language: str,
+    told: str,
+    event: Callable[[str], list[Any]],
+) -> None:
+    # esn-sabre may then send the organizer no reply: the owner is not told that it does
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event("NEEDS-ACTION"))
+
+    summary, _ = preview_of(await preview(client, operation, UID, language, series=True))
+
+    assert summary.splitlines()[1:] == [told]
+    assert boundary.calendar.writes == []
+
+
 @pytest.mark.parametrize(("operation", "partstat"), ANSWERS)
 async def test_the_users_address_is_found_whatever_its_case(
     client: AsyncClient, boundary: FakeBoundary, operation: str, partstat: str

@@ -371,6 +371,12 @@ class CalendarEvent:
         ]
         return bool(vevents) and all(_cancelled(vevent) for vevent in series or vevents)
 
+    @property
+    def holds_cancelled(self) -> bool:
+        """Whether one of its VEVENTs at least is cancelled: the event itself, or an occurrence
+        cancelled alone."""
+        return any(_cancelled(vevent) for vevent in self._vevents())
+
     def answered_by(
         self, email: str, partstat: Partstat, *, series_from: datetime | None = None
     ) -> "CalendarEvent | None":

@@ -83,6 +83,7 @@ class _Words:
     first_time: str
     invited_by: str
     told: str
+    may_not_tell: str
 
 
 _WORDS: dict[Language, _Words] = {
@@ -93,6 +94,8 @@ _WORDS: dict[Language, _Words] = {
         first_time="{when} la première fois",
         invited_by="invitation de {organizer}",
         told="Twake Agenda prévient l'organisateur.",
+        may_not_tell="Au moins une occurrence est annulée : Twake Agenda pourrait ne pas prévenir"
+        " l'organisateur.",
     ),
     "en": _Words(
         untitled="the untitled invitation",
@@ -101,6 +104,8 @@ _WORDS: dict[Language, _Words] = {
         first_time="{when} the first time",
         invited_by="an invitation from {organizer}",
         told="Twake Calendar tells the organizer.",
+        may_not_tell="At least one occurrence is cancelled: Twake Calendar may not tell the"
+        " organizer.",
     ),
 }
 
@@ -115,7 +120,7 @@ def _summary(
 ) -> str:
     """What answering the invitation does, as the owner reads it: the answer, for the whole series
     or not, the event's title, which its organizer wrote, when it takes place, the first time for a
-    series, and who organizes it."""
+    series, who organizes it, and whether Calendar tells them."""
     words = _WORDS[language]
     title = one_line(event.title)
     if not title:
@@ -131,7 +136,9 @@ def _summary(
     organizer = person(*event.organizer, language)
     if organizer is not None:
         parts.append(words.invited_by.format(organizer=organizer))
-    return ", ".join(parts) + "\n" + words.told
+    # esn-sabre may send the organizer no reply for a copy that holds a cancelled occurrence
+    told = words.may_not_tell if event.holds_cancelled else words.told
+    return ", ".join(parts) + "\n" + told
 
 
 async def _answer[Reply: (Accepted, Declined)](
