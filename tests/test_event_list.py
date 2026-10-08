@@ -449,6 +449,28 @@ async def test_the_conflicts_out_of_the_days_are_read_31_days_around_them_at_mos
     ]
 
 
+async def test_an_event_out_of_the_days_the_contract_cannot_read_is_left_out_of_the_conflicts(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    keep(
+        boundary,
+        jcal_event("late", "2026-10-09T23:00:00", "2026-10-10T01:00:00"),
+        jcal_event("early", "2026-10-10T00:15:00", "2026-10-10T00:45:00"),
+    )
+    lost = jcal_event("lost", "2026-10-10T00:30:00", "2026-10-10T01:30:00")
+    lost[2][0][1] = [prop for prop in lost[2][0][1] if prop[0] != "uid"]
+    boundary.calendar.objects[f"{DEFAULT_CALENDAR}/lost.ics"] = CalendarObject(
+        MMAUDET_CALENDAR_ID, lost
+    )
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    # Read for the conflicts of late alone, it leaves the list of the day whole without it
+    assert [(found["uid"], found["conflicts"]) for found in answer["events"]] == [
+        ("late", [{"uid": "early", "recurrence_id": None}])
+    ]
+
+
 async def test_the_users_own_calendars_are_read_and_no_one_elses(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:

@@ -25,6 +25,7 @@ from twake_space_agent_contracts.event_create import (
     EventText,
 )
 from twake_space_agent_contracts.previews import one_line
+from twake_space_agent_contracts.problems import Problem
 from twake_space_agent_contracts.text import EMAIL
 from twake_space_agent_contracts.zones import midnight
 
@@ -172,15 +173,26 @@ def _placed(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Placed:
 
 
 async def _occurrences(
-    calendar: Calendar, user: User, zone: ZoneInfo, since: datetime, until: datetime
+    calendar: Calendar,
+    user: User,
+    zone: ZoneInfo,
+    since: datetime,
+    until: datetime,
+    *,
+    leave_out_unreadable: bool = False,
 ) -> list[_Placed]:
     """The occurrences of the user's calendars between two times, placed in time, by start; those
-    without their series come whatever their days."""
+    without their series come whatever their days. An event the contract cannot read fails them
+    all, unless they are to leave it out."""
     events = await calendar.events_between(user, since.astimezone(UTC), until.astimezone(UTC))
-    return sorted(
-        (_placed(event, zone, user.email) for event in events),
-        key=lambda occurrence: occurrence.start,
-    )
+    occurrences: list[_Placed] = []
+    for event in events:
+        try:
+            occurrences.append(_placed(event, zone, user.email))
+        except Problem:
+            if not leave_out_unreadable:
+                raise
+    return sorted(occurrences, key=lambda occurrence: occurrence.start)
 
 
 def _listed(
@@ -283,7 +295,11 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         since = max(since, midnight(first_day - timedelta(days=LONGEST_DAYS), zone))
         until = min(until, midnight(first_day + timedelta(days=days + LONGEST_DAYS), zone))
         if (since, until) != (start, end):
-            occurrences = await _occurrences(calendar, user, zone, since, until)
+            # Those out of the days are read for the conflicts alone: one the contract cannot read
+            # is left out of them, the list of the days being whole without it
+            occurrences = await _occurrences(
+                calendar, user, zone, since, until, leave_out_unreadable=True
+            )
             listed = _listed(occurrences, start, end, needs_action)
         return EventList(
             time_zone=own_zone.key if own_zone is not None else None,
