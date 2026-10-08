@@ -4,7 +4,7 @@ import copy
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, Literal, get_args
 from zoneinfo import ZoneInfo
 
@@ -128,11 +128,25 @@ class EventPeriod:
         return midnight(first, zone), midnight(last + timedelta(days=1), zone)
 
 
+def _as_read(time: EventTime) -> EventTime:
+    """A time as the contracts read it: one at an offset from UTC, which neither iCalendar nor jCal
+    writes but Python reads, in UTC, or, before or after the times datetime holds there, as the
+    first or last of them; any other as it is."""
+    moment = time.value
+    if not isinstance(moment, datetime) or not isinstance(moment.tzinfo, timezone):
+        return time
+    try:
+        return EventTime(moment.astimezone(UTC), "UTC")
+    except OverflowError:
+        # Only an offset ahead of UTC puts a time before the first it holds, and only one behind it
+        # after the last
+        ahead = (moment.utcoffset() or timedelta(0)) > timedelta(0)
+        return EventTime((datetime.min if ahead else datetime.max).replace(tzinfo=UTC), "UTC")
+
+
 def _event_time(prop: list[Any] | None, *, as_written: bool = False) -> EventTime | None:
-    """A DTSTART, a DTEND or a RECURRENCE-ID in jCal, None in any form but a date or a date-time.
-    A time at an offset from UTC, which neither iCalendar nor jCal writes but Python reads, comes
-    in UTC, or, before or after the times datetime holds there, as the first or last of them; or
-    as written, at its offset, so that it is never moved."""
+    """A DTSTART, a DTEND or a RECURRENCE-ID in jCal, None in any form but a date or a date-time;
+    as read, or as written, a time at an offset from UTC kept at it, so that it is never moved."""
     if prop is None or not isinstance(prop[3], str):
         return None
     kind, written = prop[2], prop[3]
@@ -145,16 +159,8 @@ def _event_time(prop: list[Any] | None, *, as_written: bool = False) -> EventTim
     except ValueError:
         return None
     if time.tzinfo is not None:
-        offset = time.utcoffset() or timedelta(0)
-        if as_written:
-            return EventTime(time, None if offset else "UTC")
-        try:
-            return EventTime(time.astimezone(UTC), "UTC")
-        except OverflowError:
-            # Only an offset ahead of UTC puts a time before the first it holds, and only one
-            # behind it after the last
-            bound = datetime.min if offset > timedelta(0) else datetime.max
-            return EventTime(bound.replace(tzinfo=UTC), "UTC")
+        at_offset = EventTime(time, None if time.utcoffset() else "UTC")
+        return at_offset if as_written else _as_read(at_offset)
     tzid = prop[1].get("tzid")
     zone = zone_named(tzid)
     if zone is not None:
@@ -165,10 +171,11 @@ def _event_time(prop: list[Any] | None, *, as_written: bool = False) -> EventTim
 def _end_without_dtend(start: EventTime, duration: list[Any] | None) -> EventTime | None:
     """When an event without a DTEND ends, as iCalendar reads it: after its DURATION; without one,
     after its day, or when it starts. None for a duration in any other form, or not of whole days
-    after a day. An end past the days and times datetime holds is the last of them."""
+    after a day. The start is as written, so that a duration counts from it before reading moves
+    it, and the end as read. An end past the days and times datetime holds is the last of them."""
     if duration is None:
         if isinstance(start.value, datetime):
-            return start
+            return _as_read(start)
         return EventTime(_later(start.value, timedelta(days=1)), None)
     found = DURATION.fullmatch(duration[3]) if isinstance(duration[3], str) else None
     if found is None or not any(found.groups()):
@@ -178,10 +185,10 @@ def _end_without_dtend(start: EventTime, duration: list[Any] | None) -> EventTim
         length = timedelta(weeks=weeks, days=days, hours=hours, minutes=minutes, seconds=seconds)
     except (ValueError, OverflowError):
         # More digits than Python reads, or days than timedelta holds: past any end datetime holds
-        return EventTime(_later(start.value, timedelta.max), start.zone)
+        return _as_read(EventTime(_later(start.value, timedelta.max), start.zone))
     if not isinstance(start.value, datetime) and length % timedelta(days=1):
         return None
-    return EventTime(_later(start.value, length), start.zone)
+    return _as_read(EventTime(_later(start.value, length), start.zone))
 
 
 @dataclass(frozen=True)
@@ -300,8 +307,9 @@ class CalendarEvent:
         iCalendar reads an event without one. Times in any other form than aware ones, floating or
         in a zone the IANA database lacks, are Calendar answering in an unexpected form."""
         start, end = self.starts, self.ends
-        if start is not None and self._prop("dtend") is None:
-            end = _end_without_dtend(start, self._prop("duration"))
+        written = _event_time(self._prop("dtstart"), as_written=True)
+        if written is not None and self._prop("dtend") is None:
+            end = _end_without_dtend(written, self._prop("duration"))
         if start is not None and end is not None:
             first, last = start.value, end.value
             if isinstance(first, datetime) and isinstance(last, datetime):

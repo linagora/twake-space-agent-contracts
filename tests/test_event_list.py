@@ -949,6 +949,27 @@ async def test_a_time_at_an_offset_past_the_times_datetime_holds_is_read_all_the
     ]
 
 
+@pytest.mark.parametrize(("zone", "shown"), ZONES)
+async def test_a_duration_counts_from_a_start_at_an_offset_as_written(
+    client: AsyncClient, boundary: FakeBoundary, zone: str, shown: dict[str, str]
+) -> None:
+    boundary.calendar.time_zones[MMAUDET] = zone
+    # Calendar as it would give it, should it hold it
+    boundary.calendar.unexpanded = True
+    ages = without_end(jcal_event("ages", *at(10)), ["duration", {}, "duration", "P739897DT14H30M"])
+    ages[2][0][1] = [
+        ["dtstart", {}, "date-time", "0001-01-01T00:00:00+05:00"] if prop[0] == "dtstart" else prop
+        for prop in ages[2][0][1]
+    ]
+    keep(boundary, ages)
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    # 739897 days and 14 hours 30 minutes after 0001-01-01 at 00:00 at +05:00, five hours before
+    # the first time UTC holds, is 2026-10-09 at 14:30 at +05:00: 9:30 in UTC, 11:30 in Paris
+    assert times_of(answer) == [("ages", "0001-01-02T00:00:00Z", shown["11:30"])]
+
+
 def moved_apart(*occurrences: tuple[list[Any], str, str]) -> list[Any]:
     """Occurrences of one series without it, as an invitation to some of them leaves them, each
     named by its RECURRENCE-ID and moved to times in UTC."""
