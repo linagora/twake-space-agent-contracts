@@ -17,7 +17,7 @@ from pydantic.alias_generators import to_camel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
-from twake_space_agent_contracts.text import seen
+from twake_space_agent_contracts.text import paragraphs, seen
 
 CORE = "urn:ietf:params:jmap:core"
 MAIL = "urn:ietf:params:jmap:mail"
@@ -101,12 +101,6 @@ def _line(text: str | None, longest: int = LONGEST_LINE) -> str:
     """Text other people wrote, on one line, without what a reader does not see, cut after
     `longest` characters."""
     return " ".join(seen(text or "").split())[:longest]
-
-
-def _paragraphs(text: str) -> str:
-    """Text other people wrote, without what a reader does not see, its blank runs collapsed."""
-    lines = (" ".join(line.split()) for line in seen(text).splitlines())
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 def _header_keyword(text: str | None) -> str:
@@ -316,7 +310,7 @@ class _Email(_Jmap):
             for part in self.text_body
             if part.part_id in self.body_values
         ]
-        body = _paragraphs("\n\n".join(value.value for value in values))
+        body = paragraphs("\n\n".join(value.value for value in values))
         senders, reply_to = _cleaned(self.sender), _cleaned(self.reply_to)
         return Email(
             **self._facts(own),
