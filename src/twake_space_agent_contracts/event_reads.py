@@ -27,7 +27,7 @@ from twake_space_agent_contracts.event_create import (
 from twake_space_agent_contracts.previews import one_line
 from twake_space_agent_contracts.problems import Problem
 from twake_space_agent_contracts.text import EMAIL
-from twake_space_agent_contracts.zones import midnight
+from twake_space_agent_contracts.zones import bounded, midnight
 
 DESCRIPTION_START = 200
 """How much of the start of an event's description a list gives, at most."""
@@ -139,11 +139,11 @@ class _Placed:
 
 
 def _in_zone(moment: date | datetime, zone: ZoneInfo) -> date | datetime:
-    """A time in the zone, with its offset, a floating one read in UTC as Calendar reads it; a
-    day as it is."""
+    """A time in the zone, with its offset, a floating one read in UTC as Calendar reads it, and
+    one out of those every zone can show as the first or last of them; a day as it is."""
     if not isinstance(moment, datetime):
         return moment
-    return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(zone)
+    return bounded(moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(zone)
 
 
 def _placed(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Placed:

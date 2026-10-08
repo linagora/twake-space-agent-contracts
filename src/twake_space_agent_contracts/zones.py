@@ -12,6 +12,12 @@ checks."""
 JCAL_TIME = "%Y-%m-%dT%H:%M:%S"
 """How jCal writes a time of day in a time zone, and, with a Z after it, in UTC."""
 
+FIRST_TIME = datetime(1, 1, 2, tzinfo=UTC)
+"""The first time every time zone can show, a day after the first datetime holds, an offset from
+UTC being less than a day: some zones are more than 14 hours from UTC in year 1."""
+LAST_TIME = datetime(9999, 12, 31, tzinfo=UTC)
+"""The last time every time zone can show, a day before the last datetime holds."""
+
 
 def zone_named(name: Any) -> ZoneInfo | None:
     """The time zone of that name in the IANA database, if it has one."""
@@ -30,9 +36,19 @@ def known_zone(name: str) -> str:
     return name
 
 
+def bounded(moment: datetime) -> datetime:
+    """An aware time, or for one before or after those every time zone can show, the first or last
+    of them, which any zone can then show."""
+    return min(max(moment, FIRST_TIME), LAST_TIME)
+
+
 def midnight(day: date, zone: ZoneInfo) -> datetime:
     """When the day starts in the zone: at midnight, or, on a day whose midnight the clocks skip,
-    when they go forward."""
+    when they go forward; on the first day datetime holds, whose midnight is before its first time
+    in a zone ahead of UTC, the first time every zone can show."""
+    # A midnight is less than a day from that of UTC: only that of the first day can fall out
+    if day == date.min:
+        return FIRST_TIME.astimezone(zone)
     return datetime.combine(day, time(), zone).astimezone(UTC).astimezone(zone)
 
 

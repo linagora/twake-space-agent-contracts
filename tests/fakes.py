@@ -257,6 +257,15 @@ def _duration(written: str) -> timedelta:
     return timedelta(weeks=weeks, days=days, hours=hours, minutes=minutes, seconds=seconds)
 
 
+def _after(start: datetime, length: timedelta) -> datetime:
+    """The time that long after another; past year 9999, where PHP's times go on and datetime
+    stops, its last time."""
+    try:
+        return start + length
+    except OverflowError:
+        return datetime.max.replace(tzinfo=UTC)
+
+
 def _times(vevent: list[Any]) -> tuple[datetime, datetime]:
     """When an event starts and ends in UTC, as sabre/vobject compares it to a time range: without
     an end, after its duration; without either, a day lasts until the next one, and a time not at
@@ -266,8 +275,8 @@ def _times(vevent: list[Any]) -> tuple[datetime, datetime]:
     if "dtend" in props:
         return start, _moment(props["dtend"])
     if "duration" in props:
-        return start, start + _duration(props["duration"][3])
-    return start, (start + timedelta(days=1) if props["dtstart"][2] == "date" else start)
+        return start, _after(start, _duration(props["duration"][3]))
+    return start, (_after(start, timedelta(days=1)) if props["dtstart"][2] == "date" else start)
 
 
 def _takes_place(vevent: list[Any], start: datetime, end: datetime) -> bool:

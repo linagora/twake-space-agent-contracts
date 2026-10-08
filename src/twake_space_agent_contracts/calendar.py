@@ -91,6 +91,18 @@ class EventTime:
     it is not converted. None for a day or a floating time."""
 
 
+def _later(moment: date | datetime, length: timedelta) -> date | datetime:
+    """The day or time that long after another, before it for a negative length; past the days and
+    times datetime holds, the last or first of them, in the same zone."""
+    try:
+        return moment + length
+    except OverflowError:
+        later = length > timedelta(0)
+        if isinstance(moment, datetime):
+            return (datetime.max if later else datetime.min).replace(tzinfo=moment.tzinfo)
+        return date.max if later else date.min
+
+
 @dataclass(frozen=True)
 class EventPeriod:
     """When an event takes place, as the contracts answer it: aware times, in the zone the event
@@ -140,19 +152,23 @@ def _event_time(prop: list[Any] | None) -> EventTime | None:
 def _end_without_dtend(start: EventTime, duration: list[Any] | None) -> EventTime | None:
     """When an event without a DTEND ends, as iCalendar reads it: after its DURATION; without one,
     after its day, or when it starts. None for a duration in any other form, or not of whole days
-    after a day."""
+    after a day. An end past the days and times datetime holds is the last of them."""
     if duration is None:
         if isinstance(start.value, datetime):
             return start
-        return EventTime(start.value + timedelta(days=1), None)
+        return EventTime(_later(start.value, timedelta(days=1)), None)
     found = DURATION.fullmatch(duration[3]) if isinstance(duration[3], str) else None
     if found is None or not any(found.groups()):
         return None
-    weeks, days, hours, minutes, seconds = (int(part or 0) for part in found.groups())
-    length = timedelta(weeks=weeks, days=days, hours=hours, minutes=minutes, seconds=seconds)
+    try:
+        weeks, days, hours, minutes, seconds = (int(part or 0) for part in found.groups())
+        length = timedelta(weeks=weeks, days=days, hours=hours, minutes=minutes, seconds=seconds)
+    except (ValueError, OverflowError):
+        # More digits than Python reads, or days than timedelta holds: past any end datetime holds
+        return EventTime(_later(start.value, timedelta.max), start.zone)
     if not isinstance(start.value, datetime) and length % timedelta(days=1):
         return None
-    return EventTime(start.value + length, start.zone)
+    return EventTime(_later(start.value, length), start.zone)
 
 
 @dataclass(frozen=True)
@@ -280,7 +296,7 @@ class CalendarEvent:
                     return EventPeriod(first, last, start.zone)
             elif not isinstance(first, datetime) and not isinstance(last, datetime):
                 # iCalendar ends an event of whole days on the day after its last
-                return EventPeriod(first, last - timedelta(days=1), None)
+                return EventPeriod(first, _later(last, -timedelta(days=1)), None)
         raise _unavailable("Calendar gave the times of the event in an unexpected form.")
 
     @property

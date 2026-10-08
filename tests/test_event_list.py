@@ -752,6 +752,86 @@ async def test_an_event_without_an_end_lasts_its_duration_or_as_icalendar_reads_
     ]
 
 
+async def test_an_event_lasting_past_the_times_datetime_holds_ends_at_the_last_one(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    keep(
+        boundary,
+        without_end(jcal_event("retreat", *at(10)), ["duration", {}, "duration", "P3000000D"]),
+        without_end(
+            jcal_event("sabbatical", "2026-10-09", "2026-10-10"),
+            ["duration", {}, "duration", "P3000000D"],
+        ),
+    )
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    # The last time every zone can show, an offset from UTC being less than a day: 9999-12-31 at
+    # midnight UTC, which ends an event of whole days on the day before
+    assert times_of(answer) == [
+        ("sabbatical", "2026-10-09", "9999-12-30"),
+        ("retreat", "2026-10-09T10:00:00+02:00", "9999-12-31T01:00:00+01:00"),
+    ]
+
+
+def alone(*occurrences: list[Any]) -> list[Any]:
+    """Events of one UID as the occurrences of a series the calendar does not hold, as an
+    invitation to some of them leaves them: each with its start as its RECURRENCE-ID."""
+    vevents = []
+    for jcal in occurrences:
+        props = jcal[2][0][1]
+        start = next(prop for prop in props if prop[0] == "dtstart")
+        vevents.append(["vevent", [*props, ["recurrence-id", dict(start[1]), *start[2:]]], []])
+    return [occurrences[0][0], occurrences[0][1], vevents]
+
+
+@pytest.mark.parametrize(
+    ("odd", "listed"),
+    [
+        pytest.param(
+            without_end(jcal_event("sync", "9999-12-31", "9999-12-31")),
+            [],
+            id="a day on 9999-12-31 without an end",
+        ),
+        pytest.param(
+            jcal_event("sync", "2026-10-09", "0001-01-01"),
+            [("sync", "2026-10-09", "0001-01-01")],
+            id="days ending on 0001-01-01",
+        ),
+        pytest.param(jcal_event("sync", "0001-01-01", "0001-01-02"), [], id="a day on 0001-01-01"),
+        pytest.param(
+            jcal_event("sync", "9999-12-31T23:30:00", "9999-12-31T23:45:00", zone="UTC"),
+            [],
+            id="a time late on 9999-12-31 in UTC",
+        ),
+        pytest.param(
+            without_end(
+                jcal_event("sync", *at(10)), ["duration", {}, "duration", f"P{'9' * 5000}D"]
+            ),
+            [("sync", "2026-10-09T10:00:00+02:00", "9999-12-31T01:00:00+01:00")],
+            id="a duration of more digits than Python reads",
+        ),
+    ],
+)
+async def test_an_occurrence_past_the_days_and_times_datetime_holds_is_read_all_the_same(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    odd: list[Any],
+    listed: list[tuple[str, str, str]],
+) -> None:
+    # Calendar gives the occurrences of a series it does not hold whatever their days; the user is
+    # in Paris, an hour or two ahead of UTC
+    keep(boundary, alone(jcal_event("sync", *at(16)), odd))
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    # Read, out of the days or listed with the last or first time every zone can show
+    assert times_of(answer) == [
+        *listed,
+        ("sync", "2026-10-09T16:00:00+02:00", "2026-10-09T16:30:00+02:00"),
+    ]
+
+
 async def test_the_days_are_read_in_utc_when_calendar_gives_no_zone_the_iana_database_has(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
