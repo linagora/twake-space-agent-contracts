@@ -1,9 +1,13 @@
+from datetime import date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
+import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET
 from tests.fakes import (
+    ALICE_CALENDAR_ID,
     DEFAULT_CALENDAR,
     MMAUDET,
     MMAUDET_CALENDAR_ID,
@@ -13,7 +17,15 @@ from tests.fakes import (
     email_of,
     jcal_event,
 )
-from tests.test_event_list import ALICE, moved, organized_by
+from tests.test_event_list import (
+    ALICE,
+    ALICE_CALENDAR,
+    AS_NOBODY,
+    alone,
+    moved,
+    organized_by,
+    without_end,
+)
 
 EVENT = "/contracts/v1/calendar/event"
 # A UID as iCalendar allows it, with slashes, which a segment of a path cannot hold
@@ -360,3 +372,277 @@ async def test_the_video_link_is_the_one_calendar_shows(
         "hidden": None,
         "none": None,
     }
+
+
+async def test_occurrences_without_their_series_come_as_the_calendar_keeps_them(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The user was invited to two occurrences of a series their calendar does not hold
+    keep(
+        boundary,
+        alone(
+            jcal_event(POINT, "2026-10-26T17:00:00", "2026-10-26T18:00:00"),
+            jcal_event(POINT, "2026-10-19T17:00:00", "2026-10-19T18:00:00"),
+        ),
+    )
+
+    answer = await read_event(client, uid=POINT)
+    one = await read_event(client, uid=POINT, recurrence_id="2026-10-26T17:00:00+01:00")
+
+    assert answer["event"] is None
+    assert [exception["recurrence_id"] for exception in answer["exceptions"]] == [
+        "2026-10-19T17:00:00+02:00",
+        "2026-10-26T17:00:00+01:00",
+    ]
+    assert (one["event"]["recurrence_id"], one["event"]["start"], one["exceptions"]) == (
+        "2026-10-26T17:00:00+01:00",
+        "2026-10-26T17:00:00+01:00",
+        [],
+    )
+
+
+async def test_an_occurrence_of_whole_days_is_read_by_its_day(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    daily = ["rrule", {}, "recur", {"freq": "DAILY", "count": 10}]
+    # Another series of the same days, which Calendar gives before it
+    keep(
+        boundary,
+        jcal_event("other", "2026-10-12", "2026-10-13", daily),
+        jcal_event("daily", "2026-10-12", "2026-10-13", daily),
+    )
+
+    event = (await read_event(client, uid="daily", recurrence_id="2026-10-14"))["event"]
+
+    assert (event["uid"], event["recurrence_id"], event["start"], event["end"]) == (
+        "daily",
+        "2026-10-14",
+        "2026-10-14",
+        "2026-10-14",
+    )
+    assert event["all_day"] is True
+
+
+async def test_an_event_none_of_the_users_calendars_holds_is_not_found_alike(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    keep(boundary, weekly(5))
+    # In Alice's calendar, which the user subscribes to
+    boundary.calendar.objects[f"{ALICE_CALENDAR}/alices.ics"] = CalendarObject(
+        ALICE_CALENDAR_ID, jcal_event("alices", "2026-10-13T17:00:00", "2026-10-13T18:00:00")
+    )
+    boundary.calendar.subscriptions[f"/calendars/{MMAUDET_CALENDAR_ID}/alice"] = ALICE_CALENDAR
+
+    responses = [
+        await client.get(EVENT, params=params, headers=AS_MMAUDET)
+        for params in (
+            {"uid": "unknown"},
+            {"uid": "alices"},
+            {"uid": "alices", "recurrence_id": "2026-10-13T17:00:00+02:00"},
+        )
+    ]
+
+    # Whether someone else's calendar holds it, the answer does not tell
+    assert [response.status_code for response in responses] == [404, 404, 404]
+    assert [response.json() for response in responses] == [responses[0].json()] * 3
+    assert responses[0].json()["code"] == "event_not_found"
+
+
+def left_out(series: list[Any], *starts: str) -> list[Any]:
+    """The series with the occurrences of those local starts left out, as one EXDATE."""
+    zone = next(prop[1]["tzid"] for prop in series[2][0][1] if prop[0] == "dtstart")
+    series[2][0][1].append(["exdate", {"tzid": zone}, "date-time", *starts])
+    return series
+
+
+@pytest.mark.parametrize(
+    ("uid", "recurrence_id"),
+    [
+        pytest.param(POINT, "2026-10-19T17:00:00+02:00", id="left out by the series"),
+        pytest.param(POINT, "2026-11-16T17:00:00+01:00", id="past its count"),
+        pytest.param(POINT, "2026-10-26T18:00:00+01:00", id="at another time than its rule"),
+        pytest.param(POINT, "2026-10-26", id="a day of a series of times"),
+        pytest.param("daily", "2026-10-14T00:00:00Z", id="a time of a series of days"),
+        pytest.param("once", "2026-10-13T17:00:00+02:00", id="of an event that does not repeat"),
+    ],
+)
+async def test_an_occurrence_the_event_does_not_give_is_not_found(
+    client: AsyncClient, boundary: FakeBoundary, uid: str, recurrence_id: str
+) -> None:
+    keep(
+        boundary,
+        left_out(weekly(5), "2026-10-19T17:00:00"),
+        jcal_event("daily", "2026-10-12", "2026-10-13", ["rrule", {}, "recur", {"freq": "DAILY"}]),
+        jcal_event("once", "2026-10-13T17:00:00", "2026-10-13T18:00:00"),
+    )
+
+    response = await client.get(
+        EVENT, params={"uid": uid, "recurrence_id": recurrence_id}, headers=AS_MMAUDET
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "event_not_found"
+
+
+async def test_a_series_gives_the_first_100_occurrences_it_leaves_out_or_keeps_apart(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    days = [date(2026, 10, 12) + timedelta(days=number) for number in range(202)]
+    series = jcal_event(
+        POINT,
+        "2026-10-12T17:00:00",
+        "2026-10-12T18:00:00",
+        ["rrule", {}, "recur", {"freq": "DAILY", "count": 300}],
+    )
+    left_out(series, *(f"{day}T17:00:00" for day in reversed(days[:101])))
+    for day in days[101:]:
+        series = moved(series, f"{day}T17:00:00", f"{day}T18:00:00", f"{day}T19:00:00")
+    keep(boundary, series)
+
+    answer = await read_event(client, uid=POINT)
+
+    # The oldest first, in the user's zone
+    def paris(day: date) -> str:
+        return datetime.combine(day, time(17), ZoneInfo("Europe/Paris")).isoformat()
+
+    recurrence = answer["event"]["recurrence"]
+    assert recurrence["excluded"] == [paris(day) for day in days[:100]]
+    assert recurrence["excluded_truncated"] is True
+    assert [exception["recurrence_id"] for exception in answer["exceptions"]] == [
+        paris(day) for day in days[101:201]
+    ]
+    assert answer["exceptions_truncated"] is True
+
+
+async def test_a_private_event_is_read_in_full_and_the_users_own_meeting_awaits_no_answer(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    keep(
+        boundary,
+        jcal_event(
+            POINT,
+            "2026-10-13T17:00:00",
+            "2026-10-13T18:00:00",
+            ["class", {}, "text", "CONFIDENTIAL"],
+            ["summary", {}, "text", "Salary review"],
+            organized_by(MMAUDET),
+            # Twake Calendar lists the organizer among the attendees, whose answer nobody waits for
+            attendee(MMAUDET, "NEEDS-ACTION"),
+            attendee(ALICE),
+        ),
+    )
+
+    event = (await read_event(client, uid=POINT))["event"]
+
+    assert (event["private"], event["untrusted"]["title"]) == (True, "Salary review")
+    assert (event["my_partstat"], event["needs_action"]) == ("NEEDS-ACTION", False)
+
+
+async def test_the_event_is_read_in_utc_when_calendar_gives_no_zone_the_iana_database_has(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The name Windows gives the time zone of Paris
+    boundary.calendar.time_zones[MMAUDET] = "Romance Standard Time"
+    keep(boundary, jcal_event(POINT, "2026-10-13T17:00:00", "2026-10-13T18:00:00"))
+
+    answer = await read_event(client, uid=POINT)
+
+    assert answer["time_zone"] is None
+    assert (answer["event"]["start"], answer["event"]["end"]) == (
+        "2026-10-13T15:00:00Z",
+        "2026-10-13T16:00:00Z",
+    )
+
+
+HOUR = "2026-10-13T17:00:00", "2026-10-13T18:00:00"
+
+
+@pytest.mark.parametrize(
+    "odd",
+    [
+        pytest.param(
+            jcal_event(POINT, *HOUR, ["rrule", {}, "recur", {"freq": "FORTNIGHTLY"}]),
+            id="a frequency iCalendar does not give",
+        ),
+        pytest.param(
+            jcal_event(POINT, *HOUR, ["rrule", {}, "recur", {"freq": "WEEKLY", "byday": "MON"}]),
+            id="a part of a rule in another form",
+        ),
+        pytest.param(
+            left_out(jcal_event(POINT, *HOUR, ["rrule", {}, "recur", {"freq": "WEEKLY"}]), "soon"),
+            id="an occurrence left out in another form",
+        ),
+        pytest.param(
+            without_end(jcal_event(POINT, *HOUR), ["dtend", {}, "date", "2026-10-14"]),
+            id="from a time to a day",
+        ),
+        # The name Windows gives the time zone of Paris: its offset, the contract cannot tell
+        pytest.param(
+            jcal_event(POINT, *HOUR, zone="Romance Standard Time"),
+            id="a zone the IANA database lacks",
+        ),
+        pytest.param(
+            moved(weekly(5), "2026-10-19T17:00:00", "2026-10-19T18:00:00", "soon"),
+            id="an occurrence kept apart of times in another form",
+        ),
+    ],
+)
+async def test_an_event_the_contract_cannot_read_is_an_answer_in_an_unexpected_form(
+    client: AsyncClient, boundary: FakeBoundary, odd: list[Any]
+) -> None:
+    keep(boundary, odd)
+
+    response = await client.get(EVENT, params={"uid": POINT}, headers=AS_MMAUDET)
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "calendar_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("failure", "code"),
+    [
+        pytest.param("down", "calendar_unavailable", id="calendar down"),
+        # Without the user's time zone, the times to give are not known
+        pytest.param("settings_down", "calendar_unavailable", id="settings down"),
+        pytest.param("refused_tokens", "calendar_refused", id="token refused"),
+    ],
+)
+async def test_a_calendar_that_fails_is_a_bad_gateway(
+    client: AsyncClient, boundary: FakeBoundary, failure: str, code: str
+) -> None:
+    keep(boundary, weekly(5))
+    setattr(boundary.calendar, failure, True)
+
+    response = await client.get(EVENT, params={"uid": POINT}, headers=AS_MMAUDET)
+
+    assert response.status_code == 502
+    assert response.json()["code"] == code
+
+
+async def test_a_user_calendar_does_not_know_is_not_found(client: AsyncClient) -> None:
+    response = await client.get(EVENT, params={"uid": POINT}, headers=AS_NOBODY)
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "calendar_user_not_found"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        pytest.param({}, id="no uid"),
+        pytest.param({"uid": ""}, id="an empty uid"),
+        pytest.param(
+            {"uid": POINT, "recurrence_id": "2026-10-19T17:00:00"}, id="a time without its offset"
+        ),
+        pytest.param({"uid": POINT, "recurrence_id": "next monday"}, id="neither time nor day"),
+        pytest.param({"uid": POINT, "recurrence_id": "1899-12-31"}, id="a day before 1900"),
+        pytest.param({"uid": POINT, "recurrence_id": "9999-01-01T00:00:00Z"}, id="after 9998"),
+    ],
+)
+async def test_a_uid_or_recurrence_id_in_another_form_is_refused(
+    client: AsyncClient, params: dict[str, str]
+) -> None:
+    response = await client.get(EVENT, params=params, headers=AS_MMAUDET)
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
