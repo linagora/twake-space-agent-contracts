@@ -335,13 +335,14 @@ class CalendarEvent:
     def zoned(self) -> "CalendarEvent":
         """The event with its times in zones of the IANA database, as Calendar reads them for the
         list: a time in a zone Windows names, as Outlook writes it, in the IANA zone Unicode CLDR
-        gives that name. One in a zone neither names stays as written."""
+        gives that name, and a floating one, in no zone, in UTC. One in a zone neither names stays
+        as written."""
         jcal = copy.deepcopy(self.jcal)
         for component in jcal[2]:
             if component[0] != "vevent":
                 continue
             for prop in component[1]:
-                tzid = prop[1].get("tzid")
+                tzid = prop[1].get("tzid", "UTC")
                 zone = zone_named(tzid) or windows_zone(tzid)
                 if prop[2] == "date-time" and zone is not None:
                     prop[1]["tzid"] = zone.key

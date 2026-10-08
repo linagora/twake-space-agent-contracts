@@ -639,6 +639,49 @@ async def test_a_series_in_a_zone_windows_names_keeps_to_its_changes_of_offset(
     )
 
 
+def floating(jcal: list[Any]) -> list[Any]:
+    """The event with its times in no zone, floating, as some clients write those of their own
+    day."""
+    for prop in jcal[2][0][1]:
+        prop[1].pop("tzid", None)
+    return jcal
+
+
+async def test_floating_times_are_read_in_utc_as_calendar_reads_them_for_the_list(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    daily = {"freq": "DAILY", "until": "2026-10-16T17:00:00"}
+    keep(
+        boundary,
+        floating(
+            jcal_event(
+                POINT,
+                "2026-10-13T17:00:00",
+                "2026-10-13T18:00:00",
+                ["rrule", {}, "recur", daily],
+                ["exdate", {}, "date-time", "2026-10-14T17:00:00"],
+            )
+        ),
+    )
+
+    event = (await read_event(client, uid=POINT))["event"]
+    one = (await read_event(client, uid=POINT, recurrence_id="2026-10-15T17:00:00Z"))["event"]
+
+    # In the user's zone, Paris, two hours ahead of UTC
+    assert (event["start"], event["end"]) == (
+        "2026-10-13T19:00:00+02:00",
+        "2026-10-13T20:00:00+02:00",
+    )
+    assert (event["recurrence"]["until"], event["recurrence"]["excluded"]) == (
+        "2026-10-16T19:00:00+02:00",
+        ["2026-10-14T19:00:00+02:00"],
+    )
+    assert (one["recurrence_id"], one["start"]) == (
+        "2026-10-15T19:00:00+02:00",
+        "2026-10-15T19:00:00+02:00",
+    )
+
+
 HOUR = "2026-10-13T17:00:00", "2026-10-13T18:00:00"
 # The name Windows shows for the zone of Paris, which neither the IANA database nor CLDR gives
 SHOWN_ZONE = "(UTC+01:00) Brussels, Copenhagen, Madrid, Paris"
