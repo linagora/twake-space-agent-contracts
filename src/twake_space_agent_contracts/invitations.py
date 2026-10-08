@@ -233,11 +233,14 @@ def _accept(calendar: Calendar, caller: CallerDependency, now: Callable[[], date
             "Calendar tells the organizer; it may not when the user's copy of the event holds a "
             "cancelled occurrence. Nothing else in the event changes. Call it only once "
             "the user has said yes to this very invitation. A recurring invitation is refused "
-            "unless series is true, which accepts the series and each of its occurrences "
-            "neither over nor cancelled: set it only once the user has said yes to the whole "
-            "series; one occurrence apart from the others, they answer in Calendar. An "
-            "occurrence the user was invited to without the rest of its series is accepted as an "
-            f'invitation that does not repeat. Example: body={{"uid": "{EXAMPLE_UID}"}}.'
+            "with recurring_invitation unless series is true, which accepts the series and each "
+            "of its occurrences neither over nor cancelled: set it only once the user has said "
+            "yes to the whole series; one occurrence apart from the others, they answer in "
+            "Calendar. An occurrence the user was invited to without the rest of its series is "
+            "accepted as an invitation that does not repeat. A cancelled invitation is refused "
+            "with invitation_cancelled, and one already accepted wherever the call would accept "
+            "it, or whose occurrences are each over or cancelled, with nothing_to_answer: the "
+            f'organizer would not be told. Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
         response_model=Accepted,
         # The user's own answer, though Calendar tells the organizer: the owner's consent to write
@@ -272,11 +275,14 @@ def _decline(
             "Calendar tells the organizer, without a comment; it may not when the user's copy of "
             "the event holds a cancelled occurrence. Nothing else in the event changes. "
             "Call it only once the user has said no to this very invitation. A recurring "
-            "invitation is refused unless series is true, which declines the series and each of "
-            "its occurrences neither over nor cancelled: set it only once the user has said no "
-            "to the whole series; one occurrence apart from the others, they answer in Calendar. "
-            "An occurrence the user was invited to without the rest of its series is declined as "
-            "an invitation that does not repeat. "
+            "invitation is refused with recurring_invitation unless series is true, which "
+            "declines the series and each of its occurrences neither over nor cancelled: set it "
+            "only once the user has said no to the whole series; one occurrence apart from the "
+            "others, they answer in Calendar. An occurrence the user was invited to without the "
+            "rest of its series is declined as an invitation that does not repeat. A cancelled "
+            "invitation is refused with invitation_cancelled, and one already declined wherever "
+            "the call would decline it, or whose occurrences are each over or cancelled, with "
+            "nothing_to_answer: the organizer would not be told. "
             f'Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
         response_model=Declined,

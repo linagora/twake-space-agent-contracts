@@ -606,6 +606,20 @@ async def test_answering_an_invitation_says_when_calendar_may_not_tell_the_organ
     )
 
 
+@pytest.mark.parametrize("answer", ["accept", "decline"])
+async def test_answering_an_invitation_names_what_it_refuses_to_answer(
+    client: AsyncClient, answer: str
+) -> None:
+    # The model is told why a call answered 409, and that calling again the same way changes
+    # nothing: a recurring invitation without series, a cancelled one, one answered already
+    document = (await client.get("/openapi.json")).json()
+
+    answering = document["paths"][f"/contracts/v1/calendar/invitations/{answer}"]["post"]
+    refusals = ["recurring_invitation", "invitation_cancelled", "nothing_to_answer"]
+
+    assert [code for code in refusals if code not in answering["description"]] == []
+
+
 async def test_creating_an_event_is_a_low_risk_write(client: AsyncClient) -> None:
     # The user's own time, with nobody invited: once the owner allowed writing in Calendar, it runs
     # without asking
