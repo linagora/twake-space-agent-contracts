@@ -785,6 +785,8 @@ async def test_a_user_calendar_does_not_know_is_not_found(client: AsyncClient) -
             {"uid": POINT, "recurrence_id": "2026-10-19T17:00:00"}, id="a time without its offset"
         ),
         pytest.param({"uid": POINT, "recurrence_id": "next monday"}, id="neither time nor day"),
+        # Which pydantic would read as a count of seconds since 1970
+        pytest.param({"uid": POINT, "recurrence_id": "20261019"}, id="a day without its dashes"),
         pytest.param({"uid": POINT, "recurrence_id": "1899-12-31"}, id="a day before 1900"),
         pytest.param({"uid": POINT, "recurrence_id": "9999-01-01T00:00:00Z"}, id="after 9998"),
     ],
@@ -796,3 +798,24 @@ async def test_a_uid_or_recurrence_id_in_another_form_is_refused(
 
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param("2026-10-19T17:00:00", id="without its offset"),
+        pytest.param("2026-10-19T25:00:00+02:00", id="at an hour that does not exist"),
+    ],
+)
+async def test_a_time_refused_is_told_how_a_time_is_written(
+    client: AsyncClient, written: str
+) -> None:
+    response = await client.get(
+        EVENT, params={"uid": POINT, "recurrence_id": written}, headers=AS_MMAUDET
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "recurrence_id: Value error, a time is written with its offset or Z, such as "
+        "2026-10-19T17:00:00+02:00"
+    )

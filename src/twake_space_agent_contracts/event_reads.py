@@ -1,13 +1,15 @@
 """calendar.event.read.v1: the events of the user's own calendars, over days of their time zone, or
 one of them in full."""
 
+import contextlib
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import AfterValidator, AwareDatetime, BaseModel, Field
+from pydantic import AfterValidator, AwareDatetime, BaseModel, BeforeValidator, Field
 
 from twake_space_agent_contracts.calendar import (
     DATA_NOT_INSTRUCTIONS,
@@ -72,7 +74,38 @@ def _on_those_days(moment: date | datetime) -> date | datetime:
     return moment
 
 
-RecurrenceId = Annotated[AwareDatetime | Day, AfterValidator(_on_those_days)]
+# A recurrence_id as list_calendar_events gives it: a day, or a time with its offset or Z, as RFC
+# 3339 writes it, which allows a lowercase t and z
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
+_TIME = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", re.ASCII | re.IGNORECASE
+)
+
+
+def _recurrence_id(written: object) -> object:
+    """A recurrence_id as list_calendar_events gives it, read here rather than by pydantic, which
+    reads a count of seconds as a time: a time with its offset or Z, or a day, such as
+    2026-10-19."""
+    if not isinstance(written, str):
+        return written
+    with contextlib.suppress(ValueError):
+        if _TIME.fullmatch(written):
+            return datetime.fromisoformat(written.upper())
+        if _DAY.fullmatch(written):
+            return date.fromisoformat(written)
+    if re.match(r"\d{4}-\d{2}-\d{2}T", written, re.ASCII | re.IGNORECASE):
+        raise ValueError(
+            "a time is written with its offset or Z, such as 2026-10-19T17:00:00+02:00"
+        )
+    raise ValueError(
+        "a recurrence_id is a time with its offset or Z, such as 2026-10-19T17:00:00+02:00, or a "
+        "day, such as 2026-10-19"
+    )
+
+
+RecurrenceId = Annotated[
+    AwareDatetime | Day, BeforeValidator(_recurrence_id), AfterValidator(_on_those_days)
+]
 
 
 class Occurrence(BaseModel):
