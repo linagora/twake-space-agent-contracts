@@ -120,9 +120,12 @@ def _summary(
 ) -> str:
     """What answering the invitation does, as the owner reads it: the answer, for the whole series
     or not, the event's title, which its organizer wrote, when it takes place, the first time for a
-    series, who organizes it, and whether Calendar tells them."""
+    series, who organizes it, and whether Calendar tells them. The title and the time are those of
+    the occurrence that starts first, wherever the copy holds it, read in the user's zone, else in
+    UTC."""
     words = _WORDS[language]
-    title = one_line(event.title)
+    first = event.earliest(zone or ZoneInfo("UTC"))
+    title = one_line(first.title)
     if not title:
         what = words.untitled_series if whole_series else words.untitled
     elif whole_series:
@@ -130,7 +133,7 @@ def _summary(
     else:
         what = quoted(title, language)
     parts = [_ANSWERS[partstat][language].format(what=what)]
-    when = when_it_takes_place(event, zone, language)
+    when = when_it_takes_place(first, zone, language)
     if when is not None:
         parts.append(words.first_time.format(when=when) if whole_series else when)
     organizer = person(*event.organizer, language)

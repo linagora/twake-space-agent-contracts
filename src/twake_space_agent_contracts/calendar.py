@@ -385,6 +385,35 @@ class CalendarEvent:
         compare lowercased, as sabre's iTIP broker compares them."""
         return self.participation_of(email) is not None and not self.organized_by(email)
 
+    def earliest(self, zone: ZoneInfo) -> "CalendarEvent":
+        """The VEVENT of the event that starts first, as an event of its own, wherever the copy
+        holds it: the series or one of its occurrences written apart. The series' own start does
+        not count when an occurrence written apart replaces it, with that start as its
+        RECURRENCE-ID. A day starts at its midnight, and a time in no zone the IANA database has,
+        floating or in a zone it lacks, is read, in the given zone; of those that start together,
+        the first in the copy. The event as it is when none has a start the contract reads."""
+
+        def moment(vevent: list[Any], name: str) -> datetime | None:
+            found = _event_time(next((prop for prop in vevent[1] if prop[0] == name), None))
+            if found is None:
+                return None
+            if not isinstance(found.value, datetime):
+                return midnight(found.value, zone)
+            return found.value if found.value.tzinfo else found.value.replace(tzinfo=zone)
+
+        vevents = self._vevents()
+        replaced = {moment(vevent, "recurrence-id") for vevent in vevents} - {None}
+        starts = [
+            (start, vevent)
+            for vevent in vevents
+            if (start := moment(vevent, "dtstart")) is not None
+            and (start not in replaced or moment(vevent, "recurrence-id") is not None)
+        ]
+        if not starts:
+            return self
+        first = min(starts, key=lambda found: found[0])[1]
+        return CalendarEvent(self.href, [self.jcal[0], self.jcal[1], [first]])
+
     def answered_by(
         self,
         email: str,
