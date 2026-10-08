@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from twake_space_agent_contracts.applications import APPLICATIONS
 from twake_space_agent_contracts.settings import Settings
+from twake_space_agent_contracts.zones import formatted
 
 # The key of the contracts' consumer, which the gateway's outbound route to Synapse admits
 CHAT_GATEWAY_KEY = "key-of-the-contracts-consumer"
@@ -236,7 +237,7 @@ def _in_utc(prop: list[Any]) -> list[Any]:
     if prop[2] != "date-time":
         return prop
     params = {name: value for name, value in prop[1].items() if name != "tzid"}
-    times = [_moment([prop[0], prop[1], prop[2], value]).strftime(JCAL_UTC) for value in prop[3:]]
+    times = [formatted(_moment([prop[0], prop[1], prop[2], value]), JCAL_UTC) for value in prop[3:]]
     return [prop[0], params, prop[2], *times]
 
 
@@ -289,7 +290,7 @@ def _at(prop: list[Any], name: str, moment: datetime) -> list[Any]:
     its day for a day."""
     if prop[2] == "date":
         return [name, {}, "date", moment.date().isoformat()]
-    return [name, {}, "date-time", moment.strftime(JCAL_UTC)]
+    return [name, {}, "date-time", formatted(moment, JCAL_UTC)]
 
 
 def _occurrences(series: list[list[Any]], end: datetime) -> list[list[Any]]:

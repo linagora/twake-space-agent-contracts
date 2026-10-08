@@ -19,6 +19,13 @@ LAST_TIME = datetime(9999, 12, 31, tzinfo=UTC)
 """The last time every time zone can show, a day before the last datetime holds."""
 
 
+def formatted(moment: datetime, pattern: str) -> str:
+    """A time written in a strftime pattern, such as JCAL_TIME, its year in four digits on every
+    platform: glibc's strftime writes a year before 1000 in fewer, as 1-01-01, which jCal and
+    esn-sabre do not read."""
+    return moment.strftime(pattern.replace("%Y", f"{moment.year:04d}"))
+
+
 def zone_named(name: Any) -> ZoneInfo | None:
     """The time zone of that name in the IANA database, if it has one."""
     if not isinstance(name, str):
@@ -126,7 +133,7 @@ def _rule_from(zone: ZoneInfo, change: datetime) -> list[Any]:
     written in the time it replaces."""
     offset_from = (change - timedelta(seconds=1)).astimezone(zone).utcoffset() or timedelta(0)
     kind = "daylight" if change.astimezone(zone).dst() else "standard"
-    onset = (change + offset_from).strftime(JCAL_TIME)
+    onset = formatted(change + offset_from, JCAL_TIME)
     return _observance(zone, kind, onset, offset_from, change)
 
 
@@ -142,7 +149,7 @@ def vtimezone(zone: str, start: datetime, end: datetime) -> list[Any]:
     rules = [_rule_from(local, change) for change in in_force]
     if not rules:
         steady = since.astimezone(local)
-        onset = steady.strftime(JCAL_TIME)
+        onset = formatted(steady, JCAL_TIME)
         rules = [_observance(local, "standard", onset, steady.utcoffset() or timedelta(0), since)]
     rules += [_rule_from(local, change) for change in changes if change > start]
     return ["vtimezone", [["tzid", {}, "text", zone]], rules]

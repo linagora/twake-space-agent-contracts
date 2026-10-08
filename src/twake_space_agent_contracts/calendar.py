@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
-from twake_space_agent_contracts.zones import JCAL_TIME, midnight, vtimezone, zone_named
+from twake_space_agent_contracts.zones import JCAL_TIME, formatted, midnight, vtimezone, zone_named
 
 # How esn-sabre (2.4.6 and later) writes UTC times in its JSON free/busy
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
@@ -379,8 +379,8 @@ def new_event(
         if not isinstance(moment, datetime):
             return [name, {}, "date", moment.isoformat()]
         if zone is None:
-            return [name, {}, "date-time", moment.astimezone(UTC).strftime(JCAL_TIME) + "Z"]
-        local = moment.astimezone(ZoneInfo(zone)).strftime(JCAL_TIME)
+            return [name, {}, "date-time", formatted(moment.astimezone(UTC), JCAL_TIME) + "Z"]
+        local = formatted(moment.astimezone(ZoneInfo(zone)), JCAL_TIME)
         return [name, {"tzid": zone}, "date-time", local]
 
     return [
@@ -391,7 +391,7 @@ def new_event(
                 "vevent",
                 [
                     ["uid", {}, "text", uid],
-                    ["dtstamp", {}, "date-time", stamp.astimezone(UTC).strftime(JCAL_TIME) + "Z"],
+                    ["dtstamp", {}, "date-time", formatted(stamp.astimezone(UTC), JCAL_TIME) + "Z"],
                     at("dtstart", start),
                     # iCalendar ends an event of whole days on the day after its last
                     at("dtend", end if isinstance(end, datetime) else end + timedelta(days=1)),
@@ -526,8 +526,8 @@ class Calendar:
             "POST",
             "/dav/calendars/freebusy",
             json={
-                "start": start.strftime(SABRE_TIME),
-                "end": end.strftime(SABRE_TIME),
+                "start": formatted(start, SABRE_TIME),
+                "end": formatted(end, SABRE_TIME),
                 "users": [user_id],
                 "uids": exclude,
             },
@@ -576,7 +576,10 @@ class Calendar:
                 "REPORT",
                 "/dav" + calendar,
                 json={
-                    "match": {"start": start.strftime(SABRE_TIME), "end": end.strftime(SABRE_TIME)}
+                    "match": {
+                        "start": formatted(start, SABRE_TIME),
+                        "end": formatted(end, SABRE_TIME),
+                    }
                 },
             )
             events += [
