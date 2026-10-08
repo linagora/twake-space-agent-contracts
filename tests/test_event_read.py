@@ -460,6 +460,13 @@ async def test_an_event_none_of_the_users_calendars_holds_is_not_found_alike(
         ALICE_CALENDAR_ID, jcal_event("alices", "2026-10-13T17:00:00", "2026-10-13T18:00:00")
     )
     boundary.calendar.subscriptions[f"/calendars/{MMAUDET_CALENDAR_ID}/alice"] = ALICE_CALENDAR
+    # The user's, as esn-sabre would find it if it searched further than the calendars they own,
+    # in one it does not list among them
+    keep(
+        boundary,
+        jcal_event("astray", "2026-10-13T17:00:00", "2026-10-13T18:00:00"),
+        calendar=ALICE_CALENDAR,
+    )
 
     responses = [
         await client.get(EVENT, params=params, headers=AS_MMAUDET)
@@ -467,12 +474,14 @@ async def test_an_event_none_of_the_users_calendars_holds_is_not_found_alike(
             {"uid": "unknown"},
             {"uid": "alices"},
             {"uid": "alices", "recurrence_id": "2026-10-13T17:00:00+02:00"},
+            {"uid": "astray"},
+            {"uid": "astray", "recurrence_id": "2026-10-13T17:00:00+02:00"},
         )
     ]
 
     # Whether someone else's calendar holds it, the answer does not tell
-    assert [response.status_code for response in responses] == [404, 404, 404]
-    assert [response.json() for response in responses] == [responses[0].json()] * 3
+    assert [response.status_code for response in responses] == [404] * 5
+    assert [response.json() for response in responses] == [responses[0].json()] * 5
     assert responses[0].json()["code"] == "event_not_found"
 
 

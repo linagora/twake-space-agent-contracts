@@ -330,6 +330,11 @@ class CalendarEvent:
     href: str
     jcal: list[Any]
 
+    @property
+    def calendar(self) -> str:
+        """The calendar that holds it, by the href of its JSON, as esn-sabre lists the user's."""
+        return self.href.rsplit("/", 1)[0] + ".json"
+
     def _vevents(self) -> list[list[Any]]:
         return [component for component in self.jcal[2] if component[0] == "vevent"]
 
@@ -923,7 +928,7 @@ class Calendar:
     ) -> list[CalendarEvent]:
         """The events of the calendar that holds that event of the user's, which take place
         between two UTC times, as events_between gives them."""
-        return await self._events_in(user, event.href.rsplit("/", 1)[0] + ".json", start, end)
+        return await self._events_in(user, event.calendar, start, end)
 
     async def _events_in(
         self, user: User, calendar: str, start: datetime, end: datetime
@@ -958,7 +963,10 @@ class Calendar:
         items = _reported(found, "the event")
         if not items:
             raise _unavailable("Calendar gave the event in an unexpected form.")
-        return items[0]
+        # esn-sabre searches the calendars the user owns alone, which the service does not take
+        # for granted of every version of it: it keeps those it lists as theirs, as for the list
+        owned = await self._calendars(user, user_id)
+        return next((item for item in items if item.calendar in owned), None)
 
     async def add_event(
         self, user: User, uid: str, jcal: list[Any], user_id: str | None = None
