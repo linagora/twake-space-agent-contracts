@@ -139,6 +139,15 @@ async def _answer(
             title="Invitation not found",
             detail="No invitation to an event of this UID was sent to this user.",
         )
+    # esn-sabre would not tell the organizer; and the owner is not asked about the whole series of
+    # a cancelled event
+    if event.cancelled:
+        raise Problem(
+            status=409,
+            code="invitation_cancelled",
+            title="Invitation cancelled",
+            detail="The organizer cancelled this event: there is nothing to answer.",
+        )
     # A UID names a whole series, not which of its occurrences the invitation is about: the user
     # answers for all of them, or in Calendar
     if event.recurring and not invitation.series:
@@ -149,14 +158,6 @@ async def _answer(
             detail="The invitation repeats, or is one occurrence of a series: once the user said"
             " yes to answering for the whole series, call again with series true; else they"
             " answer it in Calendar.",
-        )
-    # esn-sabre would not tell the organizer
-    if event.cancelled:
-        raise Problem(
-            status=409,
-            code="invitation_cancelled",
-            title="Invitation cancelled",
-            detail="The organizer cancelled this event: there is nothing to answer.",
         )
     # What the owner allows: the event as the user would answer it, where it is
     digest = digest_of(answered.href, answered.jcal)

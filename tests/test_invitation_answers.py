@@ -178,13 +178,23 @@ async def test_answering_the_whole_series_answers_each_of_its_occurrences(
     assert boundary.calendar.objects[HREF].jcal == weekly_series(partstat, partstat)
 
 
+CANCELLED_SERIES = with_props(
+    weekly_series("NEEDS-ACTION", "NEEDS-ACTION", CANCELLED), status=CANCELLED
+)
+"""A series its organizer cancelled, as esn-sabre writes it in the user's copy: each occurrence
+cancelled."""
+
+
 @pytest.mark.parametrize(
     ("event", "series"),
     [
         pytest.param(invitation_a("NEEDS-ACTION", CANCELLED), False, id="once"),
+        pytest.param(invitation_a("NEEDS-ACTION", WEEKLY, CANCELLED), False, id="a series, once"),
         pytest.param(
             invitation_a("NEEDS-ACTION", WEEKLY, CANCELLED), True, id="for the whole series"
         ),
+        pytest.param(CANCELLED_SERIES, False, id="each occurrence, once"),
+        pytest.param(CANCELLED_SERIES, True, id="each occurrence, for the whole series"),
         pytest.param(
             weekly_series("NEEDS-ACTION", "NEEDS-ACTION", CANCELLED),
             True,
@@ -196,7 +206,8 @@ async def test_answering_the_whole_series_answers_each_of_its_occurrences(
 async def test_a_cancelled_invitation_is_not_answered(
     client: AsyncClient, boundary: FakeBoundary, operation: str, event: list[Any], series: bool
 ) -> None:
-    # Cancelling leaves the event in the user's calendar, and Calendar would not tell anyone
+    # Cancelling leaves the event in the user's calendar, and Calendar would not tell anyone: the
+    # owner is not asked either about the whole series of a cancelled event
     boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
 
     response = await answer(client, operation, UID, series=series)
@@ -424,8 +435,9 @@ async def test_a_series_changed_since_the_preview_is_not_answered(
     [
         (invitation_a("NEEDS-ACTION", WEEKLY), "recurring_invitation"),
         (invitation_a("NEEDS-ACTION", CANCELLED), "invitation_cancelled"),
+        (CANCELLED_SERIES, "invitation_cancelled"),
     ],
-    ids=["recurring", "cancelled"],
+    ids=["recurring", "cancelled", "a cancelled series"],
 )
 @pytest.mark.parametrize("operation", OPERATIONS)
 async def test_a_preview_refuses_what_answering_would_refuse(
