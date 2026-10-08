@@ -163,6 +163,49 @@ def is_calendar_object(jcal: list[Any]) -> bool:
     )
 
 
+# The user's default calendar, whose id esn-sabre makes the user's own
+DEFAULT_CALENDAR = f"/calendars/{MMAUDET_CALENDAR_ID}/{MMAUDET_CALENDAR_ID}"
+
+
+def jcal_event(
+    uid: str, start: str, end: str, *properties: list[Any], zone: str = "Europe/Paris"
+) -> list[Any]:
+    """An event as esn-sabre gives it in jCal: from a time to a time, local to the zone it names;
+    or, written as days such as 2026-10-09, from its first day to the day after its last, as
+    iCalendar ends an event of whole days, in no zone. Then the given properties."""
+    times: list[list[Any]]
+    if "T" in start:
+        times = [
+            ["dtstart", {"tzid": zone}, "date-time", start],
+            ["dtend", {"tzid": zone}, "date-time", end],
+        ]
+    else:
+        times = [["dtstart", {}, "date", start], ["dtend", {}, "date", end]]
+    return [
+        "vcalendar",
+        [["version", {}, "text", "2.0"], ["prodid", {}, "text", "-//Sabre//Sabre VObject 4.5//EN"]],
+        [
+            [
+                "vevent",
+                [
+                    ["uid", {}, "text", uid],
+                    ["dtstamp", {}, "date-time", "2026-10-06T09:00:00Z"],
+                    *times,
+                    *properties,
+                ],
+                [],
+            ]
+        ],
+    ]
+
+
+def attendee(address: str, partstat: str | None = None, **params: str) -> list[Any]:
+    """An attendee of an event, in jCal: their participation when the event says it, then any
+    more parameters, such as rsvp or cn."""
+    said = {"partstat": partstat} if partstat is not None else {}
+    return ["attendee", said | params, "cal-address", f"mailto:{address}"]
+
+
 # A calendar of a home, whose events in a time range esn-sabre gives to a JSON REPORT
 CALENDAR = re.compile(r"/dav/calendars/[^/]+/[^/]+\.json")
 # How esn-sabre takes the bounds of a time range, and writes UTC times in jCal
@@ -249,7 +292,7 @@ def _occurrences(series: list[list[Any]], end: datetime) -> list[list[Any]]:
     moved = [vevent for vevent in series if vevent is not master]
     props = {prop[0]: prop for prop in master[1]}
     rule = props["rrule"][3]
-    step = timedelta(days=7 if rule["freq"] == "WEEKLY" else 1) * rule.get("interval", 1)
+    step = timedelta(days=7 if rule["freq"] == "WEEKLY" else 1)
     taken_out = {
         _moment([prop[0], prop[1], prop[2], value])
         for prop in master[1]
@@ -283,8 +326,12 @@ def expanded(jcal: list[Any], start: datetime, end: datetime) -> list[Any] | Non
         if not any(_takes_place(vevent, start, end) for vevent in vevents):
             return None
         ends_in_utc = [
-            ["vevent", [_in_utc(p) if p[0] in ("dtstart", "dtend") else p for p in v[1]], v[2]]
-            for v in vevents
+            [
+                "vevent",
+                [_in_utc(prop) if prop[0] in ("dtstart", "dtend") else prop for prop in vevent[1]],
+                vevent[2],
+            ]
+            for vevent in vevents
         ]
         return [jcal[0], jcal[1], ends_in_utc]
     if any(_has(vevent, "rrule") for vevent in vevents):

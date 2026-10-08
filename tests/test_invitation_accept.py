@@ -11,6 +11,8 @@ from tests.fakes import (
     MMAUDET_CALENDAR_ID,
     CalendarObject,
     FakeBoundary,
+    attendee,
+    jcal_event,
 )
 
 UID = "twake-space-e2e-2026-10-13-a"
@@ -28,10 +30,6 @@ ONE_OCCURRENCE = ["recurrence-id", {"tzid": "Europe/Paris"}, "date-time", "2026-
 CANCELLED = ["status", {}, "text", "CANCELLED"]
 
 
-def attendee(address: str, partstat: str, **params: str) -> list[Any]:
-    return ["attendee", {"partstat": partstat, **params}, "cal-address", f"mailto:{address}"]
-
-
 def invitation_a(mmaudet_partstat: str | None = "NEEDS-ACTION", *more: list[Any]) -> list[Any]:
     """Invitation A in the user's calendar, as esn-sabre gives it in jCal: the organizer, the
     user unless their participation is None, a colleague who has not answered either, and any
@@ -41,29 +39,18 @@ def invitation_a(mmaudet_partstat: str | None = "NEEDS-ACTION", *more: list[Any]
         if mmaudet_partstat is None
         else [attendee("mmaudet@twake.test", mmaudet_partstat, rsvp="TRUE", cn="Michel-Marie")]
     )
-    return [
-        "vcalendar",
-        [["version", {}, "text", "2.0"], ["prodid", {}, "text", "-//Sabre//Sabre VObject 4.5//EN"]],
-        [
-            [
-                "vevent",
-                [
-                    ["uid", {}, "text", UID],
-                    ["dtstamp", {}, "date-time", "2026-10-06T09:00:00Z"],
-                    ["dtstart", {"tzid": "Europe/Paris"}, "date-time", "2026-10-13T17:00:00"],
-                    ["dtend", {"tzid": "Europe/Paris"}, "date-time", "2026-10-13T18:00:00"],
-                    ["summary", {}, "text", "Point Twake Space E2E"],
-                    ["organizer", {"cn": "E2E"}, "cal-address", "mailto:e2e.organizer@twake.test"],
-                    attendee("e2e.organizer@twake.test", "ACCEPTED", role="CHAIR"),
-                    *mmaudet,
-                    attendee("colleague@twake.test", "NEEDS-ACTION", rsvp="TRUE"),
-                    ["sequence", {}, "integer", 0],
-                    *more,
-                ],
-                [],
-            ]
-        ],
-    ]
+    return jcal_event(
+        UID,
+        "2026-10-13T17:00:00",
+        "2026-10-13T18:00:00",
+        ["summary", {}, "text", "Point Twake Space E2E"],
+        ["organizer", {"cn": "E2E"}, "cal-address", "mailto:e2e.organizer@twake.test"],
+        attendee("e2e.organizer@twake.test", "ACCEPTED", role="CHAIR"),
+        *mmaudet,
+        attendee("colleague@twake.test", "NEEDS-ACTION", rsvp="TRUE"),
+        ["sequence", {}, "integer", 0],
+        *more,
+    )
 
 
 async def accept(client: AsyncClient, uid: str, headers: dict[str, str] | None = None) -> Response:
