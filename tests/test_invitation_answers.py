@@ -1,10 +1,18 @@
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from httpx import AsyncClient, Response
 
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
-from tests.fakes import ALICE_CALENDAR_ID, MMAUDET_CALENDAR_ID, CalendarObject, FakeBoundary
+from tests.fakes import (
+    ALICE_CALENDAR_ID,
+    MMAUDET_CALENDAR_ID,
+    CalendarObject,
+    FakeBoundary,
+    FakeClock,
+)
 from tests.test_invitation_accept import (
     CANCELLED,
     HREF,
@@ -59,6 +67,36 @@ def occurrence_alone(mmaudet_partstat: str) -> list[Any]:
     event = weekly_series("NEEDS-ACTION", mmaudet_partstat)
     del event[2][0]
     return event
+
+
+def weekly_days(mmaudet_partstat: str, retitled_partstat: str) -> list[Any]:
+    """Invitation A as a weekly series of whole days in the user's calendar: its days, then the
+    second, which the organizer retitled; the user's participation in each."""
+    series = with_props(
+        invitation_a(mmaudet_partstat, WEEKLY),
+        dtstart=["dtstart", {}, "date", "2026-10-13"],
+        dtend=["dtend", {}, "date", "2026-10-14"],
+    )
+    retitled = with_props(
+        invitation_a(retitled_partstat, ["recurrence-id", {}, "date", "2026-10-20"]),
+        dtstart=["dtstart", {}, "date", "2026-10-20"],
+        dtend=["dtend", {}, "date", "2026-10-21"],
+        summary=["summary", {}, "text", "Point Twake Space E2E, au bureau"],
+    )
+    series[2].append(retitled[2][0])
+    return series
+
+
+def floating_series(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
+    """Invitation A as a weekly series in the user's calendar, its times written in no zone, which
+    iCalendar calls floating: its occurrences, then the second, which the organizer moved to 18:00;
+    the user's participation in each."""
+    series = weekly_series(mmaudet_partstat, moved_partstat)
+    for vevent in series[2]:
+        for prop in vevent[1]:
+            if prop[0] in ("dtstart", "dtend", "recurrence-id"):
+                prop[1].pop("tzid")
+    return series
 
 
 def occurrences_alone() -> list[Any]:
@@ -238,6 +276,82 @@ async def test_answering_the_whole_series_answers_each_of_its_occurrences(
     assert response.status_code == 200, response.text
     assert response.json() == {"uid": UID, "partstat": partstat}
     assert boundary.calendar.objects[HREF].jcal == weekly_series(partstat, partstat)
+
+
+ANSWERED_BEFORE = [
+    pytest.param("accept", "ACCEPTED", "DECLINED", id="accept"),
+    pytest.param("decline", "DECLINED", "ACCEPTED", id="decline"),
+]
+"""Each contract, the participation it gives the user, and the other answer, which they gave an
+occurrence before."""
+
+
+@pytest.mark.parametrize(
+    ("series", "over_since"),
+    [
+        # The moved occurrence ends at 19:00 in Paris, 17:00 in UTC
+        pytest.param(weekly_series, datetime(2026, 10, 20, 17, 0, 1, tzinfo=UTC), id="at a time"),
+        # The day the organizer retitled ends where the next starts, in UTC
+        pytest.param(weekly_days, datetime(2026, 10, 21, tzinfo=UTC), id="on a day"),
+    ],
+)
+@pytest.mark.parametrize(("operation", "partstat", "answered_before"), ANSWERED_BEFORE)
+async def test_answering_the_whole_series_leaves_the_occurrences_over_as_they_are(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    operation: str,
+    partstat: str,
+    answered_before: str,
+    series: Callable[[str, str], list[Any]],
+    over_since: datetime,
+) -> None:
+    # As Twake Calendar answers a series: the answer the user gave an occurrence over stays, and
+    # its organizer is not told of it again
+    clock.wall = over_since
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, series("NEEDS-ACTION", answered_before)
+    )
+
+    response = await answer(client, operation, UID, series=True)
+
+    assert response.status_code == 200, response.text
+    assert boundary.calendar.objects[HREF].jcal == series(partstat, answered_before)
+
+
+@pytest.mark.parametrize(
+    ("series", "under_way"),
+    [
+        pytest.param(
+            weekly_series, datetime(2026, 10, 20, 17, tzinfo=UTC), id="at a time, as it ends"
+        ),
+        pytest.param(weekly_days, datetime(2026, 10, 20, 23, 59, tzinfo=UTC), id="on a day"),
+        pytest.param(
+            floating_series, datetime(2026, 10, 21, tzinfo=UTC), id="at a time of no zone"
+        ),
+    ],
+)
+@pytest.mark.parametrize(("operation", "partstat", "answered_before"), ANSWERED_BEFORE)
+async def test_answering_the_whole_series_answers_an_occurrence_not_over(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    operation: str,
+    partstat: str,
+    answered_before: str,
+    series: Callable[[str, str], list[Any]],
+    under_way: datetime,
+) -> None:
+    # Under way, ending that very time, or at a floating time, which no zone places: not over
+    clock.wall = under_way
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, series("NEEDS-ACTION", answered_before)
+    )
+
+    response = await answer(client, operation, UID, series=True)
+
+    assert response.status_code == 200, response.text
+    assert boundary.calendar.objects[HREF].jcal == series(partstat, partstat)
 
 
 CANCELLED_SERIES = with_props(

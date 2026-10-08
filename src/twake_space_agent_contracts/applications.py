@@ -3,6 +3,7 @@ its contracts belong to, the words the harness names it with, and the routers of
 
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, dataclass
+from datetime import datetime
 
 import httpx
 from fastapi import APIRouter
@@ -47,6 +48,8 @@ class Context:
     clock: Callable[[], float]
     """Seconds, as time.monotonic counts them, by which what an application keeps for a while
     expires."""
+    now: Callable[[], datetime]
+    """The date and time, aware in UTC, by which an application tells what is over."""
 
 
 @dataclass(frozen=True)
@@ -83,7 +86,7 @@ def _calendar(context: Context) -> list[APIRouter]:
     return [
         freebusy.router(calendar, context.caller),
         event_reads.router(calendar, context.caller),
-        *invitations.routers(calendar, context.caller),
+        *invitations.routers(calendar, context.caller, context.now),
         event_create.router(calendar, context.caller),
     ]
 

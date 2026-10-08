@@ -191,6 +191,26 @@ def _end_without_dtend(start: EventTime, duration: list[Any] | None) -> EventTim
     return _as_read(EventTime(_later(start.value, length), start.zone))
 
 
+def _over(vevent: list[Any], moment: datetime) -> bool:
+    """Whether a VEVENT is an occurrence of a series, written apart from it, that ended before that
+    time, as Twake Calendar tells it: at its DTEND, else at its DTSTART, which ends a day the day
+    after. A day ends where the next starts, in UTC. A floating time, or one in a zone the IANA
+    database lacks, which nothing places in time, is not over."""
+    first = {prop[0]: prop for prop in reversed(vevent[1])}
+    if "recurrence-id" not in first:
+        return False
+    end = _event_time(first.get("dtend"))
+    if end is None:
+        end = _event_time(first.get("dtstart"))
+        if end is not None and not isinstance(end.value, datetime):
+            end = EventTime(end.value + timedelta(days=1), None)
+    if end is None:
+        return False
+    if isinstance(end.value, datetime):
+        return end.value.tzinfo is not None and end.value < moment
+    return end.value <= moment.astimezone(UTC).date()
+
+
 Partstat = Literal["ACCEPTED", "DECLINED"]
 """A user's answer to an invitation, as iCalendar writes their participation."""
 
@@ -342,12 +362,18 @@ class CalendarEvent:
             for prop in vevent[1]
         )
 
-    def answered_by(self, email: str, partstat: Partstat) -> "CalendarEvent | None":
+    def answered_by(
+        self, email: str, partstat: Partstat, *, series_from: datetime | None = None
+    ) -> "CalendarEvent | None":
         """The event with the participation of that user set to their answer, such as ACCEPTED,
         wherever it lists them, and nothing else changed; None if it does not invite them: if it
         does not list them as an attendee, or if they organize it, whom Twake Calendar lists among
         its attendees too, as its chair. Addresses compare lowercased, as sabre's iTIP broker
-        compares them."""
+        compares them.
+
+        An answer for the whole series, given at series_from, changes it as Twake Calendar answers
+        a series: in the series itself, and in its occurrences written apart that are not over by
+        then. Those over keep the answer they have, of which their organizer is not told again."""
         email = email.lower()
         if self.organized_by(email):
             return None
@@ -356,10 +382,12 @@ class CalendarEvent:
         for component in jcal[2]:
             if component[0] != "vevent":
                 continue
+            kept = series_from is not None and _over(component, series_from)
             for prop in component[1]:
                 if _is_attendee(prop, email):
-                    prop[1]["partstat"] = partstat
                     invited = True
+                    if not kept:
+                        prop[1]["partstat"] = partstat
         return CalendarEvent(self.href, jcal) if invited else None
 
 

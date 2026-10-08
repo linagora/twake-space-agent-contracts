@@ -1,7 +1,9 @@
 """calendar.invitation.accept.v1 and calendar.invitation.decline.v1: the user accepts or declines
 an invitation they received, as themselves."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
@@ -41,10 +43,11 @@ class Invitation(BaseModel):
     series: Annotated[
         bool,
         Field(
-            description="true to answer for the whole series of a recurring invitation, each of "
-            "its occurrences, those answered already included, once the user said so; false by "
-            "default, which refuses a recurring invitation. An occurrence the user was invited to "
-            "without the rest of its series is answered either way."
+            description="true to answer for the whole series of a recurring invitation once the "
+            "user said so, as Calendar answers a series: the series and each of its occurrences "
+            "not over yet, those answered already included; false by default, which refuses a "
+            "recurring invitation. An occurrence the user was invited to without the rest of its "
+            "series is answered either way."
         ),
     ] = False
 
@@ -125,12 +128,24 @@ def _summary(
 
 
 async def _answer(
-    calendar: Calendar, invitation: Invitation, user: User, preview: Preview, partstat: Partstat
+    calendar: Calendar,
+    invitation: Invitation,
+    user: User,
+    preview: Preview,
+    partstat: Partstat,
+    now: Callable[[], datetime],
 ) -> Answer | JSONResponse:
     """The user's answer to the invitation, given in their calendar; or, when the harness asks,
     what giving it would do."""
     event = await calendar.find_event(user, invitation.uid)
-    answered = event.answered_by(user.email, partstat) if event is not None else None
+    whole_series = event is not None and invitation.series and event.repeats
+    # From now on, as Twake Calendar answers a whole series
+    series_from = now() if whole_series else None
+    answered = (
+        event.answered_by(user.email, partstat, series_from=series_from)
+        if event is not None
+        else None
+    )
     # No copy of the user's own, or one that does not invite them, is answered alike, before
     # anything else is checked: the contract never tells that an event exists
     if event is None or answered is None:
@@ -165,7 +180,6 @@ async def _answer(
     digest = digest_of(answered.href, answered.jcal)
     if preview.asked:
         zone = await calendar.time_zone(user)
-        whole_series = invitation.series and event.repeats
         summary = _summary(answered, partstat, zone, preview.language, whole_series=whole_series)
         return preview.answer(summary, digest)
     preview.check(digest)
@@ -173,7 +187,7 @@ async def _answer(
     return Answer(uid=invitation.uid, partstat=partstat)
 
 
-def _accept(calendar: Calendar, caller: CallerDependency) -> APIRouter:
+def _accept(calendar: Calendar, caller: CallerDependency, now: Callable[[], datetime]) -> APIRouter:
     routes = APIRouter(
         prefix="/contracts/v1/calendar/invitations", tags=["calendar.invitation.accept.v1"]
     )
@@ -187,11 +201,11 @@ def _accept(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             "event in Calendar: their own participation becomes accepted in their calendar, and "
             "Calendar tells the organizer. Nothing else in the event changes. Call it only once "
             "the user has said yes to this very invitation. A recurring invitation is refused "
-            "unless series is true, which accepts every occurrence of the series: set it only "
-            "once the user has said yes to the whole series; one occurrence apart from the "
-            "others, they answer in Calendar. An occurrence the user was invited to without the "
-            "rest of its series is accepted as an invitation that does not repeat. "
-            f'Example: body={{"uid": "{EXAMPLE_UID}"}}.'
+            "unless series is true, which accepts the series and each of its occurrences not "
+            "over yet, as Calendar answers a series: set it only once the user has said yes to "
+            "the whole series; one occurrence apart from the others, they answer in Calendar. An "
+            "occurrence the user was invited to without the rest of its series is accepted as an "
+            f'invitation that does not repeat. Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
         response_model=Answer,
         # The user's own answer, though Calendar tells the organizer: the owner's consent to write
@@ -204,12 +218,14 @@ def _accept(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
     ) -> Answer | JSONResponse:
-        return await _answer(calendar, invitation, user, preview, "ACCEPTED")
+        return await _answer(calendar, invitation, user, preview, "ACCEPTED", now)
 
     return routes
 
 
-def _decline(calendar: Calendar, caller: CallerDependency) -> APIRouter:
+def _decline(
+    calendar: Calendar, caller: CallerDependency, now: Callable[[], datetime]
+) -> APIRouter:
     routes = APIRouter(
         prefix="/contracts/v1/calendar/invitations", tags=["calendar.invitation.decline.v1"]
     )
@@ -223,10 +239,11 @@ def _decline(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             "event in Calendar: their own participation becomes declined in their calendar, and "
             "Calendar tells the organizer, without a comment. Nothing else in the event changes. "
             "Call it only once the user has said no to this very invitation. A recurring "
-            "invitation is refused unless series is true, which declines every occurrence of the "
-            "series: set it only once the user has said no to the whole series; one occurrence "
-            "apart from the others, they answer in Calendar. An occurrence the user was invited "
-            "to without the rest of its series is declined as an invitation that does not repeat. "
+            "invitation is refused unless series is true, which declines the series and each of "
+            "its occurrences not over yet, as Calendar answers a series: set it only once the "
+            "user has said no to the whole series; one occurrence apart from the others, they "
+            "answer in Calendar. An occurrence the user was invited to without the rest of its "
+            "series is declined as an invitation that does not repeat. "
             f'Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
         response_model=Answer,
@@ -238,11 +255,14 @@ def _decline(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
     ) -> Answer | JSONResponse:
-        return await _answer(calendar, invitation, user, preview, "DECLINED")
+        return await _answer(calendar, invitation, user, preview, "DECLINED", now)
 
     return routes
 
 
-def routers(calendar: Calendar, caller: CallerDependency) -> list[APIRouter]:
-    """The routers of the invitations' contracts, one each."""
-    return [_accept(calendar, caller), _decline(calendar, caller)]
+def routers(
+    calendar: Calendar, caller: CallerDependency, now: Callable[[], datetime]
+) -> list[APIRouter]:
+    """The routers of the invitations' contracts, one each; now gives the date and time a whole
+    series is answered from."""
+    return [_accept(calendar, caller, now), _decline(calendar, caller, now)]
