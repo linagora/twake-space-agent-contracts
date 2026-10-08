@@ -91,9 +91,9 @@ class ListedEvent(Occurrence):
     )
     needs_action: bool = Field(description="Whether the event waits for the user's answer.")
     conflicts: list[Occurrence] = Field(
-        description="The occurrences of the days that overlap it, those limit leaves out "
-        "included, when both take the user's time: neither declined by the user, cancelled, nor "
-        "of whole days."
+        description="The occurrences that overlap it, when both take the user's time: neither "
+        "declined by the user, cancelled, nor of whole days. The list may not hold them: one "
+        "limit leaves out, or one before or after the days."
     )
     untrusted: ListedEventText
 
@@ -162,9 +162,40 @@ def _placed(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Placed:
     return _Placed(start, end, takes_time, listed)
 
 
-def _with_conflicts(occurrences: list[_Placed]) -> list[ListedEvent]:
-    """What the list gives of the occurrences, each with those that overlap it, when both take the
-    user's time."""
+async def _occurrences(
+    calendar: Calendar, user: User, zone: ZoneInfo, since: datetime, until: datetime
+) -> list[_Placed]:
+    """The occurrences of the user's calendars between two times, placed in time, by start; those
+    without their series come whatever their days."""
+    events = await calendar.events_between(user, since.astimezone(UTC), until.astimezone(UTC))
+    return sorted(
+        (_placed(event, zone, user.email) for event in events),
+        key=lambda occurrence: occurrence.start,
+    )
+
+
+def _within(occurrences: list[_Placed], start: datetime, end: datetime) -> list[_Placed]:
+    """The occurrences that take place between two times."""
+    return [
+        occurrence
+        for occurrence in occurrences
+        if occurrence.start < end and start < occurrence.end
+    ]
+
+
+def _reach(listed: list[_Placed], start: datetime, end: datetime) -> tuple[datetime, datetime]:
+    """From when to when the occurrences that may overlap those listed take place: the days, and
+    beyond them, the times of those listed that take the user's time."""
+    timed = [occurrence for occurrence in listed if occurrence.takes_time]
+    return (
+        min([start, *(occurrence.start for occurrence in timed)]),
+        max([end, *(occurrence.end for occurrence in timed)]),
+    )
+
+
+def _with_conflicts(listed: list[_Placed], occurrences: list[_Placed]) -> list[ListedEvent]:
+    """What the list gives of the occurrences it holds, each with the occurrences read that
+    overlap it, when both take the user's time."""
     return [
         occurrence.listed.model_copy(
             update={
@@ -179,7 +210,7 @@ def _with_conflicts(occurrences: list[_Placed]) -> list[ListedEvent]:
                 ]
             }
         )
-        for occurrence in occurrences
+        for occurrence in listed
     ]
 
 
@@ -220,24 +251,19 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         own_zone = await calendar.own_time_zone(user)
         zone = own_zone or ZoneInfo("UTC")
         start, end = midnight(first_day, zone), midnight(first_day + timedelta(days=days), zone)
-        events = await calendar.events_between(user, start.astimezone(UTC), end.astimezone(UTC))
-        occurrences = sorted(
-            (_placed(event, zone, user.email) for event in events),
-            key=lambda occurrence: occurrence.start,
-        )
-        # Occurrences without their series come whatever their days
-        listed = _with_conflicts(
-            [
-                occurrence
-                for occurrence in occurrences
-                if occurrence.start < end and start < occurrence.end
-            ]
-        )
+        occurrences = await _occurrences(calendar, user, zone, start, end)
+        listed = _within(occurrences, start, end)
+        # An occurrence of the days that starts before them or ends after them may overlap others
+        # out of them, which are read as far as it goes
+        since, until = _reach(listed[:limit], start, end)
+        if (since, until) != (start, end):
+            occurrences = await _occurrences(calendar, user, zone, since, until)
+            listed = _within(occurrences, start, end)
         return EventList(
             time_zone=own_zone.key if own_zone is not None else None,
             start=start,
             end=end,
-            events=listed[:limit],
+            events=_with_conflicts(listed[:limit], occurrences),
             truncated=len(listed) > limit,
         )
 

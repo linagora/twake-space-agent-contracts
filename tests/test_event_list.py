@@ -388,6 +388,44 @@ async def test_conflicts_are_the_overlapping_occurrences_that_take_the_users_tim
     }
 
 
+async def test_an_occurrence_past_the_last_day_that_overlaps_one_of_the_days_conflicts_with_it(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    keep(
+        boundary,
+        jcal_event("late", "2026-10-09T23:00:00", "2026-10-10T01:00:00"),
+        jcal_event("early", "2026-10-10T00:30:00", "2026-10-10T01:30:00"),
+    )
+
+    one_day = await list_events(client, **{"from": "2026-10-09", "days": "1"})
+    two_days = await list_events(client, **{"from": "2026-10-09", "days": "2"})
+
+    # The day lists its occurrences alone, with all they overlap
+    assert [(found["uid"], found["conflicts"]) for found in one_day["events"]] == [
+        ("late", [{"uid": "early", "recurrence_id": None}])
+    ]
+    assert [(found["uid"], found["conflicts"]) for found in two_days["events"]] == [
+        ("late", [{"uid": "early", "recurrence_id": None}]),
+        ("early", [{"uid": "late", "recurrence_id": None}]),
+    ]
+
+
+async def test_an_occurrence_before_the_first_day_that_overlaps_one_of_the_days_conflicts_with_it(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    keep(
+        boundary,
+        jcal_event("evening", "2026-10-08T22:30:00", "2026-10-08T23:30:00"),
+        jcal_event("late", "2026-10-08T23:00:00", "2026-10-09T01:00:00"),
+    )
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    assert [(found["uid"], found["conflicts"]) for found in answer["events"]] == [
+        ("late", [{"uid": "evening", "recurrence_id": None}])
+    ]
+
+
 async def test_the_users_own_calendars_are_read_and_no_one_elses(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
