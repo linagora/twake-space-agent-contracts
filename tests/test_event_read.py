@@ -356,12 +356,34 @@ async def test_the_video_link_is_the_one_calendar_shows(
         # Anything but a web link, which a reader could open for one
         jcal_event("script", *hour, video("javascript:alert(1)")),
         jcal_event("hidden", *hour, video("https://meet.twake.test/\N{RIGHT-TO-LEFT OVERRIDE}x")),
+        # A host before an @ that the link does not lead to, or none at all
+        jcal_event("user info", *hour, video("https://zoom.us@evil.example/room")),
+        jcal_event("no host", *hour, video("https://@")),
+        jcal_event("broken host", *hour, video("https://[meet.twake.test/x")),
+        # A letter a reader does not see, though Unicode does not call it invisible, and one of
+        # another script, which the punycode of its host spells out
+        jcal_event("filler", *hour, video("https://exa\N{HANGUL FILLER}mple.org")),
+        jcal_event("unicode", *hour, video("https://bücher.example/x")),
+        jcal_event("punycode", *hour, video("https://xn--bcher-kva.example/x")),
         jcal_event("none", *hour),
     )
 
     links = {
         uid: (await read_event(client, uid=uid))["event"]["untrusted"]["video_link"]
-        for uid in ("visio", "external", "removed", "script", "hidden", "none")
+        for uid in (
+            "visio",
+            "external",
+            "removed",
+            "script",
+            "hidden",
+            "user info",
+            "no host",
+            "broken host",
+            "filler",
+            "unicode",
+            "punycode",
+            "none",
+        )
     }
 
     assert links == {
@@ -370,6 +392,12 @@ async def test_the_video_link_is_the_one_calendar_shows(
         "removed": None,
         "script": None,
         "hidden": None,
+        "user info": None,
+        "no host": None,
+        "broken host": None,
+        "filler": None,
+        "unicode": None,
+        "punycode": "https://xn--bcher-kva.example/x",
         "none": None,
     }
 

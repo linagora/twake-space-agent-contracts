@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
@@ -158,7 +159,8 @@ class EventDetailText(ListedEventText):
     video_link: str | None = Field(
         description="The link of its video call, as Twake Calendar shows it; null without one, "
         f"or when the event gives anything but a web address, http or https, {LONGEST_LINK} "
-        "characters at most."
+        "characters at most, of printable ASCII alone, a host in another script in punycode, "
+        "with a host and without user info."
     )
 
 
@@ -344,6 +346,23 @@ def _address(written: str | None) -> str | None:
     return None
 
 
+def _video_link(written: str | None) -> str | None:
+    """A video link someone's calendar wrote, passed on when it is a web address a reader sees
+    whole and as it leads: of printable ASCII alone, which leaves out the letters a reader does not
+    see though Unicode does not call them invisible, such as the Hangul fillers, and those of other
+    scripts that look like Latin ones, a host in another script coming in punycode; with a host,
+    and without user info, whose name before an @ would show another host than the one it leads
+    to."""
+    link = web_link(written, LONGEST_LINK)
+    if link is None or not re.fullmatch(r"[!-~]+", link):
+        return None
+    try:
+        parts = urlsplit(link)
+    except ValueError:
+        return None
+    return link if parts.hostname and "@" not in parts.netloc else None
+
+
 def _facts(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Facts:
     """What the answers give of an occurrence for that user, in the zone of the answer, but for
     what people wrote of it."""
@@ -440,7 +459,7 @@ def _detail(event: CalendarEvent, zone: ZoneInfo, email: str) -> EventDetail:
                 )
                 for attendee in attendees[:MOST_ATTENDEES]
             ],
-            video_link=web_link(event.video_link, LONGEST_LINK),
+            video_link=_video_link(event.video_link),
         ),
     )
 
