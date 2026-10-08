@@ -44,10 +44,10 @@ class Invitation(BaseModel):
         bool,
         Field(
             description="true to answer for the whole series of a recurring invitation once the "
-            "user said so, as Calendar answers a series: the series and each of its occurrences "
-            "not over yet, those answered already included; false by default, which refuses a "
-            "recurring invitation. An occurrence the user was invited to without the rest of its "
-            "series is answered either way."
+            "user said so: the series and each of its occurrences neither over nor cancelled, "
+            "those answered already included; false by default, which refuses a recurring "
+            "invitation. An occurrence the user was invited to without the rest of its series is "
+            "answered either way."
         ),
     ] = False
 
@@ -155,14 +155,15 @@ async def _answer(
             title="Invitation not found",
             detail="No invitation to an event of this UID was sent to this user.",
         )
-    # esn-sabre would not tell the organizer; and the owner is not asked about the whole series of
-    # a cancelled event
+    # The invitation itself, not an occurrence cancelled alone: esn-sabre would not tell the
+    # organizer, and the owner is not asked about the whole series of a cancelled event
     if event.cancelled:
         raise Problem(
             status=409,
             code="invitation_cancelled",
             title="Invitation cancelled",
-            detail="The organizer cancelled this event: there is nothing to answer.",
+            detail="The organizer cancelled the event, the whole series if it repeats, or each"
+            " occurrence of it the user was invited to: there is nothing to answer.",
         )
     # A UID names a whole series, not which of its occurrences the invitation is about: the user
     # answers for all of them, or in Calendar. An occurrence they were invited to alone is all
@@ -201,9 +202,9 @@ def _accept(calendar: Calendar, caller: CallerDependency, now: Callable[[], date
             "event in Calendar: their own participation becomes accepted in their calendar, and "
             "Calendar tells the organizer. Nothing else in the event changes. Call it only once "
             "the user has said yes to this very invitation. A recurring invitation is refused "
-            "unless series is true, which accepts the series and each of its occurrences not "
-            "over yet, as Calendar answers a series: set it only once the user has said yes to "
-            "the whole series; one occurrence apart from the others, they answer in Calendar. An "
+            "unless series is true, which accepts the series and each of its occurrences "
+            "neither over nor cancelled: set it only once the user has said yes to the whole "
+            "series; one occurrence apart from the others, they answer in Calendar. An "
             "occurrence the user was invited to without the rest of its series is accepted as an "
             f'invitation that does not repeat. Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
@@ -240,10 +241,10 @@ def _decline(
             "Calendar tells the organizer, without a comment. Nothing else in the event changes. "
             "Call it only once the user has said no to this very invitation. A recurring "
             "invitation is refused unless series is true, which declines the series and each of "
-            "its occurrences not over yet, as Calendar answers a series: set it only once the "
-            "user has said no to the whole series; one occurrence apart from the others, they "
-            "answer in Calendar. An occurrence the user was invited to without the rest of its "
-            "series is declined as an invitation that does not repeat. "
+            "its occurrences neither over nor cancelled: set it only once the user has said no "
+            "to the whole series; one occurrence apart from the others, they answer in Calendar. "
+            "An occurrence the user was invited to without the rest of its series is declined as "
+            "an invitation that does not repeat. "
             f'Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
         response_model=Answer,

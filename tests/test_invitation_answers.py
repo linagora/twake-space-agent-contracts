@@ -61,10 +61,11 @@ async def preview(
     return await answer(client, operation, uid, asking_preview(language), **body)
 
 
-def occurrence_alone(mmaudet_partstat: str) -> list[Any]:
+def occurrence_alone(mmaudet_partstat: str, *more: list[Any]) -> list[Any]:
     """The user's copy of the second occurrence of invitation A, which the organizer moved to 18:00
-    and invited them to alone, as esn-sabre writes it: without the series; their participation."""
-    event = weekly_series("NEEDS-ACTION", mmaudet_partstat)
+    and invited them to alone, as esn-sabre writes it: without the series; their participation,
+    and any more properties."""
+    event = weekly_series("NEEDS-ACTION", mmaudet_partstat, *more)
     del event[2][0]
     return event
 
@@ -99,12 +100,27 @@ def floating_series(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
     return series
 
 
-def occurrences_alone() -> list[Any]:
+def occurrences_alone(
+    first_partstat: str = "NEEDS-ACTION", second_partstat: str = "NEEDS-ACTION", *more: list[Any]
+) -> list[Any]:
     """The user's copy of the first two occurrences of invitation A, which the organizer invited
-    them to alone, as esn-sabre writes it: without the series."""
-    event = invitation_a("NEEDS-ACTION", ONE_OCCURRENCE)
-    event[2].append(occurrence_alone("NEEDS-ACTION")[2][0])
+    them to alone, as esn-sabre writes it: without the series; the user's participation in each,
+    and any more properties of the second."""
+    event = invitation_a(first_partstat, ONE_OCCURRENCE)
+    event[2].append(occurrence_alone(second_partstat, *more)[2][0])
     return event
+
+
+def series_one_cancelled(mmaudet_partstat: str) -> list[Any]:
+    """Invitation A as a weekly series in the user's calendar, the second occurrence of which the
+    organizer moved, then cancelled alone: the user's participation in the series."""
+    return weekly_series(mmaudet_partstat, "NEEDS-ACTION", CANCELLED)
+
+
+def occurrences_one_cancelled(mmaudet_partstat: str) -> list[Any]:
+    """The user's copy of the first two occurrences of invitation A, which the organizer invited
+    them to alone, then cancelled the second of: the user's participation in the first."""
+    return occurrences_alone(mmaudet_partstat, "NEEDS-ACTION", CANCELLED)
 
 
 @pytest.mark.parametrize("uid", UIDS)
@@ -205,6 +221,12 @@ async def test_a_user_not_invited_is_answered_as_for_an_unknown_invitation(
             weekly_series("NEEDS-ACTION", "NEEDS-ACTION"), id="a series, one occurrence moved"
         ),
         pytest.param(occurrences_alone(), id="occurrences without their series"),
+        # The organizer cancelled one occurrence, not the invitation
+        pytest.param(series_one_cancelled("NEEDS-ACTION"), id="a series, one occurrence cancelled"),
+        pytest.param(
+            occurrences_one_cancelled("NEEDS-ACTION"),
+            id="occurrences without their series, one cancelled",
+        ),
     ],
 )
 @pytest.mark.parametrize("operation", OPERATIONS)
@@ -359,6 +381,12 @@ CANCELLED_SERIES = with_props(
 )
 """A series its organizer cancelled, as esn-sabre writes it in the user's copy: each occurrence
 cancelled."""
+CANCELLED_OCCURRENCE = occurrence_alone("NEEDS-ACTION", CANCELLED)
+"""An occurrence the organizer invited the user to alone, then cancelled."""
+CANCELLED_OCCURRENCES = with_props(
+    occurrences_alone("NEEDS-ACTION", "NEEDS-ACTION", CANCELLED), status=CANCELLED
+)
+"""Occurrences the organizer invited the user to without their series, then cancelled each of."""
 
 
 @pytest.mark.parametrize(
@@ -371,10 +399,11 @@ cancelled."""
         ),
         pytest.param(CANCELLED_SERIES, False, id="each occurrence, once"),
         pytest.param(CANCELLED_SERIES, True, id="each occurrence, for the whole series"),
+        pytest.param(CANCELLED_OCCURRENCE, False, id="an occurrence alone"),
+        pytest.param(CANCELLED_OCCURRENCE, True, id="an occurrence alone, for the whole series"),
+        pytest.param(CANCELLED_OCCURRENCES, False, id="occurrences without their series"),
         pytest.param(
-            weekly_series("NEEDS-ACTION", "NEEDS-ACTION", CANCELLED),
-            True,
-            id="a series one occurrence of which is cancelled",
+            CANCELLED_OCCURRENCES, True, id="occurrences without their series, for the whole series"
         ),
     ],
 )
@@ -391,6 +420,31 @@ async def test_a_cancelled_invitation_is_not_answered(
     assert response.status_code == 409
     assert response.json()["code"] == "invitation_cancelled"
     assert boundary.calendar.writes == []
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(series_one_cancelled, id="in a series"),
+        pytest.param(occurrences_one_cancelled, id="among occurrences without their series"),
+    ],
+)
+@pytest.mark.parametrize(("operation", "partstat"), ANSWERS)
+async def test_answering_the_whole_series_leaves_an_occurrence_cancelled_alone_as_it_is(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    partstat: str,
+    event: Callable[[str], list[Any]],
+) -> None:
+    # The organizer cancelled that occurrence, not the invitation: the user answers the others
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event("NEEDS-ACTION"))
+
+    response = await answer(client, operation, UID, series=True)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"uid": UID, "partstat": partstat}
+    assert boundary.calendar.objects[HREF].jcal == event(partstat)
 
 
 @pytest.mark.parametrize(("operation", "partstat"), ANSWERS)

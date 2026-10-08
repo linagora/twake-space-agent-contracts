@@ -211,6 +211,11 @@ def _over(vevent: list[Any], moment: datetime) -> bool:
     return end.value <= moment.astimezone(UTC).date()
 
 
+def _cancelled(vevent: list[Any]) -> bool:
+    """Whether a VEVENT is cancelled, as its STATUS says."""
+    return any(prop[0] == "status" and str(prop[3]).upper() == "CANCELLED" for prop in vevent[1])
+
+
 Partstat = Literal["ACCEPTED", "DECLINED"]
 """A user's answer to an invitation, as iCalendar writes their participation."""
 
@@ -356,11 +361,15 @@ class CalendarEvent:
 
     @property
     def cancelled(self) -> bool:
-        return any(
-            prop[0] == "status" and str(prop[3]).upper() == "CANCELLED"
-            for vevent in self._vevents()
-            for prop in vevent[1]
-        )
+        """Whether its organizer cancelled the event itself: the event, or the series, as esn-sabre
+        cancels each occurrence of a series cancelled whole; in a copy without the series, each
+        occurrence the user was invited to. An occurrence cancelled alone leaves the others to
+        answer."""
+        vevents = self._vevents()
+        series = [
+            vevent for vevent in vevents if all(prop[0] != "recurrence-id" for prop in vevent[1])
+        ]
+        return bool(vevents) and all(_cancelled(vevent) for vevent in series or vevents)
 
     def answered_by(
         self, email: str, partstat: Partstat, *, series_from: datetime | None = None
@@ -373,7 +382,8 @@ class CalendarEvent:
 
         An answer for the whole series, given at series_from, changes it as Twake Calendar answers
         a series: in the series itself, and in its occurrences written apart that are not over by
-        then. Those over keep the answer they have, of which their organizer is not told again."""
+        then. Those over keep the answer they have, of which their organizer is not told again; so
+        do those the organizer cancelled alone, which there is nothing to answer in."""
         email = email.lower()
         if self.organized_by(email):
             return None
@@ -382,7 +392,9 @@ class CalendarEvent:
         for component in jcal[2]:
             if component[0] != "vevent":
                 continue
-            kept = series_from is not None and _over(component, series_from)
+            kept = series_from is not None and (
+                _cancelled(component) or _over(component, series_from)
+            )
             for prop in component[1]:
                 if _is_attendee(prop, email):
                     invited = True
