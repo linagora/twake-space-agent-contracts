@@ -114,14 +114,30 @@ def outlook_series(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
     return series_written_in(mmaudet_partstat, moved_partstat, "W. Europe Standard Time")
 
 
-def lasting_an_hour(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
+def moved_without_end(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
     """Invitation A as a weekly series in the user's calendar: its occurrences, then the second,
-    which the organizer moved to 18:00, its end written as a DURATION of an hour rather than a
-    DTEND; the user's participation in each."""
+    which the organizer moved to 18:00, written without a DTEND, which iCalendar ends when it
+    starts; the user's participation in each."""
     series = weekly_series(mmaudet_partstat, moved_partstat)
     moved = series[2][1][1]
     moved[:] = [prop for prop in moved if prop[0] != "dtend"]
-    moved.append(["duration", {}, "duration", "PT1H"])
+    return series
+
+
+def lasting_an_hour(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
+    """That series, the end of the moved occurrence written as a DURATION of an hour."""
+    series = moved_without_end(mmaudet_partstat, moved_partstat)
+    series[2][1][1].append(["duration", {}, "duration", "PT1H"])
+    return series
+
+
+def day_without_end(mmaudet_partstat: str, retitled_partstat: str) -> list[Any]:
+    """Invitation A as a weekly series of whole days in the user's calendar, the day the organizer
+    retitled written without a DTEND, which iCalendar ends at the end of that day; the user's
+    participation in each."""
+    series = weekly_days(mmaudet_partstat, retitled_partstat)
+    retitled = series[2][1][1]
+    retitled[:] = [prop for prop in retitled if prop[0] != "dtend"]
     return series
 
 
@@ -154,6 +170,34 @@ def occurrences_one_cancelled(mmaudet_partstat: str) -> list[Any]:
     """The user's copy of the first two occurrences of invitation A, which the organizer invited
     them to alone, then cancelled the second of: the user's participation in the first."""
     return occurrences_alone(mmaudet_partstat, "NEEDS-ACTION", CANCELLED)
+
+
+CONFIRMED = ["status", {}, "text", "CONFIRMED"]
+"""An occurrence its organizer confirmed: esn-sabre reads the status of the last VEVENT that has
+one, which a cancelled occurrence written before it is not."""
+
+
+def series_one_cancelled_amid(mmaudet_partstat: str) -> list[Any]:
+    """Invitation A as a weekly series in the user's calendar, the second occurrence of which the
+    organizer moved, then cancelled alone, and the third moved to 18:00 and confirmed after it:
+    the user's participation in the series and in the third."""
+    series = series_one_cancelled(mmaudet_partstat)
+    third = with_props(
+        invitation_a(mmaudet_partstat, paris("recurrence-id", "2026-10-27T17:00:00"), CONFIRMED),
+        dtstart=paris("dtstart", "2026-10-27T18:00:00"),
+        dtend=paris("dtend", "2026-10-27T19:00:00"),
+    )
+    series[2].append(third[2][0])
+    return series
+
+
+def occurrences_first_cancelled(mmaudet_partstat: str) -> list[Any]:
+    """The user's copy of the first two occurrences of invitation A, which the organizer invited
+    them to alone, then cancelled the first of and confirmed the second: the user's participation
+    in the second."""
+    event = occurrences_alone("NEEDS-ACTION", mmaudet_partstat, CONFIRMED)
+    event[2][0][1].append(CANCELLED)
+    return event
 
 
 @pytest.mark.parametrize("uid", UIDS)
@@ -357,6 +401,13 @@ occurrence before."""
             datetime(2026, 10, 20, 17, 0, 1, tzinfo=UTC),
             id="after its duration",
         ),
+        # Without an end, the moved occurrence ends when it starts, at 16:00 in UTC
+        pytest.param(
+            moved_without_end,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 16, 0, 1, tzinfo=UTC),
+            id="as it starts, without an end",
+        ),
         # Times in no zone the IANA database has, read in the user's
         pytest.param(
             floating_series,
@@ -373,6 +424,12 @@ occurrence before."""
         # The day the organizer retitled ends at midnight in the user's zone, 22:00 in UTC
         pytest.param(
             weekly_days, "Europe/Paris", datetime(2026, 10, 20, 22, 0, 1, tzinfo=UTC), id="on a day"
+        ),
+        pytest.param(
+            day_without_end,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 22, 0, 1, tzinfo=UTC),
+            id="on a day without an end",
         ),
         # In UTC when Calendar gives the user no zone the database has, or fails to give one
         pytest.param(
@@ -431,6 +488,12 @@ async def test_answering_the_whole_series_leaves_the_occurrences_over_as_they_ar
             id="after its duration, as it ends",
         ),
         pytest.param(
+            moved_without_end,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 16, tzinfo=UTC),
+            id="as it starts and ends, without an end",
+        ),
+        pytest.param(
             floating_series,
             "Europe/Paris",
             datetime(2026, 10, 20, 17, tzinfo=UTC),
@@ -447,6 +510,12 @@ async def test_answering_the_whole_series_leaves_the_occurrences_over_as_they_ar
             "Europe/Paris",
             datetime(2026, 10, 20, 22, tzinfo=UTC),
             id="on a day, as it ends",
+        ),
+        pytest.param(
+            day_without_end,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 22, tzinfo=UTC),
+            id="on a day without an end, as it ends",
         ),
         # 18:00 in Los Angeles: its day goes on there, though not in UTC
         pytest.param(
@@ -608,13 +677,20 @@ async def test_a_cancelled_invitation_is_not_answered(
     assert boundary.calendar.writes == []
 
 
-@pytest.mark.parametrize(
-    "event",
-    [
-        pytest.param(series_one_cancelled, id="in a series"),
-        pytest.param(occurrences_one_cancelled, id="among occurrences without their series"),
-    ],
-)
+CANCELLED_AMONG = [
+    pytest.param(series_one_cancelled, id="in a series"),
+    pytest.param(series_one_cancelled_amid, id="in a series, before another occurrence"),
+    pytest.param(occurrences_one_cancelled, id="among occurrences without their series"),
+    pytest.param(
+        occurrences_first_cancelled,
+        id="first among occurrences without their series",
+    ),
+]
+"""Copies that hold an occurrence cancelled alone, the last of the copy or not, by the user's
+participation in the others."""
+
+
+@pytest.mark.parametrize("event", CANCELLED_AMONG)
 @pytest.mark.parametrize(("operation", "partstat"), ANSWERS)
 async def test_answering_the_whole_series_leaves_an_occurrence_cancelled_alone_as_it_is(
     client: AsyncClient,
@@ -633,13 +709,7 @@ async def test_answering_the_whole_series_leaves_an_occurrence_cancelled_alone_a
     assert boundary.calendar.objects[HREF].jcal == event(partstat)
 
 
-@pytest.mark.parametrize(
-    "event",
-    [
-        pytest.param(series_one_cancelled, id="in a series"),
-        pytest.param(occurrences_one_cancelled, id="among occurrences without their series"),
-    ],
-)
+@pytest.mark.parametrize("event", CANCELLED_AMONG)
 @pytest.mark.parametrize(
     ("language", "told"),
     [
