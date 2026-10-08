@@ -1132,6 +1132,72 @@ def first_moved_later() -> list[Any]:
     return series
 
 
+def first_moved_after_the_second() -> list[Any]:
+    """Invitation A as a weekly series in the user's calendar, its first occurrence moved by the
+    organizer to 22 October, after the second, which the series' rule gives on 20 October, and
+    retitled."""
+    series = invitation_a("NEEDS-ACTION", WEEKLY)
+    moved = with_props(
+        invitation_a("NEEDS-ACTION", ONE_OCCURRENCE),
+        dtstart=paris("dtstart", "2026-10-22T17:00:00"),
+        dtend=paris("dtend", "2026-10-22T18:00:00"),
+        summary=["summary", {}, "text", "Point Twake Space E2E, reporté"],
+    )
+    series[2].append(moved[2][0])
+    return series
+
+
+def excluded(series: list[Any], *exdates: list[str]) -> list[Any]:
+    """The series, occurrences cancelled as esn-sabre cancels one: their starts in Paris, in an
+    EXDATE for each list of them."""
+    own = series[2][0]
+    props = [["exdate", {"tzid": "Europe/Paris"}, "date-time", *starts] for starts in exdates]
+    return [series[0], series[1], [[own[0], [*own[1], *props], own[2]], *series[2][1:]]]
+
+
+def first_excluded(series: list[Any]) -> list[Any]:
+    """The series, its first occurrence cancelled as esn-sabre cancels one: the series' start in
+    its EXDATE."""
+    return excluded(series, ["2026-10-13T17:00:00"])
+
+
+def first_cancelled(series: list[Any]) -> list[Any]:
+    """The series, its first occurrence written apart, retitled, and cancelled alone."""
+    cancelled = with_props(
+        invitation_a("NEEDS-ACTION", ONE_OCCURRENCE, CANCELLED),
+        summary=["summary", {}, "text", "Point Twake Space E2E, annulé"],
+    )
+    return [series[0], series[1], [*series[2], cancelled[2][0]]]
+
+
+def day_moved_to_a_time() -> list[Any]:
+    """Invitation A as a weekly series of whole days in the user's calendar, from Tuesday 13
+    October, the day the organizer retitled moved to a time: that Tuesday from 00:30 to 01:30 in
+    Paris, which is Monday from 15:30 to 16:30 in Los Angeles."""
+    series = weekly_days("NEEDS-ACTION", "NEEDS-ACTION")
+    moved = with_props(
+        [series[0], series[1], [series[2][1]]],
+        dtstart=paris("dtstart", "2026-10-13T00:30:00"),
+        dtend=paris("dtend", "2026-10-13T01:30:00"),
+    )
+    series[2][1] = moved[2][0]
+    return series
+
+
+def floating_moved_to_a_time() -> list[Any]:
+    """Invitation A as a weekly series in the user's calendar, its times floating, the second
+    occurrence moved by the organizer to a time in Paris: Tuesday 13 October from 12:00 to 13:00,
+    from 3:00 to 4:00 in Los Angeles, and from 0:00 to 1:00 on Wednesday in Kiritimati."""
+    series = floating_series("NEEDS-ACTION", "NEEDS-ACTION")
+    moved = with_props(
+        [series[0], series[1], [series[2][1]]],
+        dtstart=paris("dtstart", "2026-10-13T12:00:00"),
+        dtend=paris("dtend", "2026-10-13T13:00:00"),
+    )
+    series[2][1] = moved[2][0]
+    return series
+
+
 @pytest.mark.parametrize(
     ("event", "title", "when"),
     [
@@ -1140,6 +1206,45 @@ def first_moved_later() -> list[Any]:
             "Point Twake Space E2E, décalé",
             "mardi 13 octobre 2026 de 18 h à 19 h",
             id="the first occurrence moved later",
+        ),
+        # The series' rule is not expanded: the earliest start the copy writes
+        pytest.param(
+            first_moved_after_the_second(),
+            "Point Twake Space E2E, reporté",
+            "jeudi 22 octobre 2026 de 17 h à 18 h",
+            id="the first occurrence moved after the second",
+        ),
+        # The second occurrence, which the organizer moved to 18:00, is the first that takes place
+        pytest.param(
+            first_excluded(weekly_series("NEEDS-ACTION", "NEEDS-ACTION")),
+            "Point Twake Space E2E",
+            "mardi 20 octobre 2026 de 18 h à 19 h",
+            id="the first occurrence excluded",
+        ),
+        pytest.param(
+            excluded(
+                weekly_series("NEEDS-ACTION", "NEEDS-ACTION"),
+                ["2026-10-27T17:00:00", "2026-10-13T17:00:00"],
+            ),
+            "Point Twake Space E2E",
+            "mardi 20 octobre 2026 de 18 h à 19 h",
+            id="the first occurrence excluded after another",
+        ),
+        pytest.param(
+            excluded(
+                weekly_series("NEEDS-ACTION", "NEEDS-ACTION"),
+                ["2026-10-27T17:00:00"],
+                ["2026-10-13T17:00:00"],
+            ),
+            "Point Twake Space E2E",
+            "mardi 20 octobre 2026 de 18 h à 19 h",
+            id="the first occurrence excluded in another EXDATE",
+        ),
+        pytest.param(
+            first_cancelled(weekly_series("NEEDS-ACTION", "NEEDS-ACTION")),
+            "Point Twake Space E2E",
+            "mardi 20 octobre 2026 de 18 h à 19 h",
+            id="the first occurrence cancelled alone",
         ),
         pytest.param(
             later_first(occurrences_alone()),
@@ -1185,6 +1290,113 @@ async def test_a_preview_of_answering_the_whole_series_tells_of_its_earliest_occ
     assert told.splitlines()[0] == (
         f"{answer_words} toute la série « {title} », {when} la première fois, invitation de"
         " « E2E » <e2e.organizer@twake.test>"
+    )
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(
+            first_excluded(invitation_a("NEEDS-ACTION", WEEKLY)), id="its first occurrence excluded"
+        ),
+        pytest.param(
+            first_cancelled(invitation_a("NEEDS-ACTION", WEEKLY)),
+            id="its first occurrence cancelled alone",
+        ),
+        # Told by the series' title, not by that of the occurrence the copy writes first
+        pytest.param(
+            later_first(first_cancelled(invitation_a("NEEDS-ACTION", WEEKLY))),
+            id="its first occurrence cancelled alone, written before it",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("operation", "answer_words"),
+    [
+        pytest.param("accept", "Accepter", id="accept"),
+        pytest.param("decline", "Refuser", id="decline"),
+    ],
+)
+async def test_a_preview_tells_a_series_writing_no_start_that_takes_place_by_its_title_alone(
+    client: AsyncClient, boundary: FakeBoundary, operation: str, answer_words: str, event: list[Any]
+) -> None:
+    # The series' rule is not expanded: the copy writes no other start than its first
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
+
+    told, _ = preview_of(await preview(client, operation, UID, series=True))
+
+    assert told.splitlines()[0].startswith(
+        f"{answer_words} toute la série « Point Twake Space E2E », invitation de « E2E » <"
+    )
+
+
+@pytest.mark.parametrize(
+    ("event", "zone", "title", "when"),
+    [
+        pytest.param(
+            day_moved_to_a_time(),
+            "Europe/Paris",
+            "Point Twake Space E2E",
+            "mardi 13 octobre 2026, toute la journée",
+            id="a day, in Paris",
+        ),
+        pytest.param(
+            day_moved_to_a_time(),
+            "America/Los_Angeles",
+            "Point Twake Space E2E, au bureau",
+            "lundi 12 octobre 2026 de 15 h 30 à 16 h 30",
+            id="a day, in Los Angeles",
+        ),
+        pytest.param(
+            day_moved_to_a_time(),
+            "Pacific/Kiritimati",
+            "Point Twake Space E2E",
+            "mardi 13 octobre 2026, toute la journée",
+            id="a day, in Kiritimati",
+        ),
+        pytest.param(
+            floating_moved_to_a_time(),
+            "America/Los_Angeles",
+            "Point Twake Space E2E",
+            "mardi 13 octobre 2026 de 3 h à 4 h",
+            id="a floating time, in Los Angeles",
+        ),
+        pytest.param(
+            floating_moved_to_a_time(),
+            "Pacific/Kiritimati",
+            "Point Twake Space E2E",
+            "mardi 13 octobre 2026 de 17 h à 18 h",
+            id="a floating time, in Kiritimati",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("operation", "answer_words"),
+    [
+        pytest.param("accept", "Accepter", id="accept"),
+        pytest.param("decline", "Refuser", id="decline"),
+    ],
+)
+async def test_a_preview_starts_a_day_or_a_floating_time_in_the_users_zone(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    answer_words: str,
+    event: list[Any],
+    zone: str,
+    title: str,
+    when: str,
+) -> None:
+    # A day starts at its midnight in the user's zone, and a floating time is read in it: before
+    # the time in Paris in some zones, after it in others
+    in_zone(boundary, zone)
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
+
+    told, _ = preview_of(await preview(client, operation, UID, series=True))
+
+    assert told.splitlines()[0].startswith(
+        f"{answer_words} toute la série « {title} », {when} la première fois, invitation de"
+        " « E2E » <"
     )
 
 

@@ -19,6 +19,8 @@ from twake_space_agent_contracts.zones import JCAL_TIME, formatted, midnight, vt
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
 # The properties of an event that repeats
 REPETITION = {"rrule", "rdate"}
+# The properties that say when an event takes place
+TIMES = {"dtstart", "dtend", "duration"}
 # How long an event lasts, as iCalendar writes it (RFC 5545, 3.3.6): weeks, or days then hours,
 # minutes and seconds
 DURATION = re.compile(r"\+?P(?:(\d+)W|(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?)")
@@ -218,6 +220,12 @@ def _cancelled(vevent: list[Any]) -> bool:
     return any(prop[0] == "status" and str(prop[3]).upper() == "CANCELLED" for prop in vevent[1])
 
 
+def _apart(vevent: list[Any]) -> bool:
+    """Whether a VEVENT is an occurrence written apart from its series, which its RECURRENCE-ID
+    names."""
+    return any(prop[0] == "recurrence-id" for prop in vevent[1])
+
+
 Partstat = Literal["ACCEPTED", "DECLINED"]
 """A user's answer to an invitation, as iCalendar writes their participation."""
 
@@ -386,33 +394,57 @@ class CalendarEvent:
         return self.participation_of(email) is not None and not self.organized_by(email)
 
     def earliest(self, zone: ZoneInfo) -> "CalendarEvent":
-        """The VEVENT of the event that starts first, as an event of its own, wherever the copy
-        holds it: the series or one of its occurrences written apart. The series' own start does
-        not count when an occurrence written apart replaces it, with that start as its
-        RECURRENCE-ID. A day starts at its midnight, and a time in no zone the IANA database has,
-        floating or in a zone it lacks, is read, in the given zone; of those that start together,
-        the first in the copy. The event as it is when none has a start the contract reads."""
+        """The VEVENT whose DTSTART is the earliest the copy writes that takes place, as an event of
+        its own: the series' own, or that of an occurrence written apart, wherever the copy holds
+        it. The series' rule is not expanded: the earliest start the copy writes may not be the
+        series' first, such as when its first occurrence moved after the second. The series' own
+        start does not take place when an EXDATE excludes it, as esn-sabre cancels one occurrence,
+        or when an occurrence written apart replaces it, with that start as its RECURRENCE-ID; nor
+        does that of an occurrence cancelled alone. A day starts at its midnight, and a time in no
+        zone the IANA database has, floating or in a zone it lacks, is read, in the given zone; of
+        those that start together, the first in the copy. With no start that takes place, the
+        series' own VEVENT, or the copy's first, without its times: it tells the series by its
+        title alone."""
 
-        def moment(vevent: list[Any], name: str) -> datetime | None:
-            found = _event_time(next((prop for prop in vevent[1] if prop[0] == name), None))
+        def instant(prop: list[Any] | None) -> datetime | None:
+            """The time a property gives, as written, never moved: a day from its midnight, and a
+            time in no zone the IANA database has, in the given zone. None when unreadable."""
+            found = _event_time(prop, as_written=True)
             if found is None:
                 return None
             if not isinstance(found.value, datetime):
                 return midnight(found.value, zone)
             return found.value if found.value.tzinfo else found.value.replace(tzinfo=zone)
 
+        def instants(vevent: list[Any], name: str) -> set[datetime]:
+            """The times its properties of that name give, each of their values."""
+            found = (
+                instant([prop[0], prop[1], prop[2], value])
+                for prop in vevent[1]
+                if prop[0] == name
+                for value in prop[3:]
+            )
+            return {moment for moment in found if moment is not None}
+
         vevents = self._vevents()
-        replaced = {moment(vevent, "recurrence-id") for vevent in vevents} - {None}
-        starts = [
-            (start, vevent)
-            for vevent in vevents
-            if (start := moment(vevent, "dtstart")) is not None
-            and (start not in replaced or moment(vevent, "recurrence-id") is not None)
+        replaced = {moment for vevent in vevents for moment in instants(vevent, "recurrence-id")}
+        starts = []
+        for vevent in vevents:
+            start = instant(next((prop for prop in vevent[1] if prop[0] == "dtstart"), None))
+            if start is None or _cancelled(vevent):
+                continue
+            if not _apart(vevent) and (start in replaced or start in instants(vevent, "exdate")):
+                continue
+            starts.append((start, vevent))
+        if starts:
+            first = min(starts, key=lambda found: found[0])[1]
+            return CalendarEvent(self.href, [self.jcal[0], self.jcal[1], [first]])
+        series = [vevent for vevent in vevents if not _apart(vevent)]
+        untimed = [
+            [vevent[0], [prop for prop in vevent[1] if prop[0] not in TIMES], vevent[2]]
+            for vevent in (series or vevents)[:1]
         ]
-        if not starts:
-            return self
-        first = min(starts, key=lambda found: found[0])[1]
-        return CalendarEvent(self.href, [self.jcal[0], self.jcal[1], [first]])
+        return CalendarEvent(self.href, [self.jcal[0], self.jcal[1], untimed])
 
     def answered_by(
         self,

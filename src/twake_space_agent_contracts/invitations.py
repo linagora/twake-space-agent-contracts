@@ -122,8 +122,8 @@ def _summary(
     """What answering the invitation does, as the owner reads it: the answer, for the whole series
     or not, the event's title, which its organizer wrote, when it takes place, the first time for a
     series, who organizes it, and whether Calendar tells them. The title and the time are those of
-    the occurrence that starts first, wherever the copy holds it, read in the user's zone, else in
-    UTC."""
+    the earliest start the copy writes that takes place, wherever it holds it, read in the user's
+    zone, else in UTC; with none, the title alone."""
     words = _WORDS[language]
     first = event.earliest(zone or ZoneInfo("UTC"))
     title = one_line(first.title)
