@@ -752,9 +752,47 @@ async def test_an_event_without_an_end_lasts_its_duration_or_as_icalendar_reads_
     ]
 
 
+ZONES = [
+    pytest.param(
+        "Europe/Paris",
+        {
+            "10:00": "2026-10-09T10:00:00+02:00",
+            "11:00": "2026-10-09T11:00:00+02:00",
+            "11:30": "2026-10-09T11:30:00+02:00",
+            "last": "9999-12-31T01:00:00+01:00",
+        },
+        id="Paris",
+    ),
+    pytest.param(
+        "America/Los_Angeles",
+        {
+            "10:00": "2026-10-09T01:00:00-07:00",
+            "11:00": "2026-10-09T02:00:00-07:00",
+            "11:30": "2026-10-09T02:30:00-07:00",
+            "last": "9999-12-30T16:00:00-08:00",
+        },
+        id="Los Angeles",
+    ),
+    pytest.param(
+        "Pacific/Kiritimati",
+        {
+            "10:00": "2026-10-09T22:00:00+14:00",
+            "11:00": "2026-10-09T23:00:00+14:00",
+            "11:30": "2026-10-09T23:30:00+14:00",
+            "last": "9999-12-31T14:00:00+14:00",
+        },
+        id="Kiritimati",
+    ),
+]
+"""Zones the user may be in, hours apart, with how they show 10:00, 11:00 and 11:30 in Paris on
+2026-10-09, all of the user's day in each, and the last time every zone can show."""
+
+
+@pytest.mark.parametrize(("zone", "shown"), ZONES)
 async def test_an_event_lasting_past_the_times_datetime_holds_ends_at_the_last_one(
-    client: AsyncClient, boundary: FakeBoundary
+    client: AsyncClient, boundary: FakeBoundary, zone: str, shown: dict[str, str]
 ) -> None:
+    boundary.calendar.time_zones[MMAUDET] = zone
     keep(
         boundary,
         without_end(jcal_event("retreat", *at(10)), ["duration", {}, "duration", "P3000000D"]),
@@ -770,7 +808,7 @@ async def test_an_event_lasting_past_the_times_datetime_holds_ends_at_the_last_o
     # midnight UTC, which ends an event of whole days on the day before
     assert times_of(answer) == [
         ("sabbatical", "2026-10-09", "9999-12-30"),
-        ("retreat", "2026-10-09T10:00:00+02:00", "9999-12-31T01:00:00+01:00"),
+        ("retreat", shown["10:00"], shown["last"]),
     ]
 
 
@@ -808,27 +846,31 @@ def alone(*occurrences: list[Any]) -> list[Any]:
             without_end(
                 jcal_event("sync", *at(10)), ["duration", {}, "duration", f"P{'9' * 5000}D"]
             ),
-            [("sync", "2026-10-09T10:00:00+02:00", "9999-12-31T01:00:00+01:00")],
+            [("sync", "10:00", "last")],
             id="a duration of more digits than Python reads",
         ),
     ],
 )
+@pytest.mark.parametrize(("zone", "shown"), ZONES)
 async def test_an_occurrence_past_the_days_and_times_datetime_holds_is_read_all_the_same(
     client: AsyncClient,
     boundary: FakeBoundary,
+    zone: str,
+    shown: dict[str, str],
     odd: list[Any],
     listed: list[tuple[str, str, str]],
 ) -> None:
-    # Calendar gives the occurrences of a series it does not hold whatever their days; the user is
-    # in Paris, an hour or two ahead of UTC
-    keep(boundary, alone(jcal_event("sync", *at(16)), odd))
+    # Calendar gives the occurrences of a series it does not hold whatever their days
+    boundary.calendar.time_zones[MMAUDET] = zone
+    keep(boundary, alone(jcal_event("sync", *at(11)), odd))
 
     answer = await list_events(client, **{"from": "2026-10-09"})
 
-    # Read, out of the days or listed with the last or first time every zone can show
+    # Read, out of the days or listed with the last or first time every zone can show; a time by
+    # its name in ZONES, a day as it is
     assert times_of(answer) == [
-        *listed,
-        ("sync", "2026-10-09T16:00:00+02:00", "2026-10-09T16:30:00+02:00"),
+        *((uid, shown.get(start, start), shown.get(end, end)) for uid, start, end in listed),
+        ("sync", shown["11:00"], shown["11:30"]),
     ]
 
 
@@ -856,6 +898,55 @@ async def test_a_start_before_the_times_every_zone_can_show_is_given_to_the_seco
 
     # The first time every zone can show, not a minute's seconds before it
     assert times_of(answer) == [("ages", "0001-01-02T00:00:00Z", "2026-10-09T03:00:00-07:00")]
+
+
+def at_offsets(*occurrences: tuple[str, str, str]) -> list[Any]:
+    """Occurrences of one series without it, each with its RECURRENCE-ID, start and end written at
+    an offset from UTC, such as 0001-01-01T00:00:00+05:00: neither RFC 5545 nor jCal writes one,
+    nor Calendar as far as is known, but the contract reads it."""
+    calendar = jcal_event("sync", *at(10))
+    vevents = [
+        [
+            "vevent",
+            [
+                ["uid", {}, "text", "sync"],
+                ["dtstamp", {}, "date-time", "2026-10-06T09:00:00Z"],
+                ["dtstart", {}, "date-time", start],
+                ["dtend", {}, "date-time", end],
+                ["recurrence-id", {}, "date-time", recurrence_id],
+            ],
+            [],
+        ]
+        for recurrence_id, start, end in occurrences
+    ]
+    return [calendar[0], calendar[1], vevents]
+
+
+@pytest.mark.parametrize(("zone", "shown"), ZONES)
+async def test_a_time_at_an_offset_past_the_times_datetime_holds_is_read_all_the_same(
+    client: AsyncClient, boundary: FakeBoundary, zone: str, shown: dict[str, str]
+) -> None:
+    boundary.calendar.time_zones[MMAUDET] = zone
+    # Calendar as it would give them, should it hold them
+    boundary.calendar.unexpanded = True
+    keep(
+        boundary,
+        at_offsets(
+            ("0001-01-01T00:00:00+05:00", "0001-01-01T00:00:00+05:00", "2026-10-09T09:30:00Z"),
+            ("9999-12-31T23:00:00-05:00", "2026-10-09T09:00:00Z", "9999-12-31T23:00:00-05:00"),
+        ),
+    )
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    # A start or an end before or after the times UTC holds is the first or last time every zone
+    # can show; a recurrence_id, which names its occurrence, comes as written
+    assert [
+        (found["recurrence_id"], found["start"], found["end"]) for found in answer["events"]
+    ] == [
+        ("0001-01-01T00:00:00+05:00", "0001-01-02T00:00:00Z", shown["11:30"]),
+        ("9999-12-31T23:00:00-05:00", shown["11:00"], shown["last"]),
+    ]
 
 
 def moved_apart(*occurrences: tuple[list[Any], str, str]) -> list[Any]:

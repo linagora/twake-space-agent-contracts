@@ -88,7 +88,8 @@ class EventTime:
     value: date | datetime
     zone: str | None
     """The zone the event names for it, UTC for a time in UTC: what reads it beside the time when
-    it is not converted. None for a day or a floating time."""
+    it is not converted. None for a day, a floating time, or one kept at another offset from
+    UTC."""
 
 
 def _later(moment: date | datetime, length: timedelta) -> date | datetime:
@@ -127,8 +128,11 @@ class EventPeriod:
         return midnight(first, zone), midnight(last + timedelta(days=1), zone)
 
 
-def _event_time(prop: list[Any] | None) -> EventTime | None:
-    """A DTSTART or a DTEND in jCal, None in any form but a date or a date-time."""
+def _event_time(prop: list[Any] | None, *, as_written: bool = False) -> EventTime | None:
+    """A DTSTART, a DTEND or a RECURRENCE-ID in jCal, None in any form but a date or a date-time.
+    A time at an offset from UTC, which neither iCalendar nor jCal writes but Python reads, comes
+    in UTC, or, before or after the times datetime holds there, as the first or last of them; or
+    as written, at its offset, so that it is never moved."""
     if prop is None or not isinstance(prop[3], str):
         return None
     kind, written = prop[2], prop[3]
@@ -141,7 +145,16 @@ def _event_time(prop: list[Any] | None) -> EventTime | None:
     except ValueError:
         return None
     if time.tzinfo is not None:
-        return EventTime(time.astimezone(UTC), "UTC")
+        offset = time.utcoffset() or timedelta(0)
+        if as_written:
+            return EventTime(time, None if offset else "UTC")
+        try:
+            return EventTime(time.astimezone(UTC), "UTC")
+        except OverflowError:
+            # Only an offset ahead of UTC puts a time before the first it holds, and only one
+            # behind it after the last
+            bound = datetime.min if offset > timedelta(0) else datetime.max
+            return EventTime(bound.replace(tzinfo=UTC), "UTC")
     tzid = prop[1].get("tzid")
     zone = zone_named(tzid)
     if zone is not None:
@@ -258,9 +271,9 @@ class CalendarEvent:
 
     @property
     def recurrence_id(self) -> EventTime | None:
-        """Which occurrence of a series it is, by the start the series gives it; None for an event
-        that does not repeat."""
-        return _event_time(self._prop("recurrence-id"))
+        """Which occurrence of a series it is, by the start the series gives it, as written; None
+        for an event that does not repeat."""
+        return _event_time(self._prop("recurrence-id"), as_written=True)
 
     @property
     def status(self) -> EventStatus | None:

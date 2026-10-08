@@ -380,6 +380,11 @@ class FakeCalendar:
         self.free_busy_requests: list[dict[str, Any]] = []
         self.objects: dict[str, CalendarObject] = {}
         """Events by href, as esn-sabre writes it: without the /dav of the side service."""
+        self.unexpanded = False
+        """Whether a time range gives each calendar object as it holds it, whatever its days,
+        rather than expanded with its times in UTC: as esn-sabre is not known to answer, to see
+        what the contracts make of what they read but Calendar is not known to write, such as a
+        time at an offset from UTC."""
         self.subscriptions: dict[str, str] = {}
         """The calendars of others that users subscribe to, by their path in the subscriber's
         home: the path of the calendar each shows."""
@@ -532,7 +537,7 @@ class FakeCalendar:
         for href, stored in self.objects.items():
             if posixpath.dirname(href) != calendar:
                 continue
-            found = expanded(stored.jcal, start, end)
+            found = stored.jcal if self.unexpanded else expanded(stored.jcal, start, end)
             if found is not None:
                 link = {"self": {"href": href}}
                 items.append({"_links": link, "etag": '"1"', "data": found, "status": 200})
