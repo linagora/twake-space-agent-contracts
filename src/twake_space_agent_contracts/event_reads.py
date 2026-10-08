@@ -82,8 +82,11 @@ class ListedEvent(Occurrence):
         description="Whether it takes place, as the organizer says; null when they do not."
     )
     private: bool = Field(
-        description="Whether it is private or confidential, which Calendar shows nobody but the "
-        "user: read in full here, for them alone."
+        description="Whether it is private: of the class PRIVATE or CONFIDENTIAL, which Calendar "
+        "shows whoever reads its calendar without owning it, the members of a team calendar "
+        "aside, as a busy time without its details; or of a class iCalendar does not know, which "
+        "it reads as private. The user owns the calendars listed: it is read in full here, for "
+        "them."
     )
     my_partstat: Participation | None = Field(
         description="The user's answer, NEEDS-ACTION while they have not given one; null when the "
@@ -103,7 +106,8 @@ class EventList(BaseModel):
 
     time_zone: str | None = Field(
         description="The user's IANA time zone, which the days are read in; null when Calendar "
-        "gives none the IANA database has, the days being read in UTC then."
+        "gives none the IANA database has: the days are then read in UTC, and every time is in "
+        "UTC."
     )
     start: datetime = Field(description="When the first day starts, with its offset.")
     end: datetime = Field(description="When the last day ends, with its offset.")
