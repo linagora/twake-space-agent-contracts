@@ -485,6 +485,31 @@ async def test_an_event_out_of_the_days_the_contract_cannot_read_is_left_out_of_
     ]
 
 
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        # Calendar reads whole days in UTC, where the day starts the day before at 22:00
+        pytest.param("2026-10-08", "2026-10-09", id="the day before"),
+        # The service asks Calendar from a second before the day
+        pytest.param("2026-10-08T23:00:00", "2026-10-09T00:00:00", id="until midnight"),
+    ],
+)
+async def test_an_unreadable_event_whose_times_place_it_out_of_the_days_is_left_out(
+    client: AsyncClient, boundary: FakeBoundary, start: str, end: str
+) -> None:
+    keep(boundary, jcal_event("lunch", *at(12)))
+    # Calendar gives it with the day, without its UID
+    lost = jcal_event("lost", start, end)
+    lost[2][0][1] = [prop for prop in lost[2][0][1] if prop[0] != "uid"]
+    boundary.calendar.objects[f"{DEFAULT_CALENDAR}/lost.ics"] = CalendarObject(
+        MMAUDET_CALENDAR_ID, lost
+    )
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    assert [found["uid"] for found in answer["events"]] == ["lunch"]
+
+
 async def test_the_users_own_calendars_are_read_and_no_one_elses(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
@@ -776,6 +801,25 @@ async def test_an_event_without_its_uid_is_an_answer_in_an_unexpected_form(
     jcal[2][0][1] = [prop for prop in jcal[2][0][1] if prop[0] != "uid"]
     boundary.calendar.objects[f"{DEFAULT_CALENDAR}/lost.ics"] = CalendarObject(
         MMAUDET_CALENDAR_ID, jcal
+    )
+
+    response = await client.get(EVENTS, params={"from": "2026-10-09"}, headers=AS_MMAUDET)
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "calendar_unavailable"
+
+
+async def test_an_event_whose_times_the_contract_cannot_read_fails_the_list(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # From a time to a day, which Calendar gives with the day: whether it is one of the day, the
+    # contract cannot tell
+    keep(
+        boundary,
+        without_end(
+            jcal_event("odd", "2026-10-08T12:00:00", "2026-10-08T13:00:00"),
+            ["dtend", {}, "date", "2026-10-09"],
+        ),
     )
 
     response = await client.get(EVENTS, params={"from": "2026-10-09"}, headers=AS_MMAUDET)

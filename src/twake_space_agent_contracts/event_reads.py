@@ -180,6 +180,25 @@ def _placed(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Placed:
     return _Placed(start, end, takes_time, listed)
 
 
+def _of_the_days(first: datetime, last: datetime, start: datetime, end: datetime) -> bool:
+    """Whether a list of the days from start to end holds an occurrence from first to last: one
+    that starts on them, or before them and ends after they start, so that one of no duration is
+    listed on the day it starts."""
+    return start <= first < end or first < start < last
+
+
+def _may_be_of_the_days(
+    event: CalendarEvent, zone: ZoneInfo, start: datetime, end: datetime
+) -> bool:
+    """Whether a list of the days from start to end may hold an event the contract cannot read:
+    unless its times, when they can be read, place it out of them."""
+    try:
+        first, last = event.period.instants(zone)
+    except Problem:
+        return True
+    return _of_the_days(first, last, start, end)
+
+
 async def _occurrences(
     calendar: Calendar,
     user: User,
@@ -191,7 +210,8 @@ async def _occurrences(
 ) -> list[_Placed]:
     """The occurrences of the user's calendars between two times, placed in time, by start; those
     without their series come whatever their days. An event the contract cannot read fails them
-    all, unless they are to leave it out."""
+    all when a list of the days between the two times may hold it, unless they are to leave it
+    out."""
     # Calendar leaves out of a time range an occurrence of no duration that starts when it starts
     events = await calendar.events_between(
         user, (since - timedelta(seconds=1)).astimezone(UTC), until.astimezone(UTC)
@@ -201,7 +221,7 @@ async def _occurrences(
         try:
             occurrences.append(_placed(event, zone, user.email))
         except Problem:
-            if not leave_out_unreadable:
+            if not leave_out_unreadable and _may_be_of_the_days(event, zone, since, until):
                 raise
     return sorted(occurrences, key=lambda occurrence: occurrence.start)
 
@@ -209,13 +229,12 @@ async def _occurrences(
 def _listed(
     occurrences: list[_Placed], start: datetime, end: datetime, needs_action: bool
 ) -> list[_Placed]:
-    """The occurrences a list holds: those that start between two times, or before them and end
-    after the first, so that one of no duration is listed when it starts; and with needs_action,
-    those of them alone that wait for the user's answer."""
+    """The occurrences a list of the days from start to end holds; with needs_action, those of
+    them alone that wait for the user's answer."""
     return [
         occurrence
         for occurrence in occurrences
-        if (start <= occurrence.start < end or occurrence.start < start < occurrence.end)
+        if _of_the_days(occurrence.start, occurrence.end, start, end)
         and (occurrence.listed.needs_action or not needs_action)
     ]
 
