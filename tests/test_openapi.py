@@ -393,9 +393,10 @@ WRITES_NAMED = {
 # What the words of an application for reading name beyond the user's own data, in English and in
 # French
 READS_NAMED = {
-    # Events in full, private ones too, beyond the free and busy times
+    # Events in full, private ones too, beyond the free and busy times; and when others are free
     "calendar": [
-        ("read your events, private ones included", "lire tes événements, privés compris")
+        ("read your events, private ones included", "lire tes événements, privés compris"),
+        ("find when you and others are free", "trouver quand toi et d'autres êtes libres"),
     ],
     "contacts": [
         ("your organization's directory", "l'annuaire de ton organisation"),
