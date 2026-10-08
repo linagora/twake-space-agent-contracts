@@ -67,7 +67,7 @@ class ListedEventText(EventText):
     )
     organizer: str | None = Field(
         description="The organizer's email address, as their calendar wrote it; null without "
-        "one, or when they give none."
+        "one, or when it gives anything but an address."
     )
 
 
