@@ -26,6 +26,10 @@ PAGES = (
     "again with the same parameters and cursor set to next_cursor, up to "
     f"{LONGEST_LIST} emails."
 )
+BULK_AND_TO_ME = (
+    "bulk is true for an email sent in bulk, such as a newsletter or an automatic notice, and "
+    "to_me when the user is among its recipients in To, not only in Cc."
+)
 
 OwnMailbox = Annotated[
     str | None,
@@ -110,7 +114,8 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
         description=(
             "Lists the emails of the user you act for, newest first, from their own mailboxes "
             "only. Without mailbox, the emails in trash and spam are left out. unread, flagged, "
-            f"from, after and before keep the emails that match them all. {PAGES} {UNTRUSTED} "
+            "from, after and before keep the emails that match them all. "
+            f"{BULK_AND_TO_ME} {PAGES} {UNTRUSTED} "
             "Example, for the unread emails Paul Martin sent to the inbox since Monday 5 October "
             "2026 in Paris, the inbox having the id 8f2d3c4b-1a5e-4f60-9b7c-2d1e0f3a4b5c in "
             "list_mailboxes: mailbox=8f2d3c4b-1a5e-4f60-9b7c-2d1e0f3a4b5c, unread=true, "
@@ -157,7 +162,8 @@ def router(tmail: TMail, caller: CallerDependency) -> APIRouter:
             "Searches the emails of the user you act for, from their own mailboxes only, for "
             "words in their addresses, subject, text and attachments, newest first. Without "
             "mailbox, trash and spam are left out. after and before keep the emails received in "
-            f"a period. {PAGES} {UNTRUSTED} Example, for the emails about the budget received "
+            f"a period. {BULK_AND_TO_ME} {PAGES} {UNTRUSTED} "
+            "Example, for the emails about the budget received "
             "in September 2026, in Paris: text=budget, after=2026-09-01T00:00:00+02:00, "
             "before=2026-10-01T00:00:00+02:00."
         ),

@@ -8,6 +8,7 @@ from tests.fakes import INBOX, MMAUDET, SPAM, TRASH, FakeBoundary, StoredMailbox
 
 EMAILS = "/contracts/v1/mail/emails"
 SEARCH = "/contracts/v1/mail/search"
+TEAM = {"name": "Team", "email": "team@twake.test"}
 
 
 def listed(email_id: str, **fields: Any) -> dict[str, Any]:
@@ -20,6 +21,8 @@ def listed(email_id: str, **fields: Any) -> dict[str, Any]:
         "unread": True,
         "flagged": False,
         "has_attachment": False,
+        "bulk": False,
+        "to_me": True,
         "untrusted": {
             "from": [{"name": "Paul Martin", "email": "paul.martin@twake.test"}],
             "subject": "Budget Q4",
@@ -74,6 +77,68 @@ async def test_the_user_lists_their_mail_newest_first(
         ],
         "next_cursor": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("headers", "bulk"),
+    [
+        pytest.param({}, False, id="an ordinary email"),
+        pytest.param({"List-Id": "Budget news <budget.lists.twake.test>"}, True, id="List-Id"),
+        pytest.param({"List-Id": ""}, True, id="an empty List-Id"),
+        pytest.param(
+            {"List-Unsubscribe": "<https://lists.twake.test/leave>"}, True, id="List-Unsubscribe"
+        ),
+        pytest.param({"Precedence": "bulk"}, True, id="Precedence bulk"),
+        pytest.param({"Precedence": "list"}, True, id="Precedence list"),
+        pytest.param({"Precedence": "junk"}, True, id="Precedence junk"),
+        pytest.param({"Precedence": "Bulk"}, True, id="Precedence bulk, whatever its case"),
+        pytest.param({"Precedence": "first-class"}, False, id="another Precedence"),
+        pytest.param({"Auto-Submitted": "auto-generated"}, True, id="Auto-Submitted generated"),
+        pytest.param({"Auto-Submitted": "auto-replied"}, True, id="Auto-Submitted replied"),
+        pytest.param({"Auto-Submitted": "no"}, False, id="Auto-Submitted no"),
+        pytest.param(
+            {"Auto-Submitted": "no; x=y"}, False, id="Auto-Submitted no, with a parameter"
+        ),
+        pytest.param(
+            {"Auto-Submitted": "no (human)"}, False, id="Auto-Submitted no, with a comment"
+        ),
+    ],
+)
+async def test_a_listed_email_tells_whether_it_was_sent_in_bulk(
+    client: AsyncClient, boundary: FakeBoundary, headers: dict[str, str], bulk: bool
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX, headerTexts=headers)
+
+    answer = await emails(client)
+
+    assert answer["emails"] == [listed("email-1", bulk=bulk)]
+
+
+@pytest.mark.parametrize(
+    ("recipients", "to_me"),
+    [
+        pytest.param({}, True, id="to the user"),
+        pytest.param(
+            {"to": [TEAM, {"name": "Michel-Marie", "email": MMAUDET.upper()}]},
+            True,
+            id="to the user and others, whatever the case",
+        ),
+        pytest.param(
+            {"to": [TEAM], "cc": [{"name": "Michel-Marie", "email": MMAUDET}]},
+            False,
+            id="only copied to the user",
+        ),
+        pytest.param({"to": None}, False, id="to nobody"),
+    ],
+)
+async def test_a_listed_email_tells_whether_it_is_to_the_user(
+    client: AsyncClient, boundary: FakeBoundary, recipients: dict[str, Any], to_me: bool
+) -> None:
+    boundary.tmail.deliver("email-1", INBOX, **recipients)
+
+    answer = await emails(client)
+
+    assert answer["emails"] == [listed("email-1", to_me=to_me)]
 
 
 async def test_spam_and_trash_are_left_out_unless_asked_for(
