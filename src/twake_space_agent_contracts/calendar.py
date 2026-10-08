@@ -456,10 +456,14 @@ class CalendarEvent:
     @property
     def recurrence_id(self) -> EventTime | None:
         """Which occurrence of a series it is, by the start the series gives it, as written; None
-        for an event that does not repeat. One in a zone the IANA database lacks, which leaves
-        unknown which occurrence it is, is Calendar answering in an unexpected form."""
-        found = _event_time(self._prop("recurrence-id"), as_written=True)
-        if found is not None and _in_unknown_zone(found):
+        for an event that does not repeat. One in another form, or in a zone the IANA database
+        lacks, which leaves unknown which occurrence it is, is Calendar answering in an unexpected
+        form."""
+        prop = self._prop("recurrence-id")
+        if prop is None:
+            return None
+        found = _event_time(prop, as_written=True)
+        if found is None or _in_unknown_zone(found):
             raise _unavailable(
                 "Calendar gave the recurrence ID of the event in an unexpected form."
             )

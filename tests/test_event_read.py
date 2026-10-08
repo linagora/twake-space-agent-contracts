@@ -687,11 +687,12 @@ HOUR = "2026-10-13T17:00:00", "2026-10-13T18:00:00"
 SHOWN_ZONE = "(UTC+01:00) Brussels, Copenhagen, Madrid, Paris"
 
 
-def kept_apart_in(zone: str) -> list[Any]:
-    """The weekly series with its second occurrence moved, its RECURRENCE-ID written in that
-    zone."""
+def kept_apart_in(zone: str, written: str = "2026-10-19T17:00:00") -> list[Any]:
+    """The weekly series with its second occurrence moved, its RECURRENCE-ID written in that zone,
+    as written."""
     series = moved(weekly(5), "2026-10-19T17:00:00", "2026-10-19T18:00:00", "2026-10-19T19:00:00")
-    series[2][1][1][-1][1] = {"tzid": zone}
+    recurrence_id = series[2][1][1][-1]
+    recurrence_id[1], recurrence_id[3] = {"tzid": zone}, written
     return series
 
 
@@ -726,6 +727,10 @@ def kept_apart_in(zone: str) -> list[Any]:
             id="an occurrence left out in a zone no database names",
         ),
         pytest.param(kept_apart_in(SHOWN_ZONE), id="an occurrence kept apart in such a zone"),
+        pytest.param(
+            kept_apart_in("Europe/Paris", "soon"),
+            id="an occurrence kept apart of a recurrence ID in another form",
+        ),
         pytest.param(
             moved(weekly(5), "2026-10-19T17:00:00", "2026-10-19T18:00:00", "soon"),
             id="an occurrence kept apart of times in another form",
