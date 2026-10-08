@@ -520,16 +520,17 @@ class CalendarEvent:
 
     @property
     def excluded(self) -> list[EventTime]:
-        """The occurrences the series leaves out, by the start it would give them, as its EXDATE
-        properties write them, one or more each. One in any other form than a day or a time, or in
-        a zone the IANA database lacks, is Calendar answering in an unexpected form."""
+        """The occurrences the series leaves out, by the start it would give them, as written, as
+        a recurrence_id is: as its EXDATE properties write them, one or more each. One in any other
+        form than a day or a time, or in a zone the IANA database lacks, is Calendar answering in
+        an unexpected form."""
         times = []
         for vevent in self._vevents():
             for prop in vevent[1]:
                 if prop[0] != "exdate":
                     continue
                 for value in prop[3:]:
-                    time = _event_time([*prop[:3], value])
+                    time = _event_time([*prop[:3], value], as_written=True)
                     unknown_zone = (
                         time is not None
                         and isinstance(time.value, datetime)

@@ -514,6 +514,25 @@ async def test_a_series_gives_the_first_100_occurrences_it_leaves_out_or_keeps_a
     assert answer["exceptions_truncated"] is True
 
 
+async def test_an_occurrence_a_series_leaves_out_is_named_as_its_recurrence_id_never_moved(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    series = jcal_event(
+        POINT,
+        "2026-10-12T17:00:00",
+        "2026-10-12T18:00:00",
+        ["rrule", {}, "recur", {"freq": "WEEKLY"}],
+        # At an offset, which iCalendar does not write but Python reads: before year 1 in UTC
+        ["exdate", {}, "date-time", "0001-01-01T00:30:00+01:00"],
+    )
+    keep(boundary, series)
+
+    recurrence = (await read_event(client, uid=POINT))["event"]["recurrence"]
+
+    # Neither in the user's zone nor in UTC, which datetime cannot convert it to: as written
+    assert recurrence["excluded"] == ["0001-01-01T00:30:00+01:00"]
+
+
 async def test_a_private_event_is_read_in_full_and_the_users_own_meeting_awaits_no_answer(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
