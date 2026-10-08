@@ -1481,6 +1481,47 @@ async def test_a_series_whose_user_zone_changed_since_the_preview_is_not_answere
 
 
 @pytest.mark.parametrize(
+    ("previewed_in", "called_in"),
+    [
+        pytest.param(None, "America/Los_Angeles", id="given after failing for the preview"),
+        pytest.param("America/Los_Angeles", None, id="failing after given for the preview"),
+        pytest.param("Europe/Paris", "America/Los_Angeles", id="another, set since the preview"),
+    ],
+)
+@pytest.mark.parametrize("series", [False, True], ids=["once", "for the whole series"])
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(invitation_a, id="an invitation that does not repeat"),
+        pytest.param(occurrence_alone, id="an occurrence alone"),
+    ],
+)
+@pytest.mark.parametrize(("operation", "partstat"), ANSWERS)
+async def test_an_invitation_that_does_not_repeat_is_answered_whatever_zone_since_the_preview(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    operation: str,
+    partstat: str,
+    event: Callable[[str], list[Any]],
+    series: bool,
+    previewed_in: str | None,
+    called_in: str | None,
+) -> None:
+    # Only the occurrences of a whole series end in the user's zone: the owner allowed an answer
+    # to one event, which the zone does not change
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event("NEEDS-ACTION"))
+    in_zone(boundary, previewed_in)
+    _, digest = preview_of(await preview(client, operation, UID, series=series))
+    boundary.calendar.settings_down = False
+    in_zone(boundary, called_in)
+
+    response = await answer(client, operation, UID, allowed_after(digest), series=series)
+
+    assert response.status_code == 200, response.text
+    assert boundary.calendar.objects[HREF].jcal == event(partstat)
+
+
+@pytest.mark.parametrize(
     ("previewed", "called"),
     [("accept", "decline"), ("decline", "accept")],
     ids=["accept", "decline"],
