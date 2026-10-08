@@ -192,8 +192,9 @@ async def _answer[Reply: (Accepted, Declined)](
             " said yes to answering for the whole series, call again with series true; else they"
             " answer it in Calendar.",
         )
-    # What the owner allows: the event as the user would answer it, where it is
-    digest = digest_of(answered.href, answered.jcal)
+    # What the owner allows: the answer to the event as their calendar holds it, where it is. Not
+    # the occurrences over by then, which only time changes, not the organizer.
+    digest = digest_of(event.href, event.jcal, partstat)
     if preview.asked:
         zone = await calendar.time_zone(user)
         summary = _summary(answered, partstat, zone, preview.language, whole_series=whole_series)

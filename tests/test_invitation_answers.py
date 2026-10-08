@@ -625,6 +625,48 @@ async def test_the_owner_who_allowed_answering_the_whole_series_answers_it(
     assert boundary.calendar.objects[HREF].jcal == weekly_series(partstat, partstat)
 
 
+@pytest.mark.parametrize(("operation", "partstat", "answered_before"), ANSWERED_BEFORE)
+async def test_an_occurrence_that_ends_after_the_preview_leaves_what_the_owner_allowed(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    operation: str,
+    partstat: str,
+    answered_before: str,
+) -> None:
+    # The moved occurrence ends at 17:00 in UTC, between the preview and the call: time passed,
+    # and the organizer changed nothing
+    clock.wall = datetime(2026, 10, 20, 16, 30, tzinfo=UTC)
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, weekly_series("NEEDS-ACTION", answered_before)
+    )
+    _, digest = preview_of(await preview(client, operation, UID, series=True))
+    clock.wall = datetime(2026, 10, 20, 17, 30, tzinfo=UTC)
+
+    response = await answer(client, operation, UID, allowed_after(digest), series=True)
+
+    assert response.status_code == 200, response.text
+    assert boundary.calendar.objects[HREF].jcal == weekly_series(partstat, answered_before)
+
+
+@pytest.mark.parametrize(
+    ("previewed", "called"),
+    [("accept", "decline"), ("decline", "accept")],
+    ids=["accept", "decline"],
+)
+async def test_a_preview_of_one_answer_does_not_allow_the_other(
+    client: AsyncClient, boundary: FakeBoundary, previewed: str, called: str
+) -> None:
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, invitation_a())
+    _, digest = preview_of(await preview(client, previewed, UID))
+
+    response = await answer(client, called, UID, allowed_after(digest))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "changed_since_preview"
+    assert boundary.calendar.writes == []
+
+
 @pytest.mark.parametrize(("operation", "partstat"), ANSWERS)
 async def test_the_whole_series_of_an_invitation_that_does_not_repeat_is_the_invitation(
     client: AsyncClient, boundary: FakeBoundary, operation: str, partstat: str

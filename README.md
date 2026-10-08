@@ -135,7 +135,7 @@ Accepts, as the user, an invitation the user received: only their own participat
 - The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
 - Agents call it only once the user has said yes to this invitation, and with `series` only once they said yes to the whole series; approval happens in the conversation for now.
 - It is a low-risk write (`x-twake-risk: low`): the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
-- It tells what it would do ([Previews](#previews)): the event's title, when it takes place and who organizes it, from the user's copy of the event, its times in the user's time zone; for a whole series, that it answers all of it, and when it takes place the first time. That zone is the one Calendar gives (`POST /api/configurations`, `core.datetime`), the deployment's when the user set none; without one the IANA database has, the times are the event's own, its zone named beside them. The digest covers the event as the user would accept it, each of its occurrences, where it is: a call made after the organizer changed it answers `changed_since_preview`.
+- It tells what it would do ([Previews](#previews)): the event's title, when it takes place and who organizes it, from the user's copy of the event, its times in the user's time zone; for a whole series, that it answers all of it, and when it takes place the first time. That zone is the one Calendar gives (`POST /api/configurations`, `core.datetime`), the deployment's when the user set none; without one the IANA database has, the times are the event's own, its zone named beside them. The digest covers the user's copy of the event as their calendar holds it, each of its occurrences, where it is, and the answer: a call made after the organizer changed the event answers `changed_since_preview`, and one made after an occurrence ended meanwhile does not, since only time changed it; that occurrence keeps the answer it has.
 - It changed in place in October 2026, before anything used it in production, and stays `calendar.invitation.accept.v1`: it took the id of an invitation stored in the events database, in its path (`POST /contracts/v1/calendar/invitations/{event_id}/accept`), and answered `event_id` too. `invitation_not_in_calendar` and `not_an_attendee`, which it answered then, are `invitation_not_found` now.
 
 ### `calendar.invitation.decline.v1`
@@ -150,7 +150,7 @@ Declines, as the user, an invitation the user received: only their own participa
 - The reply carries no comment from the user: the body takes none. Answering a single occurrence of a series, and a comment to the organizer, come later.
 - Agents call it only once the user has said no to this invitation, and with `series` only once they said no to the whole series.
 - It is a low-risk write (`x-twake-risk: low`), as accepting is: the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
-- It tells what it would do as `accept_invitation` does ([Previews](#previews)). The digest covers the event as the user would decline it, each of its occurrences, where it is: a call made after the organizer changed it answers `changed_since_preview`.
+- It tells what it would do as `accept_invitation` does ([Previews](#previews)), and its digest covers the same, with its own answer: a call made after the organizer changed the event answers `changed_since_preview`, not one made after an occurrence ended meanwhile.
 
 ### `calendar.event.create.v1`
 
@@ -568,7 +568,7 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 
 | Operation | The summary tells | The digest covers |
 |---|---|---|
-| `accept_invitation`, `decline_invitation` | the answer, the event's title, when it takes place, in the user's time zone, and who organizes it; for a whole series, that it answers all of it, and when it takes place the first time | the event as the user would answer it, each of its occurrences |
+| `accept_invitation`, `decline_invitation` | the answer, the event's title, when it takes place, in the user's time zone, and who organizes it; for a whole series, that it answers all of it, and when it takes place the first time | the user's copy of the event, each of its occurrences, where it is, and the answer |
 | `create_reply_draft` | whom the draft answers, its subject and its text, never sent | the draft as it would be created, but for its text |
 | `move_email`, `archive_email`, `trash_email` | which email, by its subject and senders, goes to which mailbox | the email, where it is, and where it would go |
 | `move_emails`, `archive_emails`, `trash_emails` | how many emails go to which mailbox, ten of them at most by their subject and senders, and how many stay where they are, and why | each email, where it is or that it is not found, and where they would go |
