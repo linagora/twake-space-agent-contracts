@@ -8,6 +8,7 @@ from httpx import AsyncClient, Response
 from tests.conftest import AS_MMAUDET, allowed_after, asking_preview, preview_of
 from tests.fakes import (
     ALICE_CALENDAR_ID,
+    MMAUDET,
     MMAUDET_CALENDAR_ID,
     CalendarObject,
     FakeBoundary,
@@ -88,16 +89,48 @@ def weekly_days(mmaudet_partstat: str, retitled_partstat: str) -> list[Any]:
     return series
 
 
-def floating_series(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
-    """Invitation A as a weekly series in the user's calendar, its times written in no zone, which
-    iCalendar calls floating: its occurrences, then the second, which the organizer moved to 18:00;
-    the user's participation in each."""
+def series_written_in(mmaudet_partstat: str, moved_partstat: str, tzid: str | None) -> list[Any]:
+    """Invitation A as a weekly series in the user's calendar, its times written in that zone, or
+    in none, which iCalendar calls floating: its occurrences, then the second, which the organizer
+    moved to 18:00; the user's participation in each."""
     series = weekly_series(mmaudet_partstat, moved_partstat)
     for vevent in series[2]:
         for prop in vevent[1]:
             if prop[0] in ("dtstart", "dtend", "recurrence-id"):
                 prop[1].pop("tzid")
+                if tzid is not None:
+                    prop[1]["tzid"] = tzid
     return series
+
+
+def floating_series(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
+    """That series, its times floating."""
+    return series_written_in(mmaudet_partstat, moved_partstat, None)
+
+
+def outlook_series(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
+    """That series, its times in Outlook's name for the zone of Paris, which the IANA database
+    lacks."""
+    return series_written_in(mmaudet_partstat, moved_partstat, "W. Europe Standard Time")
+
+
+def lasting_an_hour(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
+    """Invitation A as a weekly series in the user's calendar: its occurrences, then the second,
+    which the organizer moved to 18:00, its end written as a DURATION of an hour rather than a
+    DTEND; the user's participation in each."""
+    series = weekly_series(mmaudet_partstat, moved_partstat)
+    moved = series[2][1][1]
+    moved[:] = [prop for prop in moved if prop[0] != "dtend"]
+    moved.append(["duration", {}, "duration", "PT1H"])
+    return series
+
+
+def in_zone(boundary: FakeBoundary, zone: str | None) -> None:
+    """Calendar gives the user that time zone, or, for None, fails to give one."""
+    if zone is None:
+        boundary.calendar.settings_down = True
+    else:
+        boundary.calendar.time_zones[MMAUDET] = zone
 
 
 def occurrences_alone(
@@ -309,12 +342,51 @@ occurrence before."""
 
 
 @pytest.mark.parametrize(
-    ("series", "over_since"),
+    ("series", "zone", "over_since"),
     [
         # The moved occurrence ends at 19:00 in Paris, 17:00 in UTC
-        pytest.param(weekly_series, datetime(2026, 10, 20, 17, 0, 1, tzinfo=UTC), id="at a time"),
-        # The day the organizer retitled ends where the next starts, in UTC
-        pytest.param(weekly_days, datetime(2026, 10, 21, tzinfo=UTC), id="on a day"),
+        pytest.param(
+            weekly_series,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 17, 0, 1, tzinfo=UTC),
+            id="at a time",
+        ),
+        pytest.param(
+            lasting_an_hour,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 17, 0, 1, tzinfo=UTC),
+            id="after its duration",
+        ),
+        # Times in no zone the IANA database has, read in the user's
+        pytest.param(
+            floating_series,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 17, 0, 1, tzinfo=UTC),
+            id="at a floating time",
+        ),
+        pytest.param(
+            outlook_series,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 17, 0, 1, tzinfo=UTC),
+            id="at a time of a zone the database lacks",
+        ),
+        # The day the organizer retitled ends at midnight in the user's zone, 22:00 in UTC
+        pytest.param(
+            weekly_days, "Europe/Paris", datetime(2026, 10, 20, 22, 0, 1, tzinfo=UTC), id="on a day"
+        ),
+        # In UTC when Calendar gives the user no zone the database has, or fails to give one
+        pytest.param(
+            weekly_days,
+            "Mars/Olympus_Mons",
+            datetime(2026, 10, 21, 0, 0, 1, tzinfo=UTC),
+            id="on a day, without the user's zone",
+        ),
+        pytest.param(
+            floating_series,
+            None,
+            datetime(2026, 10, 20, 19, 0, 1, tzinfo=UTC),
+            id="at a floating time, when Calendar fails to give the user's zone",
+        ),
     ],
 )
 @pytest.mark.parametrize(("operation", "partstat", "answered_before"), ANSWERED_BEFORE)
@@ -326,10 +398,12 @@ async def test_answering_the_whole_series_leaves_the_occurrences_over_as_they_ar
     partstat: str,
     answered_before: str,
     series: Callable[[str, str], list[Any]],
+    zone: str | None,
     over_since: datetime,
 ) -> None:
     # As Twake Calendar answers a series: the answer the user gave an occurrence over stays, and
     # its organizer is not told of it again
+    in_zone(boundary, zone)
     clock.wall = over_since
     boundary.calendar.objects[HREF] = CalendarObject(
         MMAUDET_CALENDAR_ID, series("NEEDS-ACTION", answered_before)
@@ -342,14 +416,56 @@ async def test_answering_the_whole_series_leaves_the_occurrences_over_as_they_ar
 
 
 @pytest.mark.parametrize(
-    ("series", "under_way"),
+    ("series", "zone", "under_way"),
     [
         pytest.param(
-            weekly_series, datetime(2026, 10, 20, 17, tzinfo=UTC), id="at a time, as it ends"
+            weekly_series,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 17, tzinfo=UTC),
+            id="at a time, as it ends",
         ),
-        pytest.param(weekly_days, datetime(2026, 10, 20, 23, 59, tzinfo=UTC), id="on a day"),
         pytest.param(
-            floating_series, datetime(2026, 10, 21, tzinfo=UTC), id="at a time of no zone"
+            lasting_an_hour,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 17, tzinfo=UTC),
+            id="after its duration, as it ends",
+        ),
+        pytest.param(
+            floating_series,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 17, tzinfo=UTC),
+            id="at a floating time, as it ends",
+        ),
+        pytest.param(
+            outlook_series,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 17, tzinfo=UTC),
+            id="at a time of a zone the database lacks, as it ends",
+        ),
+        pytest.param(
+            weekly_days,
+            "Europe/Paris",
+            datetime(2026, 10, 20, 22, tzinfo=UTC),
+            id="on a day, as it ends",
+        ),
+        # 18:00 in Los Angeles: its day goes on there, though not in UTC
+        pytest.param(
+            weekly_days,
+            "America/Los_Angeles",
+            datetime(2026, 10, 21, 1, tzinfo=UTC),
+            id="on a day of a zone behind UTC",
+        ),
+        pytest.param(
+            weekly_days,
+            "Mars/Olympus_Mons",
+            datetime(2026, 10, 21, tzinfo=UTC),
+            id="on a day, as it ends without the user's zone",
+        ),
+        pytest.param(
+            floating_series,
+            None,
+            datetime(2026, 10, 20, 19, tzinfo=UTC),
+            id="at a floating time, as it ends when Calendar fails to give the user's zone",
         ),
     ],
 )
@@ -362,9 +478,11 @@ async def test_answering_the_whole_series_answers_an_occurrence_not_over(
     partstat: str,
     answered_before: str,
     series: Callable[[str, str], list[Any]],
+    zone: str | None,
     under_way: datetime,
 ) -> None:
-    # Under way, ending that very time, or at a floating time, which no zone places: not over
+    # Under way, or ending that very time: not over
+    in_zone(boundary, zone)
     clock.wall = under_way
     boundary.calendar.objects[HREF] = CalendarObject(
         MMAUDET_CALENDAR_ID, series("NEEDS-ACTION", answered_before)

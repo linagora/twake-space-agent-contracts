@@ -185,9 +185,12 @@ async def _answer[Reply: (Accepted, Declined)](
             " answer it in Calendar.",
         )
     whole_series = invitation.series and event.repeats
+    # The user's zone: a preview tells the times in it, and the days of the occurrences of a whole
+    # series, and their times in no zone the IANA database has, end in it
+    zone = await calendar.time_zone(user) if whole_series or preview.asked else None
     # From now on, as Twake Calendar answers a whole series
     series_from = now() if whole_series else None
-    answered = event.answered_by(user.email, partstat, series_from=series_from)
+    answered = event.answered_by(user.email, partstat, series_from=series_from, zone=zone)
     # esn-sabre tells the organizer of a participation that changes, and of no other: an answer
     # that changes nothing would tell nobody, and its reply would say that the calendar holds it
     if answered.jcal == event.jcal:
@@ -203,7 +206,6 @@ async def _answer[Reply: (Accepted, Declined)](
     # the occurrences over by then, which only time changes, not the organizer.
     digest = digest_of(event.href, event.jcal, partstat)
     if preview.asked:
-        zone = await calendar.time_zone(user)
         summary = _summary(answered, partstat, zone, preview.language, whole_series=whole_series)
         return preview.answer(summary, digest)
     preview.check(digest)

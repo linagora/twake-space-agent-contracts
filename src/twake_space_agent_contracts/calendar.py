@@ -191,24 +191,26 @@ def _end_without_dtend(start: EventTime, duration: list[Any] | None) -> EventTim
     return _as_read(EventTime(_later(start.value, length), start.zone))
 
 
-def _over(vevent: list[Any], moment: datetime) -> bool:
+def _over(vevent: list[Any], moment: datetime, zone: ZoneInfo) -> bool:
     """Whether a VEVENT is an occurrence of a series, written apart from it, that ended before that
-    time, as Twake Calendar tells it: at its DTEND, else at its DTSTART, which ends a day the day
-    after. A day ends where the next starts, in UTC. A floating time, or one in a zone the IANA
-    database lacks, which nothing places in time, is not over."""
+    time: at its DTEND, else as iCalendar reads an event without one, after its DURATION, or when
+    it starts, or at the end of its day for a day. The midnight a day ends at, and a time in no
+    zone the IANA database has, floating or in a zone it lacks, are read in the given zone. An
+    occurrence whose end cannot be read is not over."""
     first = {prop[0]: prop for prop in reversed(vevent[1])}
     if "recurrence-id" not in first:
         return False
     end = _event_time(first.get("dtend"))
-    if end is None:
-        end = _event_time(first.get("dtstart"))
-        if end is not None and not isinstance(end.value, datetime):
-            end = EventTime(end.value + timedelta(days=1), None)
+    start = _event_time(first.get("dtstart"))
+    if "dtend" not in first and start is not None:
+        end = _end_without_dtend(start, first.get("duration"))
     if end is None:
         return False
-    if isinstance(end.value, datetime):
-        return end.value.tzinfo is not None and end.value < moment
-    return end.value <= moment.astimezone(UTC).date()
+    if not isinstance(end.value, datetime):
+        return midnight(end.value, zone) < moment
+    if end.value.tzinfo is None:
+        return end.value.replace(tzinfo=zone) < moment
+    return end.value < moment
 
 
 def _cancelled(vevent: list[Any]) -> bool:
@@ -384,7 +386,12 @@ class CalendarEvent:
         return self.participation_of(email) is not None and not self.organized_by(email)
 
     def answered_by(
-        self, email: str, partstat: Partstat, *, series_from: datetime | None = None
+        self,
+        email: str,
+        partstat: Partstat,
+        *,
+        series_from: datetime | None = None,
+        zone: ZoneInfo | None = None,
     ) -> "CalendarEvent":
         """The event with the participation of that user set to their answer, such as ACCEPTED,
         wherever it lists them, and nothing else changed. Addresses compare lowercased, as sabre's
@@ -393,12 +400,16 @@ class CalendarEvent:
         An answer for the whole series, given at series_from, changes it as Twake Calendar answers
         a series: in the series itself, and in its occurrences written apart that are not over by
         then. Those over keep the answer they have, of which their organizer is not told again; so
-        do those the organizer cancelled alone, which there is nothing to answer in."""
+        do those the organizer cancelled alone, which there is nothing to answer in. Their days,
+        and their times in no zone the IANA database has, are read in the given zone, the user's,
+        else in UTC."""
         jcal = copy.deepcopy(self.jcal)
         for component in jcal[2]:
             if component[0] != "vevent":
                 continue
-            if series_from is not None and (_cancelled(component) or _over(component, series_from)):
+            if series_from is not None and (
+                _cancelled(component) or _over(component, series_from, zone or ZoneInfo("UTC"))
+            ):
                 continue
             for prop in component[1]:
                 if _is_attendee(prop, email):
