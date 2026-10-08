@@ -377,36 +377,33 @@ class CalendarEvent:
         cancelled alone."""
         return any(_cancelled(vevent) for vevent in self._vevents())
 
+    def invites(self, email: str) -> bool:
+        """Whether the event invites that user: it lists them as an attendee, and they do not
+        organize it, whom Twake Calendar lists among its attendees too, as its chair. Addresses
+        compare lowercased, as sabre's iTIP broker compares them."""
+        return self.participation_of(email) is not None and not self.organized_by(email)
+
     def answered_by(
         self, email: str, partstat: Partstat, *, series_from: datetime | None = None
-    ) -> "CalendarEvent | None":
+    ) -> "CalendarEvent":
         """The event with the participation of that user set to their answer, such as ACCEPTED,
-        wherever it lists them, and nothing else changed; None if it does not invite them: if it
-        does not list them as an attendee, or if they organize it, whom Twake Calendar lists among
-        its attendees too, as its chair. Addresses compare lowercased, as sabre's iTIP broker
-        compares them.
+        wherever it lists them, and nothing else changed. Addresses compare lowercased, as sabre's
+        iTIP broker compares them.
 
         An answer for the whole series, given at series_from, changes it as Twake Calendar answers
         a series: in the series itself, and in its occurrences written apart that are not over by
         then. Those over keep the answer they have, of which their organizer is not told again; so
         do those the organizer cancelled alone, which there is nothing to answer in."""
-        email = email.lower()
-        if self.organized_by(email):
-            return None
         jcal = copy.deepcopy(self.jcal)
-        invited = False
         for component in jcal[2]:
             if component[0] != "vevent":
                 continue
-            kept = series_from is not None and (
-                _cancelled(component) or _over(component, series_from)
-            )
+            if series_from is not None and (_cancelled(component) or _over(component, series_from)):
+                continue
             for prop in component[1]:
                 if _is_attendee(prop, email):
-                    invited = True
-                    if not kept:
-                        prop[1]["partstat"] = partstat
-        return CalendarEvent(self.href, jcal) if invited else None
+                    prop[1]["partstat"] = partstat
+        return CalendarEvent(self.href, jcal)
 
 
 def new_event(

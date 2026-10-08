@@ -153,17 +153,9 @@ async def _answer[Reply: (Accepted, Declined)](
     """The user's answer to the invitation, given in their calendar, as the operation that gives
     it replies; or, when the harness asks, what giving it would do."""
     event = await calendar.find_event(user, invitation.uid)
-    whole_series = event is not None and invitation.series and event.repeats
-    # From now on, as Twake Calendar answers a whole series
-    series_from = now() if whole_series else None
-    answered = (
-        event.answered_by(user.email, partstat, series_from=series_from)
-        if event is not None
-        else None
-    )
     # No copy of the user's own, or one that does not invite them, is answered alike, before
     # anything else is checked: the contract never tells that an event exists
-    if event is None or answered is None:
+    if event is None or not event.invites(user.email):
         raise Problem(
             status=404,
             code="invitation_not_found",
@@ -192,6 +184,10 @@ async def _answer[Reply: (Accepted, Declined)](
             " said yes to answering for the whole series, call again with series true; else they"
             " answer it in Calendar.",
         )
+    whole_series = invitation.series and event.repeats
+    # From now on, as Twake Calendar answers a whole series
+    series_from = now() if whole_series else None
+    answered = event.answered_by(user.email, partstat, series_from=series_from)
     # esn-sabre tells the organizer of a participation that changes, and of no other: an answer
     # that changes nothing would tell nobody, and its reply would say that the calendar holds it
     if answered.jcal == event.jcal:
