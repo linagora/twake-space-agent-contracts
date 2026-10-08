@@ -306,7 +306,7 @@ async def test_the_users_own_meetings_and_cancelled_ones_wait_for_no_answer(
     answer = await list_events(client, **{"from": "2026-10-09"})
 
     assert [
-        (found["uid"], found["status"], found["organizer"], found["needs_action"])
+        (found["uid"], found["status"], found["untrusted"]["organizer"], found["needs_action"])
         for found in answer["events"]
     ] == [
         ("mine", "CONFIRMED", MMAUDET, False),
@@ -333,12 +333,12 @@ async def test_what_an_organizer_writes_beyond_icalendar_is_not_passed_on_as_it_
 
     # iCalendar reads a participation it does not know as NEEDS-ACTION
     [odd] = answer["events"]
-    assert (odd["status"], odd["organizer"], odd["my_partstat"], odd["needs_action"]) == (
-        None,
-        None,
-        "NEEDS-ACTION",
-        True,
-    )
+    assert (
+        odd["status"],
+        odd["untrusted"]["organizer"],
+        odd["my_partstat"],
+        odd["needs_action"],
+    ) == (None, None, "NEEDS-ACTION", True)
 
 
 async def test_conflicts_are_the_overlapping_occurrences_that_take_the_users_time(
@@ -416,6 +416,7 @@ async def test_what_people_wrote_of_an_event_comes_under_untrusted_on_one_line(
             ["summary", {}, "text", "Lunch‮ with\nthe team"],
             ["location", {}, "text", "Chez  Paul"],
             ["description", {}, "text", "Agenda:\n" + "x" * 300],
+            organized_by(ALICE),
         ),
         jcal_event("untitled", *at(14)),
     )
@@ -423,13 +424,21 @@ async def test_what_people_wrote_of_an_event_comes_under_untrusted_on_one_line(
     answer = await list_events(client, **{"from": "2026-10-09"})
 
     lunch, untitled = answer["events"]
-    # The description starts with its first 200 characters
+    # The description starts with its first 200 characters; the organizer's calendar wrote their
+    # address
     assert lunch["untrusted"] == {
         "title": "Lunch with the team",
         "location": "Chez Paul",
         "description": "Agenda: " + "x" * 191 + "…",
+        "organizer": ALICE,
     }
-    assert untitled["untrusted"] == {"title": None, "location": None, "description": None}
+    assert "organizer" not in lunch
+    assert untitled["untrusted"] == {
+        "title": None,
+        "location": None,
+        "description": None,
+        "organizer": None,
+    }
 
 
 async def test_private_events_are_read_in_full_and_said_private(
