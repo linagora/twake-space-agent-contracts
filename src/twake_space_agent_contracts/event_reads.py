@@ -235,10 +235,9 @@ async def _occurrences(
     *,
     leave_out_unreadable: bool = False,
 ) -> list[_Placed]:
-    """The occurrences of the user's calendars between two times, placed in time, by start; those
-    without their series come whatever their days. An event the contract cannot read fails them
-    all when a list of the days between the two times may hold it, unless they are to leave it
-    out."""
+    """The occurrences of the user's calendars that a list of the days between two times holds,
+    placed in time, by start. An event the contract cannot read fails them all when that list may
+    hold it, unless they are to leave it out."""
     # Calendar leaves out of a time range an occurrence of no duration that starts when it starts
     events = await calendar.events_between(
         user, (since - timedelta(seconds=1)).astimezone(UTC), until.astimezone(UTC)
@@ -246,10 +245,15 @@ async def _occurrences(
     occurrences: list[_Placed] = []
     for event in events:
         try:
-            occurrences.append(_placed(event, zone, user.email))
+            occurrence = _placed(event, zone, user.email)
         except Problem:
             if not leave_out_unreadable and _may_be_of_the_days(event, zone, since, until):
                 raise
+            continue
+        # Calendar gives the occurrences of a series it does not hold whatever their days, and
+        # some events out of the times it is asked for
+        if _of_the_days(occurrence.start, occurrence.end, since, until):
+            occurrences.append(occurrence)
     return sorted(occurrences, key=lambda occurrence: occurrence.start)
 
 

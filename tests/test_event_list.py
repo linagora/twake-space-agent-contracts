@@ -463,6 +463,28 @@ async def test_the_conflicts_out_of_the_days_are_read_31_days_around_them_at_mos
     ]
 
 
+async def test_occurrences_without_their_series_conflict_31_days_around_the_days_at_most(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    keep(
+        boundary,
+        jcal_event("leave", "2025-09-01T09:00:00", "2027-12-31T18:00:00"),
+        # Calendar gives them all whatever their days, one of them taking place in the times read
+        alone(
+            jcal_event("orphan", "2025-10-20T10:00:00", "2025-10-20T11:00:00"),
+            jcal_event("orphan", "2026-10-09T10:00:00", "2026-10-09T11:00:00"),
+            jcal_event("orphan", "2027-10-20T10:00:00", "2027-10-20T11:00:00"),
+        ),
+    )
+
+    answer = await list_events(client, **{"from": "2026-10-09"})
+
+    assert [(found["uid"], found["conflicts"]) for found in answer["events"]] == [
+        ("leave", [{"uid": "orphan", "recurrence_id": "2026-10-09T10:00:00+02:00"}]),
+        ("orphan", [{"uid": "leave", "recurrence_id": None}]),
+    ]
+
+
 async def test_an_event_out_of_the_days_the_contract_cannot_read_is_left_out_of_the_conflicts(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
