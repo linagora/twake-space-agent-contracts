@@ -84,6 +84,7 @@ async def test_the_user_lists_their_mail_newest_first(
     [
         pytest.param({}, False, id="an ordinary email"),
         pytest.param({"List-Id": "Budget news <budget.lists.twake.test>"}, True, id="List-Id"),
+        pytest.param({"List-Id": ""}, True, id="an empty List-Id"),
         pytest.param(
             {"List-Unsubscribe": "<https://lists.twake.test/leave>"}, True, id="List-Unsubscribe"
         ),
@@ -95,12 +96,18 @@ async def test_the_user_lists_their_mail_newest_first(
         pytest.param({"Auto-Submitted": "auto-generated"}, True, id="Auto-Submitted generated"),
         pytest.param({"Auto-Submitted": "auto-replied"}, True, id="Auto-Submitted replied"),
         pytest.param({"Auto-Submitted": "no"}, False, id="Auto-Submitted no"),
+        pytest.param(
+            {"Auto-Submitted": "no; x=y"}, False, id="Auto-Submitted no, with a parameter"
+        ),
+        pytest.param(
+            {"Auto-Submitted": "no (human)"}, False, id="Auto-Submitted no, with a comment"
+        ),
     ],
 )
 async def test_a_listed_email_tells_whether_it_was_sent_in_bulk(
     client: AsyncClient, boundary: FakeBoundary, headers: dict[str, str], bulk: bool
 ) -> None:
-    boundary.tmail.deliver("email-1", INBOX, headers=headers)
+    boundary.tmail.deliver("email-1", INBOX, headerTexts=headers)
 
     answer = await emails(client)
 

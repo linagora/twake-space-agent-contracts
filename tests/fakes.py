@@ -1077,7 +1077,7 @@ class FakeTMail:
         }
         self.emails: dict[str, dict[str, Any]] = {}
         """Emails by id, as JMAP gives them, with the text of their only part as body, and the
-        text of their other header fields by name as headers."""
+        text of other header fields by name as headerTexts, when a test gives them."""
         self.identities: dict[str, list[dict[str, Any]]] = {
             MMAUDET: [{"id": "identity-mmaudet", "name": "Michel-Marie", "email": MMAUDET}]
         }
@@ -1125,7 +1125,6 @@ class FakeTMail:
             "messageId": [f"{email_id}@twake.test"],
             "inReplyTo": None,
             "references": None,
-            "headers": {},
         } | jmap
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -1306,7 +1305,7 @@ class FakeTMail:
             ),
         }
         found = _present({key: (email | parts).get(key) for key in arguments["properties"]})
-        texts = {name.lower(): text for name, text in email["headers"].items()}
+        texts = {name.lower(): text for name, text in email.get("headerTexts", {}).items()}
         headers = {
             key: texts.get(match[1].lower())
             for key in arguments["properties"]
@@ -1387,7 +1386,6 @@ class FakeTMail:
                 "messageId": [f"{email_id}@twake.test"],
                 "inReplyTo": None,
                 "references": None,
-                "headers": {},
             } | {key: email[key] for key in email.keys() - {"textBody", "bodyValues"}}
             self.emails[email_id]["body"] = body
             self.created.append(email_id)

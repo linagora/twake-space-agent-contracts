@@ -109,10 +109,10 @@ def _paragraphs(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-def _keyword(text: str | None) -> str:
-    """The keyword a header field gives, such as bulk or no, whatever its case: empty when the
-    email has no such field."""
-    return (text or "").strip().lower()
+def _header_keyword(text: str | None) -> str:
+    """The keyword a header field gives, such as bulk or no, whatever its case, without the
+    parameters or the comment after it: empty when the email has no such field."""
+    return re.split(r"[;(]", text or "", maxsplit=1)[0].strip().lower()
 
 
 def _utc(time: datetime | None) -> str | None:
@@ -272,12 +272,14 @@ class _Email(_Jmap):
 
     @property
     def bulk(self) -> bool:
-        """Whether the email was sent in bulk: from a mailing list, with a precedence of bulk,
-        list or junk, or submitted automatically, as Auto-Submitted says unless it is no."""
+        """Whether the email was sent in bulk: from a mailing list, as List-Id or List-Unsubscribe
+        tells even empty, with a precedence of bulk, list or junk, or submitted automatically, as
+        Auto-Submitted says unless it is no."""
         return (
-            bool(self.list_id or self.list_unsubscribe)
-            or _keyword(self.precedence) in BULK_PRECEDENCES
-            or _keyword(self.auto_submitted) not in {"", "no"}
+            self.list_id is not None
+            or self.list_unsubscribe is not None
+            or _header_keyword(self.precedence) in BULK_PRECEDENCES
+            or _header_keyword(self.auto_submitted) not in {"", "no"}
         )
 
     def _facts(self, own: set[str]) -> dict[str, Any]:
