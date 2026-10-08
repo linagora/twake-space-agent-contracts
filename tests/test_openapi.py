@@ -573,6 +573,23 @@ async def test_the_body_of_answering_an_invitation_is_whole_and_closed(
     assert schema["additionalProperties"] is False
 
 
+@pytest.mark.parametrize(
+    ("answer", "partstat", "other"),
+    [("accept", "ACCEPTED", "DECLINED"), ("decline", "DECLINED", "ACCEPTED")],
+)
+async def test_answering_an_invitation_publishes_its_own_answer_only(
+    client: AsyncClient, answer: str, partstat: str, other: str
+) -> None:
+    # Accepting never answers that the user declined, nor declining that they accepted
+    document = (await client.get("/openapi.json")).json()
+
+    answering = document["paths"][f"/contracts/v1/calendar/invitations/{answer}"]["post"]
+    schema = answering["responses"]["200"]["content"]["application/json"]["schema"]
+
+    assert refusal({"uid": "a", "partstat": partstat}, schema, document) is None
+    assert refusal({"uid": "a", "partstat": other}, schema, document) is not None
+
+
 async def test_creating_an_event_is_a_low_risk_write(client: AsyncClient) -> None:
     # The user's own time, with nobody invited: once the owner allowed writing in Calendar, it runs
     # without asking

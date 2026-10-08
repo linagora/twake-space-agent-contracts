@@ -4,7 +4,7 @@ an invitation they received, as themselves."""
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
@@ -52,11 +52,18 @@ class Invitation(BaseModel):
     ] = False
 
 
-class Answer(BaseModel):
-    """The user's answer to the invitation, as their calendar now has it."""
+class Accepted(BaseModel):
+    """The user's answer to the invitation, as their calendar now has it: accepted."""
 
     uid: str
-    partstat: Partstat
+    partstat: Literal["ACCEPTED"]
+
+
+class Declined(BaseModel):
+    """The user's answer to the invitation, as their calendar now has it: declined."""
+
+    uid: str
+    partstat: Literal["DECLINED"]
 
 
 # What a preview of each answer tells the owner, in each language
@@ -127,16 +134,17 @@ def _summary(
     return ", ".join(parts) + "\n" + words.told
 
 
-async def _answer(
+async def _answer[Reply: (Accepted, Declined)](
     calendar: Calendar,
     invitation: Invitation,
     user: User,
     preview: Preview,
     partstat: Partstat,
+    reply: type[Reply],
     now: Callable[[], datetime],
-) -> Answer | JSONResponse:
-    """The user's answer to the invitation, given in their calendar; or, when the harness asks,
-    what giving it would do."""
+) -> Reply | JSONResponse:
+    """The user's answer to the invitation, given in their calendar, as the operation that gives
+    it replies; or, when the harness asks, what giving it would do."""
     event = await calendar.find_event(user, invitation.uid)
     whole_series = event is not None and invitation.series and event.repeats
     # From now on, as Twake Calendar answers a whole series
@@ -185,7 +193,7 @@ async def _answer(
         return preview.answer(summary, digest)
     preview.check(digest)
     await calendar.save_event(user, answered)
-    return Answer(uid=invitation.uid, partstat=partstat)
+    return reply.model_validate({"uid": invitation.uid, "partstat": partstat})
 
 
 def _accept(calendar: Calendar, caller: CallerDependency, now: Callable[[], datetime]) -> APIRouter:
@@ -208,7 +216,7 @@ def _accept(calendar: Calendar, caller: CallerDependency, now: Callable[[], date
             "occurrence the user was invited to without the rest of its series is accepted as an "
             f'invitation that does not repeat. Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
-        response_model=Answer,
+        response_model=Accepted,
         # The user's own answer, though Calendar tells the organizer: the owner's consent to write
         # in Calendar covers it, and they are not asked to confirm each one. It tells what it
         # would do, for when they are.
@@ -218,8 +226,8 @@ def _accept(calendar: Calendar, caller: CallerDependency, now: Callable[[], date
         invitation: Invitation,
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
-    ) -> Answer | JSONResponse:
-        return await _answer(calendar, invitation, user, preview, "ACCEPTED", now)
+    ) -> Accepted | JSONResponse:
+        return await _answer(calendar, invitation, user, preview, "ACCEPTED", Accepted, now)
 
     return routes
 
@@ -247,7 +255,7 @@ def _decline(
             "an invitation that does not repeat. "
             f'Example: body={{"uid": "{EXAMPLE_UID}"}}.'
         ),
-        response_model=Answer,
+        response_model=Declined,
         # The user's own answer, as accepting is: low, and it tells what it would do
         openapi_extra={"x-twake-risk": "low", "x-twake-preview": True},
     )
@@ -255,8 +263,8 @@ def _decline(
         invitation: Invitation,
         user: Annotated[User, Depends(caller)],
         preview: Previewing,
-    ) -> Answer | JSONResponse:
-        return await _answer(calendar, invitation, user, preview, "DECLINED", now)
+    ) -> Declined | JSONResponse:
+        return await _answer(calendar, invitation, user, preview, "DECLINED", Declined, now)
 
     return routes
 
