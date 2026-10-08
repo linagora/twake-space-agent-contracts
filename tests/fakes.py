@@ -208,12 +208,10 @@ class FakeCalendar:
             return httpx.Response(401)
         if request.method == "GET" and request.url.path == "/api/users":
             email = request.url.params.get("email")
-            if email != caller:
-                return httpx.Response(403)
-            user = self.users.get(caller)
+            user = self.users.get(email or "")
             domains = [
                 {"domain_id": domain, "joined_at": "1970-01-01T00:00:00.000Z"}
-                for domain in [self.domains.get(caller)]
+                for domain in [self.domains.get(email or "")]
                 if domain is not None
             ]
             found = {"_id": user, "preferredEmail": email, "domains": domains}
@@ -302,18 +300,33 @@ class FakeCalendar:
             return httpx.Response(406)
         body = json.loads(request.content)
         self.free_busy_requests.append(body)
-        if user is None or body.get("users") != [user]:
+        # The caller asks for people who exist in Calendar, and sees their free/busy alone
+        if (
+            user is None
+            or not body.get("users")
+            or not set(body["users"]) <= set(self.users.values())
+        ):
             return httpx.Response(403)
-        busy = [
-            slot
-            for slot in self.busy.get(user, [])
-            if slot["uid"] not in body.get("uids", [])
-            and slot["start"] < body["end"]
-            and slot["end"] > body["start"]
+        free_busy = [
+            {
+                "id": person,
+                "calendars": [
+                    {
+                        "id": person,
+                        "busy": [
+                            slot
+                            for slot in self.busy.get(person, [])
+                            if slot["uid"] not in body.get("uids", [])
+                            and slot["start"] < body["end"]
+                            and slot["end"] > body["start"]
+                        ],
+                    }
+                ],
+            }
+            for person in body["users"]
         ]
-        free_busy = {"id": user, "calendars": [{"id": user, "busy": busy}]}
         return httpx.Response(
-            200, json={"start": body["start"], "end": body["end"], "users": [free_busy]}
+            200, json={"start": body["start"], "end": body["end"], "users": free_busy}
         )
 
 

@@ -136,7 +136,13 @@ async def test_without_applications_set_calendar_is_published(
             "/contracts/v1/calendar/freebusy", params=PERIOD, headers=AS_MMAUDET
         )
 
-    assert operation_ids(document) == {"read_freebusy", "accept_invitation", "create_event"}
+    assert operation_ids(document) == {
+        "read_freebusy",
+        "accept_invitation",
+        "create_event",
+        "find_meeting_slots",
+        "create_meeting",
+    }
     assert set(document["x-twake-domains"]) == {"calendar"}
     assert freebusy.status_code == 200, freebusy.text
 

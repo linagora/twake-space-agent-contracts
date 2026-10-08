@@ -31,12 +31,12 @@ Before an assistant first reads in an application, and before it first writes th
   "calendar": {
     "name": { "en": "Twake Calendar", "fr": "Twake Agenda" },
     "read": {
-      "en": "see your free and busy times in your calendars",
-      "fr": "voir tes créneaux libres et occupés dans tes agendas"
+      "en": "see your free and busy times in your calendars, and find when you and others are free",
+      "fr": "voir tes créneaux libres et occupés dans tes agendas, et trouver quand toi et d'autres êtes libres"
     },
     "write": {
-      "en": "accept the invitations you received, which tells their organizer, and add events to your calendar, with nobody invited",
-      "fr": "accepter les invitations que tu as reçues, ce qui prévient leur organisateur, et ajouter des événements à ton agenda, sans y inviter personne"
+      "en": "accept the invitations you received, which tells their organizer, add events to your calendar, and call meetings, which emails an invitation to everyone invited",
+      "fr": "accepter les invitations que tu as reçues, ce qui prévient leur organisateur, ajouter des événements à ton agenda, et convoquer des réunions, ce qui envoie une invitation par mail à chaque invité"
     }
   }
 }
@@ -129,6 +129,32 @@ Adds an event to the user's default calendar, as the user, with nobody invited.
 - The service writes the event in jCal with `PUT /dav/calendars/<user id>/<user id>/<uid>.ics`, then reads it back with the same `REPORT`. The side service waits for esn-sabre up to 120 seconds, the service for the side service 10: a write it gave up waiting for is read back all the same, and answered as added when Calendar kept it.
 - It is a low-risk write (`x-twake-risk: low`): the user's own time, which nobody else is told of and which the owner's consent to write in Calendar covers without a confirmation each time.
 - It tells what it would do ([Previews](#previews)), once it checked the call as it would: the event's title, when it takes place, its times in the user's time zone, else in the event's, named beside them, whether it leaves the user free, where it is, and what it is for, whole when it fits; for the event the same call added already, that nothing is added. The digest covers the event, by its UID, the zone it is written in, and the event as the calendar holds it, if at all: a call made after the user's zone changed, for an event written in it, or after the event was added or removed, answers `changed_since_preview`.
+
+### `calendar.availability.read.v1`
+
+Finds when the user and some people are all free for a meeting, from free/busy alone.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `find_meeting_slots` | `GET /contracts/v1/calendar/availability/slots?email=…&duration=…&start=…&end=…` | `{"start", "end", "duration", "time_zone", "slots": [{"start", "end"}], "truncated"}`, times in the user's time zone |
+
+- `email`, repeated, lists the people to meet: 1 to 10, each once, the user's own address ignored. `duration` is the meeting's length in minutes, 15 to 480. `start` and `end` are RFC 3339 times with their offset, the period ending after it starts and lasting at most 14 days.
+- The service goes through the Calendar side service with the user's token: `GET /api/users?email=` for the id of the user and of each person, then one `POST /dav/calendars/freebusy` for all of them. It never reads what anyone's events are. A person Calendar has no user for is answered `person_not_found`.
+- A slot is common to everyone: it overlaps no busy time of anyone. Slots lie within the user's business hours, Monday to Friday 09:00 to 18:00 in their time zone (`POST /api/configurations`, `core.datetime`, UTC when Calendar gives none the IANA database has), start every half hour, and come earliest first, 20 at most, `truncated` saying there are more. The hours are fixed for now, not those the user set in Calendar.
+
+### `calendar.meeting.create.v1`
+
+Calls a meeting: adds it to the user's default calendar, as its organizer, and invites people to it.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `create_meeting` | `POST /contracts/v1/calendar/meetings` `{"title", "start", "end", "attendees", "time_zone", "location", "description"}` | 201, `{"uid", "start", "end", "time_zone", "attendees", "untrusted": {"title", "location", "description"}}`; 200 for the meeting the same call added already |
+
+- `attendees` lists 1 to 20 emails, each checked (`invalid_email`), lowercased and counted once; the user's own address is refused. `start` and `end` are RFC 3339 times with their offset, the meeting ending after it starts and lasting at most 31 days; it is written in `time_zone` as `create_event` writes an event. The title, location and description are bounded as for an event. The body takes no other field.
+- The service writes the meeting in jCal as `create_event` does, with the user as `ORGANIZER` and as chair, and each attendee `NEEDS-ACTION` with `RSVP`. esn-sabre sends the invitations, and Calendar mails every attendee, those outside the user's organization too: the description says so.
+- The UID comes from the user, the title, the times and the people, as a UUID v5, and a call made again is handled as for `create_event`: 200 with the meeting when the calendar holds it as asked, `event_exists` when it holds it with other details, and nobody is mailed twice.
+- It is a high-risk write (`x-twake-risk: high`): it mails other people, so the owner confirms each call.
+- It tells what it would do ([Previews](#previews)): whom it invites, ten at most by their addresses, the title, when it takes place in the user's time zone, where it is and what it is for, and that each is mailed an invitation; for a meeting the same call added already, that nothing is sent. The digest covers the meeting, by its UID, the zone it is written in, and the meeting as the calendar holds it, if at all.
 
 ### Chat, as the user
 
@@ -541,6 +567,7 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `create_project` | the project's name, its first board's, the start of its task keys, and the projects of that name the user has already | the projects of that name the user has already |
 | `create_file` | the file's name, type and size, its folder and its content | the folder, where it is |
 | `create_event` | the event's title, when it takes place, in the user's time zone, whether it leaves them free, where it is and what it is for; or that it is in their calendar already | the event, by its UID, the zone it is written in, and the event as the calendar holds it, if at all |
+| `create_meeting` | whom the meeting invites, its title, when it takes place, in the user's time zone, where it is, what it is for, and that each is mailed an invitation; or that it is in their calendar already | the meeting, by its UID, the zone it is written in, and the meeting as the calendar holds it, if at all |
 | `create_contact` | each field of the contact, its note whole when it fits; or that it is in the address book already | the contact, by its UID, as the address book holds it, if at all |
 | `update_contact` | each field it changes, as it would be and as it was, what it removes named as such | the contact as it is |
 | `delete_contact` | that the contact goes for good, and each field it holds | the contact as it is |

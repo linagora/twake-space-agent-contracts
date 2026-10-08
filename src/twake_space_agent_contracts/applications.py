@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter
 
 from twake_space_agent_contracts import (
+    availability,
     boards,
     drive_contents,
     drive_create,
@@ -15,6 +16,7 @@ from twake_space_agent_contracts import (
     event_create,
     freebusy,
     invitations,
+    meeting_create,
     projects,
     task_comments,
     task_reads,
@@ -83,6 +85,8 @@ def _calendar(context: Context) -> list[APIRouter]:
         freebusy.router(calendar, context.caller),
         invitations.router(calendar, context.caller),
         event_create.router(calendar, context.caller),
+        availability.router(calendar, context.caller),
+        meeting_create.router(calendar, context.caller),
     ]
 
 
@@ -171,14 +175,17 @@ APPLICATIONS = (
         domain="calendar",
         name=Words(en="Twake Calendar", fr="Twake Agenda"),
         read=Words(
-            en="see your free and busy times in your calendars",
-            fr="voir tes créneaux libres et occupés dans tes agendas",
+            en="see your free and busy times in your calendars, and find when you and others are"
+            " free",
+            fr="voir tes créneaux libres et occupés dans tes agendas, et trouver quand toi et"
+            " d'autres êtes libres",
         ),
         write=Words(
-            en="accept the invitations you received, which tells their organizer, and add events"
-            " to your calendar, with nobody invited",
-            fr="accepter les invitations que tu as reçues, ce qui prévient leur organisateur, et"
-            " ajouter des événements à ton agenda, sans y inviter personne",
+            en="accept the invitations you received, which tells their organizer, add events to"
+            " your calendar, and call meetings, which emails an invitation to everyone invited",
+            fr="accepter les invitations que tu as reçues, ce qui prévient leur organisateur,"
+            " ajouter des événements à ton agenda, et convoquer des réunions, ce qui envoie une"
+            " invitation par mail à chaque invité",
         ),
         routers=_calendar,
     ),

@@ -225,6 +225,8 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "read_freebusy": ["calendar.freebusy.read.v1"],
         "accept_invitation": ["calendar.invitation.accept.v1"],
         "create_event": ["calendar.event.create.v1"],
+        "find_meeting_slots": ["calendar.availability.read.v1"],
+        "create_meeting": ["calendar.meeting.create.v1"],
         "list_rooms": ["chat.rooms.read.v1"],
         "read_room": ["chat.rooms.read.v1"],
         "list_room_members": ["chat.members.read.v1"],
@@ -364,6 +366,7 @@ WRITES_NAMED = {
     "calendar": {
         "accept_invitation": ("accept", "accepter"),
         "create_event": ("add events", "ajouter des événements"),
+        "create_meeting": ("call meetings", "convoquer des réunions"),
     },
     "tasks": {
         "open_boards": ("open your boards", "ouvrir tes tableaux"),
@@ -493,6 +496,7 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
     assert declared == {
         "accept_invitation": ("post", True),
         "create_event": ("post", True),
+        "create_meeting": ("post", True),
         "create_reply_draft": ("post", True),
         "move_email": ("post", True),
         "archive_email": ("post", True),
@@ -577,6 +581,26 @@ async def test_the_body_of_a_new_event_is_whole_and_closed(client: AsyncClient) 
         ["title", "start", "end", "time_zone", "busy", "location", "description"]
     )
     assert sorted(schema["required"]) == ["end", "start", "title"]
+    assert schema["additionalProperties"] is False
+
+
+async def test_calling_a_meeting_is_a_high_risk_write_with_a_whole_and_closed_body(
+    client: AsyncClient,
+) -> None:
+    # It mails other people, outsiders too: the owner confirms each call
+    document = (await client.get("/openapi.json")).json()
+
+    create = document["paths"]["/contracts/v1/calendar/meetings"]["post"]
+    schema = create["requestBody"]["content"]["application/json"]["schema"]
+
+    assert create["x-twake-risk"] == "high"
+    assert "$ref" not in json.dumps(schema)
+    assert sorted(schema["properties"]) == sorted(
+        ["title", "start", "end", "attendees", "time_zone", "location", "description"]
+    )
+    assert sorted(schema["required"]) == ["attendees", "end", "start", "title"]
+    assert schema["properties"]["attendees"]["minItems"] == 1
+    assert schema["properties"]["attendees"]["maxItems"] == 20
     assert schema["additionalProperties"] is False
 
 
