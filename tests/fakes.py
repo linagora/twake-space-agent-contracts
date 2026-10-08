@@ -220,13 +220,21 @@ SABRE_RANGE = "%Y%m%dT%H%M%SZ"
 JCAL_UTC = "%Y-%m-%dT%H:%M:%SZ"
 
 
+# The names Windows gives the time zones of the tests, as Outlook writes them, which sabre/vobject
+# reads as the IANA zones Unicode CLDR gives them
+WINDOWS_ZONES = {
+    "Pacific Standard Time": "America/Los_Angeles",
+    "W. Europe Standard Time": "Europe/Berlin",
+}
+
+
 def _local(prop: list[Any]) -> datetime:
-    """The time of a property, as sabre/vobject reads it: in its zone, or, a day or a floating
-    time, in UTC."""
+    """The time of a property, as sabre/vobject reads it: in its zone, an IANA one or one Windows
+    names, or, a day or a floating time, in UTC."""
     moment = datetime.fromisoformat(prop[3])
     if moment.tzinfo is None:
         zone = prop[1].get("tzid")
-        moment = moment.replace(tzinfo=ZoneInfo(zone) if zone else UTC)
+        moment = moment.replace(tzinfo=ZoneInfo(WINDOWS_ZONES.get(zone, zone)) if zone else UTC)
     return moment
 
 

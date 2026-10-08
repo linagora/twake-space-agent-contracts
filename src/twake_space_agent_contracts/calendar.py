@@ -13,7 +13,14 @@ from pydantic import BaseModel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
-from twake_space_agent_contracts.zones import JCAL_TIME, formatted, midnight, vtimezone, zone_named
+from twake_space_agent_contracts.zones import (
+    JCAL_TIME,
+    formatted,
+    midnight,
+    vtimezone,
+    windows_zone,
+    zone_named,
+)
 
 # How esn-sabre (2.4.6 and later) writes UTC times in its JSON free/busy
 SABRE_TIME = "%Y%m%dT%H%M%SZ"
@@ -43,6 +50,24 @@ _STATUSES: dict[str, EventStatus] = {status: status for status in get_args(Event
 Participation = Literal["NEEDS-ACTION", "ACCEPTED", "DECLINED", "TENTATIVE", "DELEGATED"]
 """An attendee's answer to an event, in the words iCalendar gives it."""
 _PARTICIPATIONS: dict[str, Participation] = {answer: answer for answer in get_args(Participation)}
+Frequency = Literal["SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"]
+"""How often a series repeats, in the words iCalendar gives its rule."""
+_FREQUENCIES: dict[str, Frequency] = {each: each for each in get_args(Frequency)}
+_WEEKDAY = "(?:MO|TU|WE|TH|FR|SA|SU)"
+# The other parts of a rule that RFC 5545 gives, as it writes their values: those that narrow
+# the occurrences of a series, and the day its weeks start on
+_RULE_PARTS = {
+    "BYSECOND": re.compile(r"\d{1,2}"),
+    "BYMINUTE": re.compile(r"\d{1,2}"),
+    "BYHOUR": re.compile(r"\d{1,2}"),
+    "BYDAY": re.compile(rf"[+-]?\d{{0,2}}{_WEEKDAY}"),
+    "BYMONTHDAY": re.compile(r"[+-]?\d{1,2}"),
+    "BYYEARDAY": re.compile(r"[+-]?\d{1,3}"),
+    "BYWEEKNO": re.compile(r"[+-]?\d{1,2}"),
+    "BYMONTH": re.compile(r"\d{1,2}"),
+    "BYSETPOS": re.compile(r"[+-]?\d{1,3}"),
+    "WKST": re.compile(_WEEKDAY),
+}
 
 
 class BusySlot(BaseModel):
@@ -80,6 +105,40 @@ def _is_attendee(prop: list[Any], email: str) -> bool:
     """Whether a property of an event lists that user among its attendees. Addresses compare
     lowercased, as sabre's iTIP broker compares them."""
     return prop[0] == "attendee" and str(prop[3]).lower() == f"mailto:{email.lower()}"
+
+
+def _participation(prop: list[Any]) -> Participation:
+    """The answer of an attendee, NEEDS-ACTION when the event does not say it or not in the words
+    of iCalendar, which reads it so."""
+    partstat = prop[1].get("partstat")
+    answer = partstat.upper() if isinstance(partstat, str) else ""
+    return _PARTICIPATIONS.get(answer, "NEEDS-ACTION")
+
+
+def _cal_address(value: Any) -> str | None:
+    """Whom an ORGANIZER or an ATTENDEE names, as their calendar wrote it, without its mailto:;
+    None when it is not text."""
+    if not isinstance(value, str):
+        return None
+    return value[7:] if value[:7].lower() == "mailto:" else value
+
+
+def _advertises_video(conference: list[Any]) -> bool:
+    """Whether a CONFERENCE property is a video one, as its FEATURE says: a list of features in
+    jCal, or text that separates them with commas."""
+    said = conference[1].get("feature")
+    features = said if isinstance(said, list) else str(said or "").split(",")
+    return "VIDEO" in (str(feature).strip().upper() for feature in features)
+
+
+@dataclass(frozen=True)
+class Attendee:
+    """An attendee of an event, as written in it: their name, their address, without its mailto:,
+    and their answer."""
+
+    name: str | None
+    address: str | None
+    participation: Participation
 
 
 @dataclass(frozen=True)
@@ -170,6 +229,38 @@ def _event_time(prop: list[Any] | None, *, as_written: bool = False) -> EventTim
     return EventTime(time, tzid if isinstance(tzid, str) and tzid else None)
 
 
+def _in_unknown_zone(time: EventTime) -> bool:
+    """Whether a time is written in a zone the IANA database lacks, which leaves unknown when it
+    is."""
+    return isinstance(time.value, datetime) and time.value.tzinfo is None and time.zone is not None
+
+
+@dataclass(frozen=True)
+class RecurrenceRule:
+    """How a series repeats, as its RRULE says."""
+
+    frequency: Frequency
+    interval: int
+    count: int | None
+    until: EventTime | None
+    """When its last occurrence starts at the latest: a day, or a time, in UTC, or naive when the
+    series floats."""
+    parts: dict[str, list[str]]
+    """Its other parts, by the names RFC 5545 gives them, their values as it writes them."""
+
+
+def _values(written: Any) -> list[str]:
+    """The values of a part of a rule, as jCal writes them, one alone or a list, as text."""
+    return [str(value).upper() for value in (written if isinstance(written, list) else [written])]
+
+
+def _positive(value: Any) -> int | None:
+    """A whole number above zero, as jCal writes one, or as text; None in any other form."""
+    if isinstance(value, str) and value.isascii() and value.isdigit() and len(value) <= 9:
+        value = int(value)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
 def _end_without_dtend(start: EventTime, duration: list[Any] | None) -> EventTime | None:
     """When an event without a DTEND ends, as iCalendar reads it: after its DURATION; without one,
     after its day, or when it starts. None for a duration in any other form, or not of whole days
@@ -239,8 +330,34 @@ class CalendarEvent:
     href: str
     jcal: list[Any]
 
+    @property
+    def calendar(self) -> str:
+        """The calendar that holds it, by the href of its JSON, as esn-sabre lists the user's."""
+        return self.href.rsplit("/", 1)[0] + ".json"
+
     def _vevents(self) -> list[list[Any]]:
         return [component for component in self.jcal[2] if component[0] == "vevent"]
+
+    def split(self) -> list["CalendarEvent"]:
+        """The events it holds, one per VEVENT, as Calendar keeps a series and its occurrences
+        that differ from it under one UID, at one href."""
+        return [CalendarEvent(self.href, [*self.jcal[:2], [vevent]]) for vevent in self._vevents()]
+
+    def zoned(self) -> "CalendarEvent":
+        """The event with its times in zones of the IANA database, as Calendar reads them for the
+        list: a time in a zone Windows names, as Outlook writes it, in the IANA zone Unicode CLDR
+        gives that name, and a floating one, in no zone, in UTC. One in a zone neither names stays
+        as written."""
+        jcal = copy.deepcopy(self.jcal)
+        for component in jcal[2]:
+            if component[0] != "vevent":
+                continue
+            for prop in component[1]:
+                tzid = prop[1].get("tzid", "UTC")
+                zone = zone_named(tzid) or windows_zone(tzid)
+                if prop[2] == "date-time" and zone is not None:
+                    prop[1]["tzid"] = zone.key
+        return CalendarEvent(self.href, jcal)
 
     def _prop(self, name: str) -> list[Any] | None:
         """The first property of that name of the event, which is not a series."""
@@ -294,13 +411,39 @@ class CalendarEvent:
         prop = self._prop("organizer")
         if prop is None:
             return None, None
-        name, address = prop[1].get("cn"), prop[3]
-        if isinstance(address, str) and address[:7].lower() == "mailto:":
-            address = address[7:]
-        return (
-            name if isinstance(name, str) else None,
-            address if isinstance(address, str) else None,
-        )
+        name = prop[1].get("cn")
+        return name if isinstance(name, str) else None, _cal_address(prop[3])
+
+    @property
+    def video_link(self) -> str | None:
+        """Its video link, as Calendar keeps it: X-OPENPAAS-VIDEOCONFERENCE, whose empty value
+        tells it was removed; without it, the first CONFERENCE that advertises video, as another
+        client writes it. None without one."""
+        link = self._prop("x-openpaas-videoconference")
+        if link is None:
+            conferences = (
+                prop
+                for vevent in self._vevents()
+                for prop in vevent[1]
+                if prop[0] == "conference" and _advertises_video(prop) and str(prop[3]).strip()
+            )
+            link = next(conferences, None)
+        written = link[3].strip() if link is not None and isinstance(link[3], str) else ""
+        return written or None
+
+    @property
+    def attendees(self) -> list[Attendee]:
+        """Its attendees, as it lists them: the organizer among them, when it lists them too."""
+        return [
+            Attendee(
+                name=prop[1]["cn"] if isinstance(prop[1].get("cn"), str) else None,
+                address=_cal_address(prop[3]),
+                participation=_participation(prop),
+            )
+            for vevent in self._vevents()
+            for prop in vevent[1]
+            if prop[0] == "attendee"
+        ]
 
     def organized_by(self, email: str) -> bool:
         """Whether that user organizes the event. Addresses compare lowercased, as sabre's iTIP
@@ -318,8 +461,24 @@ class CalendarEvent:
     @property
     def recurrence_id(self) -> EventTime | None:
         """Which occurrence of a series it is, by the start the series gives it, as written; None
-        for an event that does not repeat."""
-        return _event_time(self._prop("recurrence-id"), as_written=True)
+        for an event that does not repeat. One in another form, or in a zone the IANA database
+        lacks, which leaves unknown which occurrence it is, is Calendar answering in an unexpected
+        form."""
+        prop = self._prop("recurrence-id")
+        if prop is None:
+            return None
+        found = _event_time(prop, as_written=True)
+        if found is None or _in_unknown_zone(found):
+            raise _unavailable(
+                "Calendar gave the recurrence ID of the event in an unexpected form."
+            )
+        return found
+
+    @property
+    def is_occurrence(self) -> bool:
+        """Whether it is one occurrence of a series, which its RECURRENCE-ID names, readable or
+        not."""
+        return self._prop("recurrence-id") is not None
 
     @property
     def status(self) -> EventStatus | None:
@@ -335,9 +494,7 @@ class CalendarEvent:
         for vevent in self._vevents():
             for prop in vevent[1]:
                 if _is_attendee(prop, email):
-                    partstat = prop[1].get("partstat")
-                    answer = partstat.upper() if isinstance(partstat, str) else ""
-                    return _PARTICIPATIONS.get(answer, "NEEDS-ACTION")
+                    return _participation(prop)
         return None
 
     @property
@@ -358,6 +515,73 @@ class CalendarEvent:
                 # iCalendar ends an event of whole days on the day after its last
                 return EventPeriod(first, _later(last, -timedelta(days=1)), None)
         raise _unavailable("Calendar gave the times of the event in an unexpected form.")
+
+    @property
+    def rule(self) -> RecurrenceRule | None:
+        """How the event repeats, as its RRULE says, the parts of it RFC 5545 does not give left
+        out; None when it does not repeat. A rule in any other form than jCal's, as sabre writes
+        it, is Calendar answering in an unexpected form."""
+        prop = self._prop("rrule")
+        if prop is None:
+            return None
+        written = prop[3] if isinstance(prop[3], dict) else {}
+        said = {str(key).upper(): value for key, value in written.items()}
+        frequency = _FREQUENCIES.get(str(said.get("FREQ", "")).upper())
+        interval = _positive(said.get("INTERVAL", 1))
+        count = _positive(said["COUNT"]) if "COUNT" in said else None
+        until = self._until(said["UNTIL"]) if "UNTIL" in said else None
+        parts = {name: _values(said[name]) for name in _RULE_PARTS if name in said}
+        if (
+            frequency is None
+            or interval is None
+            or ("COUNT" in said and count is None)
+            or ("UNTIL" in said and until is None)
+            or not all(
+                _RULE_PARTS[name].fullmatch(value)
+                for name, values in parts.items()
+                for value in values
+            )
+        ):
+            raise _unavailable("Calendar gave the rule of the event in an unexpected form.")
+        return RecurrenceRule(frequency, interval, count, until, parts)
+
+    def _until(self, written: Any) -> EventTime | None:
+        """The UNTIL of its rule, as jCal writes it: a day, or a time in UTC; or of no zone, which
+        Calendar reads in the zone of the start of the series, and as floating when it floats.
+        None in any other form."""
+        until = _event_time(["until", {}, "date-time" if "T" in str(written) else "date", written])
+        start = self.starts
+        if (
+            until is None
+            or not isinstance(until.value, datetime)
+            or until.value.tzinfo is not None
+            or start is None
+            or not isinstance(start.value, datetime)
+            or start.value.tzinfo is None
+        ):
+            return until
+        return EventTime(until.value.replace(tzinfo=start.value.tzinfo), start.zone)
+
+    @property
+    def excluded(self) -> list[EventTime]:
+        """The occurrences the series leaves out, by the start it would give them, as written, as
+        a recurrence_id is: as its EXDATE properties write them, one or more each. One in any other
+        form than a day or a time, or in a zone the IANA database lacks, is Calendar answering in
+        an unexpected form."""
+        times = []
+        for vevent in self._vevents():
+            for prop in vevent[1]:
+                if prop[0] != "exdate":
+                    continue
+                for value in prop[3:]:
+                    time = _event_time([*prop[:3], value], as_written=True)
+                    if time is None or _in_unknown_zone(time):
+                        raise _unavailable(
+                            "Calendar gave the occurrences the event leaves out in an unexpected "
+                            "form."
+                        )
+                    times.append(time)
+        return times
 
     @property
     def repeats(self) -> bool:
@@ -696,24 +920,34 @@ class Calendar:
         user_id = await self.user_id(user)
         events = []
         for calendar in await self._calendars(user, user_id):
-            found = await self._call(
-                user,
-                "REPORT",
-                "/dav" + calendar,
-                json={
-                    "match": {
-                        "start": formatted(start, SABRE_TIME),
-                        "end": formatted(end, SABRE_TIME),
-                    }
-                },
-            )
-            events += [
-                CalendarEvent(item.href, [item.jcal[0], item.jcal[1], [component]])
-                for item in _reported(found, "the events")
-                for component in item.jcal[2]
-                if component[0] == "vevent"
-            ]
+            events += await self._events_in(user, calendar, start, end)
         return events
+
+    async def events_beside(
+        self, user: User, event: CalendarEvent, start: datetime, end: datetime
+    ) -> list[CalendarEvent]:
+        """The events of the calendar that holds that event of the user's, which take place
+        between two UTC times, as events_between gives them."""
+        return await self._events_in(user, event.calendar, start, end)
+
+    async def _events_in(
+        self, user: User, calendar: str, start: datetime, end: datetime
+    ) -> list[CalendarEvent]:
+        """The events of one of the user's calendars, by the href of its JSON, that take place
+        between two UTC times, one per occurrence, as esn-sabre gives them: expanded, their times
+        in UTC."""
+        found = await self._call(
+            user,
+            "REPORT",
+            "/dav" + calendar,
+            json={
+                "match": {
+                    "start": formatted(start, SABRE_TIME),
+                    "end": formatted(end, SABRE_TIME),
+                }
+            },
+        )
+        return [event for item in _reported(found, "the events") for event in item.split()]
 
     async def find_event(
         self, user: User, uid: str, user_id: str | None = None
@@ -729,7 +963,10 @@ class Calendar:
         items = _reported(found, "the event")
         if not items:
             raise _unavailable("Calendar gave the event in an unexpected form.")
-        return items[0]
+        # esn-sabre searches the calendars the user owns alone, which the service does not take
+        # for granted of every version of it: it keeps those it lists as theirs, as for the list
+        owned = await self._calendars(user, user_id)
+        return next((item for item in items if item.calendar in owned), None)
 
     async def add_event(
         self, user: User, uid: str, jcal: list[Any], user_id: str | None = None

@@ -139,6 +139,7 @@ async def test_without_applications_set_calendar_is_published(
     assert operation_ids(document) == {
         "read_freebusy",
         "list_calendar_events",
+        "read_calendar_event",
         "accept_invitation",
         "decline_invitation",
         "create_event",
