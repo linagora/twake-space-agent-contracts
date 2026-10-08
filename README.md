@@ -35,8 +35,8 @@ Before an assistant first reads in an application, and before it first writes th
       "fr": "voir tes créneaux libres et occupés et lire tes événements, privés compris, dans tes agendas"
     },
     "write": {
-      "en": "accept the invitations you received, which tells their organizer, and add events to your calendar, with nobody invited",
-      "fr": "accepter les invitations que tu as reçues, ce qui prévient leur organisateur, et ajouter des événements à ton agenda, sans y inviter personne"
+      "en": "accept or decline the invitations you received, even for a whole series, which tells their organizer, and add events to your calendar, with nobody invited",
+      "fr": "accepter ou refuser les invitations que tu as reçues, même pour toute une série, ce qui prévient leur organisateur, et ajouter des événements à ton agenda, sans y inviter personne"
     }
   }
 }
@@ -121,18 +121,33 @@ Accepts, as the user, an invitation the user received: only their own participat
 
 | Operation | Request | Answer |
 |---|---|---|
-| `accept_invitation` | `POST /contracts/v1/calendar/invitations/accept` `{"uid"}` | `{"uid", "partstat": "ACCEPTED"}` |
+| `accept_invitation` | `POST /contracts/v1/calendar/invitations/accept` `{"uid", "series"}` | `{"uid", "partstat": "ACCEPTED"}` |
 
-- `uid` is the UID of the calendar event the invitation is for, which the harness reads in the invitation esn-sabre publishes on RabbitMQ for each invitee, and gives the model with it. It comes in the body, which holds any text iCalendar allows in a UID, slashes included: the gateway routes a path parameter as one segment. The body takes no other field.
+- `uid` is the UID of the calendar event the invitation is for, which the harness reads in the invitation esn-sabre publishes on RabbitMQ for each invitee, and gives the model with it. It comes in the body, which holds any text iCalendar allows in a UID, slashes included: the gateway routes a path parameter as one segment. The body takes no other field than `series`, false by default.
 - The service finds the user's own copy of the event with the JSON `REPORT /dav/calendars/<user id>.json` of esn-sabre on `{"uid"}`, sets `PARTSTAT=ACCEPTED` on the user's `ATTENDEE`, and puts the event back in jCal. esn-sabre then sends the iTIP reply to the organizer.
 - A user who is not invited, as their calendars have no copy of the event, as their copy does not list them as an attendee, or as they organize it, whom Twake Calendar lists among its attendees too, as its chair, is answered `invitation_not_found` exactly as for an unknown UID, before anything else is checked: the contract never reveals that an event exists, and the organizer's assistant cannot accept the meeting the organizer called.
 - Nothing else in the event changes: esn-sabre refuses an attendee who changes what the organizer set.
-- A recurring invitation is refused, since a UID names the whole series and not which of its occurrences the invitation is about: the user answers it in Calendar. So is a cancelled event, which stays in the user's calendar but whose organizer esn-sabre would not tell.
+- A recurring invitation, which repeats or is one occurrence of a series, is refused (`recurring_invitation`) unless `series` is true, since a UID names the whole series and not which of its occurrences the invitation is about. With `series` true, the user answers for the whole series: their participation changes in each occurrence their copy of the event holds, those they answered already included. A single occurrence, the user answers in Calendar. `series` changes nothing for an invitation that does not repeat.
+- A cancelled event is refused too (`invitation_cancelled`): it stays in the user's calendar, but esn-sabre would not tell its organizer. With `series`, so is a series any occurrence of which is cancelled.
 - The side service does not forward `If-Match`, so the write cannot be conditional: it follows the read at once.
-- Agents call it only once the user has said yes to this invitation; approval happens in the conversation for now.
+- Agents call it only once the user has said yes to this invitation, and with `series` only once they said yes to the whole series; approval happens in the conversation for now.
 - It is a low-risk write (`x-twake-risk: low`): the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
-- It tells what it would do ([Previews](#previews)): the event's title, when it takes place and who organizes it, from the user's copy of the event, its times in the user's time zone. That zone is the one Calendar gives (`POST /api/configurations`, `core.datetime`), the deployment's when the user set none; without one the IANA database has, the times are the event's own, its zone named beside them. The digest covers the event as the user would accept it, where it is: a call made after the organizer changed it answers `changed_since_preview`.
+- It tells what it would do ([Previews](#previews)): the event's title, when it takes place and who organizes it, from the user's copy of the event, its times in the user's time zone; for a whole series, that it answers all of it, and when it takes place the first time. That zone is the one Calendar gives (`POST /api/configurations`, `core.datetime`), the deployment's when the user set none; without one the IANA database has, the times are the event's own, its zone named beside them. The digest covers the event as the user would accept it, each of its occurrences, where it is: a call made after the organizer changed it answers `changed_since_preview`.
 - It changed in place in October 2026, before anything used it in production, and stays `calendar.invitation.accept.v1`: it took the id of an invitation stored in the events database, in its path (`POST /contracts/v1/calendar/invitations/{event_id}/accept`), and answered `event_id` too. `invitation_not_in_calendar` and `not_an_attendee`, which it answered then, are `invitation_not_found` now.
+
+### `calendar.invitation.decline.v1`
+
+Declines, as the user, an invitation the user received: only their own participation changes, and Calendar tells the organizer.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `decline_invitation` | `POST /contracts/v1/calendar/invitations/decline` `{"uid", "series"}` | `{"uid", "partstat": "DECLINED"}` |
+
+- It keeps every rule of `accept_invitation`: its body, `series` included, the user not invited answered as for an unknown UID, and the recurring and cancelled invitations it refuses. It sets `PARTSTAT=DECLINED` on the user's `ATTENDEE` instead, and esn-sabre sends the iTIP reply to the organizer.
+- The reply carries no comment from the user: the body takes none. Answering a single occurrence of a series, and a comment to the organizer, come later.
+- Agents call it only once the user has said no to this invitation, and with `series` only once they said no to the whole series.
+- It is a low-risk write (`x-twake-risk: low`), as accepting is: the user's own answer, which the owner's consent to write in Calendar covers without a confirmation each time.
+- It tells what it would do as `accept_invitation` does ([Previews](#previews)). The digest covers the event as the user would decline it, each of its occurrences, where it is: a call made after the organizer changed it answers `changed_since_preview`.
 
 ### `calendar.event.create.v1`
 
@@ -550,7 +565,7 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 
 | Operation | The summary tells | The digest covers |
 |---|---|---|
-| `accept_invitation` | the event's title, when it takes place, in the user's time zone, and who organizes it | the event as the user would accept it |
+| `accept_invitation`, `decline_invitation` | the answer, the event's title, when it takes place, in the user's time zone, and who organizes it; for a whole series, that it answers all of it, and when it takes place the first time | the event as the user would answer it, each of its occurrences |
 | `create_reply_draft` | whom the draft answers, its subject and its text, never sent | the draft as it would be created, but for its text |
 | `move_email`, `archive_email`, `trash_email` | which email, by its subject and senders, goes to which mailbox | the email, where it is, and where it would go |
 | `move_emails`, `archive_emails`, `trash_emails` | how many emails go to which mailbox, ten of them at most by their subject and senders, and how many stay where they are, and why | each email, where it is or that it is not found, and where they would go |
@@ -597,7 +612,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `address_book_not_found` | the user reads no address book with this id: neither their own, nor one shared with them, nor their domain's |
 | 404 | `contact_not_found` | the address book has no contact with this id |
 | 409 | `changed_since_preview` | what the call acts on changed since its owner was shown what it would do: nothing was done |
-| 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series |
+| 409 | `recurring_invitation` | the invitation repeats, or is one occurrence of a series, and the call does not answer for the whole series |
 | 409 | `invitation_cancelled` | the organizer cancelled the event |
 | 409 | `identity_ambiguous` | the Chat account named after the user's email does not list that email |
 | 409 | `room_encrypted` | the room is encrypted, so its messages cannot be read; `room` gives what it shows of itself |
