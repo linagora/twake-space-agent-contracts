@@ -1,5 +1,6 @@
 """calendar.event.read.v1: the events of the user's own calendars, over days of their time zone."""
 
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -11,7 +12,6 @@ from twake_space_agent_contracts.calendar import (
     DATA_NOT_INSTRUCTIONS,
     Calendar,
     CalendarEvent,
-    EventPeriod,
     EventStatus,
     Participation,
 )
@@ -110,6 +110,19 @@ class EventList(BaseModel):
     truncated: bool = Field(description="Whether more events are left out than the list holds.")
 
 
+@dataclass(frozen=True)
+class _Placed:
+    """An occurrence placed in time, from when it starts to when it ends, whole days from midnight
+    to midnight in the zone the days are read in, with what the list gives of it."""
+
+    start: datetime
+    end: datetime
+    takes_time: bool
+    """Whether it takes the user's time, as conflicts count it: neither of whole days, cancelled,
+    nor declined by the user."""
+    listed: ListedEvent
+
+
 def _in_zone(moment: date | datetime, zone: ZoneInfo) -> date | datetime:
     """A time in the zone, with its offset, a floating one read in UTC as Calendar reads it; a
     day as it is."""
@@ -118,12 +131,13 @@ def _in_zone(moment: date | datetime, zone: ZoneInfo) -> date | datetime:
     return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(zone)
 
 
-def _listed(event: CalendarEvent, period: EventPeriod, zone: ZoneInfo, email: str) -> ListedEvent:
+def _placed(event: CalendarEvent, zone: ZoneInfo, email: str) -> _Placed:
+    period = event.period
     recurrence_id, my_partstat = event.recurrence_id, event.participation_of(email)
     organizer = event.organizer[1]
     # Twake Calendar lists the organizer among the attendees, whose answer nobody waits for
     unanswered = my_partstat == "NEEDS-ACTION" and not event.organized_by(email)
-    return ListedEvent(
+    listed = ListedEvent(
         uid=event.uid,
         recurrence_id=_in_zone(recurrence_id.value, zone) if recurrence_id else None,
         start=_in_zone(period.start, zone),
@@ -142,31 +156,29 @@ def _listed(event: CalendarEvent, period: EventPeriod, zone: ZoneInfo, email: st
             description=one_line(event.description, DESCRIPTION_START) or None,
         ),
     )
+    start, end = period.instants(zone)
+    takes_time = not period.all_day and not event.cancelled and my_partstat != "DECLINED"
+    return _Placed(start, end, takes_time, listed)
 
 
-def _takes_time(event: ListedEvent) -> bool:
-    """Whether an occurrence takes the user's time, as conflicts count it."""
-    return not event.all_day and event.status != "CANCELLED" and event.my_partstat != "DECLINED"
-
-
-def _with_conflicts(found: list[tuple[datetime, datetime, ListedEvent]]) -> list[ListedEvent]:
-    """The occurrences, by when they start and end, each with those that overlap it, when both
-    take the user's time."""
+def _with_conflicts(occurrences: list[_Placed]) -> list[ListedEvent]:
+    """What the list gives of the occurrences, each with those that overlap it, when both take the
+    user's time."""
     return [
-        event.model_copy(
+        occurrence.listed.model_copy(
             update={
                 "conflicts": [
-                    Occurrence(uid=other.uid, recurrence_id=other.recurrence_id)
-                    for other_start, other_end, other in found
-                    if other is not event
-                    and _takes_time(event)
-                    and _takes_time(other)
-                    and other_start < end
-                    and start < other_end
+                    Occurrence(uid=other.listed.uid, recurrence_id=other.listed.recurrence_id)
+                    for other in occurrences
+                    if other is not occurrence
+                    and occurrence.takes_time
+                    and other.takes_time
+                    and other.start < occurrence.end
+                    and occurrence.start < other.end
                 ]
             }
         )
-        for start, end, event in found
+        for occurrence in occurrences
     ]
 
 
@@ -206,21 +218,25 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         own_zone = await calendar.own_time_zone(user)
         zone = own_zone or ZoneInfo("UTC")
         start, end = midnight(first_day, zone), midnight(first_day + timedelta(days=days), zone)
-        found = await calendar.events_between(user, start.astimezone(UTC), end.astimezone(UTC))
+        events = await calendar.events_between(user, start.astimezone(UTC), end.astimezone(UTC))
+        occurrences = sorted(
+            (_placed(event, zone, user.email) for event in events),
+            key=lambda occurrence: occurrence.start,
+        )
         # Occurrences without their series come whatever their days
-        within = []
-        for event in found:
-            period = event.period
-            first, last = period.instants(zone)
-            if first < end and last > start:
-                within.append((first, last, _listed(event, period, zone, user.email)))
-        events = _with_conflicts(sorted(within, key=lambda found: found[0]))
+        listed = _with_conflicts(
+            [
+                occurrence
+                for occurrence in occurrences
+                if occurrence.start < end and start < occurrence.end
+            ]
+        )
         return EventList(
             time_zone=own_zone.key if own_zone is not None else None,
             start=start,
             end=end,
-            events=events[:limit],
-            truncated=len(events) > limit,
+            events=listed[:limit],
+            truncated=len(listed) > limit,
         )
 
     return routes
