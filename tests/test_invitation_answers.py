@@ -141,6 +141,56 @@ def day_without_end(mmaudet_partstat: str, retitled_partstat: str) -> list[Any]:
     return series
 
 
+def day_moved_to_9999(mmaudet_partstat: str, retitled_partstat: str) -> list[Any]:
+    """That series, the day the organizer retitled moved to 9999-12-31, the last day datetime
+    holds, without a DTEND, which iCalendar ends in year 10000; the user's participation in
+    each."""
+    series = day_without_end(mmaudet_partstat, retitled_partstat)
+    retitled = series[2][1][1]
+    retitled[:] = [
+        ["dtstart", {}, "date", "9999-12-31"] if prop[0] == "dtstart" else prop for prop in retitled
+    ]
+    return series
+
+
+def lasting(duration: str) -> Callable[[str, str], list[Any]]:
+    """Invitation A as a weekly series in the user's calendar, the occurrence the organizer moved
+    to 18:00 written without a DTEND, lasting that DURATION; by the user's participation in each."""
+
+    def series(mmaudet_partstat: str, moved_partstat: str) -> list[Any]:
+        event = moved_without_end(mmaudet_partstat, moved_partstat)
+        event[2][1][1].append(["duration", {}, "duration", duration])
+        return event
+
+    return series
+
+
+def days_alone_ending_in_year_1(mmaudet_partstat: str, first_partstat: str) -> list[Any]:
+    """The user's copy of the first two days of invitation A as a weekly series of whole days,
+    which the organizer invited them to alone, the first ending on 0001-01-01, whose midnight in
+    Paris is before the first time datetime holds: the user's participation in the second, then in
+    the first."""
+    event = weekly_days(first_partstat, mmaudet_partstat)
+    first = event[2][0][1]
+    first[:] = [
+        ["dtend", {}, "date", "0001-01-01"] if prop[0] == "dtend" else prop
+        for prop in first
+        if prop[0] != "rrule"
+    ]
+    first.append(["recurrence-id", {}, "date", "2026-10-13"])
+    return event
+
+
+def alone_ending_in_year_10000(mmaudet_partstat: str, first_partstat: str) -> list[Any]:
+    """The user's copy of the first two occurrences of invitation A, which the organizer invited
+    them to alone, the first ending on 9999-12-31 at 23:30 in UTC, in year 10000 in Paris: the
+    user's participation in the second, then in the first."""
+    return with_props(
+        occurrences_alone(first_partstat, mmaudet_partstat),
+        dtend=["dtend", {}, "date-time", "9999-12-31T23:30:00Z"],
+    )
+
+
 def in_zone(boundary: FakeBoundary, zone: str | None) -> None:
     """Calendar gives the user that time zone, or, for None, fails to give one."""
     if zone is None:
@@ -561,6 +611,112 @@ async def test_answering_the_whole_series_answers_an_occurrence_not_over(
 
     assert response.status_code == 200, response.text
     assert boundary.calendar.objects[HREF].jcal == series(partstat, partstat)
+
+
+@pytest.mark.parametrize(
+    ("event", "now", "over", "first_time"),
+    [
+        # Not over by any time datetime holds
+        pytest.param(
+            day_moved_to_9999,
+            datetime(2026, 11, 1, tzinfo=UTC),
+            False,
+            "Tuesday 13 October 2026, all day",
+            id="a day on 9999-12-31 without an end",
+        ),
+        pytest.param(
+            lasting("P3000000D"),
+            datetime(2026, 11, 1, tzinfo=UTC),
+            False,
+            "Tuesday 13 October 2026 from 17:00 to 18:00",
+            id="a duration of 3,000,000 days",
+        ),
+        pytest.param(
+            lasting(f"P{'9' * 5000}D"),
+            datetime(2026, 11, 1, tzinfo=UTC),
+            False,
+            "Tuesday 13 October 2026 from 17:00 to 18:00",
+            id="a duration of more digits than Python reads",
+        ),
+        # Shown ending at the last time every zone can show, 9999-12-31 at midnight in UTC
+        pytest.param(
+            alone_ending_in_year_10000,
+            datetime(2026, 10, 15, tzinfo=UTC),
+            False,
+            "from Tuesday 13 October 2026 at 17:00 to Friday 31 December 9999 at 01:00",
+            id="a time late on 9999-12-31 in UTC",
+        ),
+        # Over since before any time datetime holds
+        pytest.param(
+            days_alone_ending_in_year_1,
+            datetime(2026, 10, 8, tzinfo=UTC),
+            True,
+            "Tuesday 13 October 2026, all day",
+            id="days ending on 0001-01-01",
+        ),
+    ],
+)
+@pytest.mark.parametrize(("operation", "partstat", "answered_before"), ANSWERED_BEFORE)
+async def test_an_occurrence_ending_past_the_days_datetime_holds_is_answered_as_any_other(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    operation: str,
+    partstat: str,
+    answered_before: str,
+    event: Callable[[str, str], list[Any]],
+    now: datetime,
+    over: bool,
+    first_time: str,
+) -> None:
+    # An organizer may end an occurrence past year 9999, or before year 1, for a user in Paris: it
+    # is over or not as any other, its end read as the last or first time datetime holds, and the
+    # owner is told when the series takes place the first time
+    clock.wall = now
+    boundary.calendar.objects[HREF] = CalendarObject(
+        MMAUDET_CALENDAR_ID, event("NEEDS-ACTION", answered_before)
+    )
+
+    told, digest = preview_of(await preview(client, operation, UID, "en", series=True))
+    response = await answer(client, operation, UID, allowed_after(digest), series=True)
+
+    assert f", {first_time} the first time, " in told.splitlines()[0]
+    assert response.status_code == 200, response.text
+    assert boundary.calendar.objects[HREF].jcal == event(
+        partstat, answered_before if over else partstat
+    )
+
+
+@pytest.mark.parametrize(
+    ("event", "when"),
+    [
+        pytest.param(
+            with_props(
+                invitation_a(),
+                dtstart=["dtstart", {}, "date", "2026-10-13"],
+                dtend=["dtend", {}, "date", "0001-01-01"],
+            ),
+            "Tuesday 13 October 2026, all day",
+            id="days ending on 0001-01-01",
+        ),
+        pytest.param(
+            with_props(invitation_a(), dtend=["dtend", {}, "date-time", "9999-12-31T23:30:00Z"]),
+            "from Tuesday 13 October 2026 at 17:00 to Friday 31 December 9999 at 01:00",
+            id="a time late on 9999-12-31 in UTC",
+        ),
+    ],
+)
+@pytest.mark.parametrize("operation", OPERATIONS)
+async def test_a_preview_tells_an_invitation_ending_past_the_days_datetime_holds(
+    client: AsyncClient, boundary: FakeBoundary, operation: str, event: list[Any], when: str
+) -> None:
+    # An invitation that does not repeat, for a user in Paris, as the preview tells an occurrence
+    # of a whole series
+    boundary.calendar.objects[HREF] = CalendarObject(MMAUDET_CALENDAR_ID, event)
+
+    told, _ = preview_of(await preview(client, operation, UID, "en"))
+
+    assert f", {when}, " in told.splitlines()[0]
 
 
 @pytest.mark.parametrize(
