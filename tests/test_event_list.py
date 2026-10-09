@@ -1188,3 +1188,13 @@ async def test_an_event_whose_times_the_contract_cannot_read_fails_the_list(
 
     assert response.status_code == 502
     assert response.json()["code"] == "calendar_unavailable"
+
+
+async def test_a_user_without_any_calendar_has_no_event(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.calendar.no_home = True
+
+    answer = await list_events(client, **{"from": "2026-10-09", "days": "1"})
+
+    assert answer["events"] == []

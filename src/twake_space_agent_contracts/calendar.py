@@ -969,9 +969,11 @@ class Calendar:
             user, "GET", f"/dav/calendars/{user_id}.json", params={"personal": "true"}
         )
         try:
-            listed = found["_embedded"]["dav:calendar"] if found else []
+            # A user who never opened Calendar has no calendar yet: esn-sabre then leaves out
+            # _embedded
+            listed = found.get("_embedded", {}).get("dav:calendar", []) if found else []
             hrefs = [calendar["_links"]["self"]["href"] for calendar in listed]
-        except (KeyError, TypeError) as error:
+        except (AttributeError, KeyError, TypeError) as error:
             raise _unavailable("Calendar gave the user's calendars in an unexpected form.") from (
                 error
             )

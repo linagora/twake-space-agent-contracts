@@ -413,6 +413,9 @@ class FakeCalendar:
         rather than expanded with its times in UTC: as esn-sabre is not known to answer, to see
         what the contracts make of what they read but Calendar is not known to write, such as a
         time at an offset from UTC."""
+        self.no_home = False
+        """Whether the user's home lists no calendar at all, without its _embedded: as esn-sabre
+        answers for a user who never opened Calendar."""
         self.subscriptions: dict[str, str] = {}
         """The calendars of others that users subscribe to, by their path in the subscriber's
         home: the path of the calendar each shows."""
@@ -522,6 +525,8 @@ class FakeCalendar:
             return httpx.Response(406)
         if user is None or request.url.path != f"/dav/calendars/{user}.json":
             return httpx.Response(403)
+        if self.no_home:
+            return httpx.Response(200, json={"_links": {"self": {"href": ""}}})
         personal = request.url.params.get("personal")
         calendars = self._own_calendars(user) if personal in (None, "true") else []
         if personal is None:
