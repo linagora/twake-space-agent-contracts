@@ -1,6 +1,6 @@
 """How every contract of Twake Space calls Space, with the owner's API token of Space, and what it
-answers when that token is missing or refused, when Space does not answer, or answers in a form the
-contracts do not know."""
+answers when that token is missing or refused, when Space does not answer, fails a write, or answers
+in a form the contracts do not know."""
 
 from typing import Any
 
@@ -17,11 +17,23 @@ from tests.fakes import (
 )
 
 MMAUDET = space_person("mmaudet")
+BOB = space_person("bob")
+JEANNE = space_person("jmartin")
 SPACE = f"/contracts/v1/space/spaces/{space_uuid('Design')}"
 ITEM = f"{SPACE}/feed/items/{space_uuid('Hello')}"
 FEEDS = "/contracts/v1/space/feed"
 DESIGN = {"space_id": space_uuid("Design")}
 PEOPLE = "/contracts/v1/space/people"
+MEMBERS = f"{SPACE}/members"
+MEMBER = f"{MEMBERS}/{BOB.user_id}"
+# Each write's method, path, query and body
+WRITES = [
+    pytest.param(
+        "POST", MEMBERS, {}, {"usernames": ["jmartin"], "role": "editor"}, id="add_space_members"
+    ),
+    pytest.param("PATCH", MEMBER, {}, {"role": "editor"}, id="update_space_member"),
+    pytest.param("DELETE", MEMBER, {}, None, id="remove_space_member"),
+]
 # Each operation's method, path, query and body
 OPERATIONS = [
     pytest.param("GET", "/contracts/v1/space/spaces", {}, None, id="list_spaces"),
@@ -30,6 +42,7 @@ OPERATIONS = [
     pytest.param("GET", FEEDS, DESIGN, None, id="list_feed_items"),
     pytest.param("GET", FEEDS, {}, None, id="list_feed_items, all spaces"),
     pytest.param("GET", ITEM, {}, None, id="read_feed_item"),
+    *WRITES,
 ]
 PARAMETERS = ("method", "path", "params", "body")
 MISSING_SPACE_TOKEN = {
@@ -43,8 +56,10 @@ MISSING_SPACE_TOKEN = {
 
 @pytest.fixture(autouse=True)
 def design(boundary: FakeBoundary) -> None:
-    """The space SPACE names, with the post ITEM names in its feed."""
-    room = boundary.space.space("Design", {MMAUDET: "admin"})
+    """The space SPACE names, with Bob, whom MEMBER names, among its members, and the post ITEM
+    names in its feed; Jeanne, whom add_space_members adds, is in the organization."""
+    room = boundary.space.space("Design", {MMAUDET: "admin", BOB: "viewer"})
+    boundary.space.people[JEANNE.user_id] = JEANNE
     post = boundary.space.post(room, MMAUDET, "Hello", time="2026-10-06T08:30:00.000Z")
     post.id = space_uuid("Hello")
     boundary.space.posts = {post.id: post}
@@ -89,7 +104,8 @@ async def test_the_owner_is_the_member_their_own_token_names_whoever_the_space_t
 
     assert space.status_code == 200, space.text
     assert [(member["user_id"], member["you"]) for member in space.json()["members"]] == [
-        (MMAUDET.user_id, True)
+        (BOB.user_id, False),
+        (MMAUDET.user_id, True),
     ]
     assert item.status_code == 200, item.text
     assert item.json()["by"]["you"] is True
@@ -198,6 +214,37 @@ async def test_a_token_without_a_scope_the_contract_needs_is_refused_with_its_na
     assert (response.json()["code"], response.json()["scope"]) == ("space_scope_missing", missing)
 
 
+@pytest.mark.parametrize(
+    ("held", "missing"),
+    [
+        pytest.param({"space:read", "feed:read"}, "members:write", id="members:write"),
+        # A member changes once the space is read, to tell whether the user is one of its admins
+        pytest.param({"members:write"}, "space:read", id="space:read"),
+    ],
+)
+@pytest.mark.parametrize(PARAMETERS, WRITES)
+async def test_a_token_without_a_scope_a_write_needs_changes_no_member(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    method: str,
+    path: str,
+    params: dict[str, str],
+    body: Any,
+    held: set[str],
+    missing: str,
+) -> None:
+    # The owner chose whether the token changes members when they made it in Space
+    boundary.space.tokens[MMAUDET_SPACE_TOKEN] = SpaceToken(MMAUDET.user_id, frozenset(held))
+
+    response = await client.request(
+        method, path, params=params, json=body, headers=as_space_owner()
+    )
+
+    assert response.status_code == 403
+    assert (response.json()["code"], response.json()["scope"]) == ("space_scope_missing", missing)
+    assert boundary.space.writes == []
+
+
 async def test_a_space_out_of_the_reach_of_the_token_answers_like_an_unknown_one(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
@@ -266,6 +313,32 @@ async def test_an_answer_of_an_unknown_form_is_a_bad_gateway(
 
     assert response.status_code == 502
     assert response.json()["code"] == "space_unavailable"
+
+
+@pytest.mark.parametrize(
+    "failure", [(500, "internal_error"), (400, "invalid_request")], ids=["failed", "refused"]
+)
+@pytest.mark.parametrize(PARAMETERS, WRITES)
+async def test_a_write_space_fails_or_refuses_for_a_reason_it_does_not_name_is_a_bad_gateway(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    method: str,
+    path: str,
+    params: dict[str, str],
+    body: Any,
+    failure: tuple[int, str],
+) -> None:
+    # The contracts check what Space checks of a write before they send it: a write Space refuses
+    # as invalid tells they no longer agree
+    boundary.space.failing = {method: failure}
+
+    response = await client.request(
+        method, path, params=params, json=body, headers=as_space_owner()
+    )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "space_unavailable"
+    assert response.json()["detail"].startswith(f"Space answered {failure[0]} to {method} /spaces/")
 
 
 @pytest.mark.parametrize(PARAMETERS, OPERATIONS)

@@ -49,7 +49,9 @@ class PersonText(BaseModel):
 
 
 class Person(BaseModel):
-    username: str = Field(description="Who the person is in Space, by which an admin adds them.")
+    username: str = Field(
+        description="Who the person is in Space, by which add_space_members adds them."
+    )
     user_id: str = Field(
         description="Who the person is in Space, as the items of the feeds name who made them."
     )
@@ -95,6 +97,18 @@ def _person(member: Member, *, you: bool) -> Person:
     )
 
 
+async def read_spaces(space: TwakeSpace, owner: SpaceOwner) -> tuple[list[SpaceDetail], bool]:
+    """The user's first MOST_READ spaces by name, with their members, but those the user left, or
+    that were deleted, once Space listed them; and whether the user has more spaces."""
+    summaries = await space.spaces(owner)
+
+    async def detail_of(summary: SpaceSummary) -> SpaceDetail | None:
+        return await space.found_space(owner, summary.space_id)
+
+    found = await for_each(summaries[:MOST_READ], detail_of)
+    return [detail for detail in found if detail is not None], len(summaries) > MOST_READ
+
+
 def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/space", tags=["space.people.read.v1"])
 
@@ -128,16 +142,9 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         if len(words) < 2:
             raise invalid_request("q: Give 2 to 100 characters to find.")
         wanted = _folded(words)
-        summaries = await space.spaces(owner)
-
-        async def detail_of(summary: SpaceSummary) -> SpaceDetail | None:
-            return await space.found_space(owner, summary.space_id)
-
+        details, more = await read_spaces(space, owner)
         found: dict[str, Person] = {}
-        for detail in await for_each(summaries[:MOST_READ], detail_of):
-            # The user left the space once Space listed it, or it was deleted
-            if detail is None:
-                continue
+        for detail in details:
             me = detail.user_id_of(owner.user.email)
             shared = SharedSpaceText(name=line(detail.name, LONGEST_NAME)[0])
             for member in detail.members:
@@ -152,7 +159,7 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         listed = sorted(found.values(), key=lambda person: person.username)
         return People(
             people=listed[:MOST_PEOPLE],
-            truncated=len(listed) > MOST_PEOPLE or len(summaries) > MOST_READ,
+            truncated=len(listed) > MOST_PEOPLE or more,
         )
 
     return routes
