@@ -46,3 +46,14 @@ def web_link(written: str | None, longest: int) -> str | None:
 _ATOM = r"[\w!#$%&'*+/=?^`{|}~-]+"
 _LABEL = r"[^\W_](?:[\w-]{0,61}[^\W_])?"
 EMAIL = re.compile(rf"{_ATOM}(?:\.{_ATOM})*@(?:{_LABEL}\.)+(?:[^\W\d_]{{2,63}}|xn--[a-z0-9-]+)")
+LONGEST_ADDRESS = 320
+"""How long an email address can be, as mail takes one: 64 characters before the @ and 255 after
+it."""
+
+
+def email_address(written: str | None) -> str | None:
+    """An address someone else wrote, passed on when it is an email address alone,
+    LONGEST_ADDRESS characters at most; None for anything else."""
+    if written and len(written) <= LONGEST_ADDRESS and EMAIL.fullmatch(written):
+        return written
+    return None
