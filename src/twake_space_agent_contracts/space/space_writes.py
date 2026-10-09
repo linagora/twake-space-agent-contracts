@@ -26,12 +26,7 @@ from twake_space_agent_contracts.space import (
     UNTRUSTED,
     SpaceId,
 )
-from twake_space_agent_contracts.space.backend import (
-    SpaceOwner,
-    SpaceOwnerDependency,
-    TwakeSpace,
-    not_space_admin,
-)
+from twake_space_agent_contracts.space.backend import SpaceOwner, SpaceOwnerDependency, TwakeSpace
 from twake_space_agent_contracts.space.spaces import LONGEST_DESCRIPTION, ListedSpace, space_text
 from twake_space_agent_contracts.text import seen
 
@@ -223,7 +218,7 @@ def _create(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         preview.check(digest)
         created = await space.create(owner, name, description)
         # A token made for a list of spaces does not reach the one it creates
-        reachable = await space.reaches(owner, created.space_id)
+        reachable = await space.found_space(owner, created.space_id) is not None
         return CreatedSpace(
             space_id=created.space_id,
             url=space.feed_url(created.space_id),
@@ -264,10 +259,8 @@ def _update(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         name = new.name.strip()
         if not name:
             raise invalid_request("name: A space's name cannot be blank.")
-        detail = await space.space(owner, space_id)
         # Space lets its admins alone rename it: refused before the owner is asked
-        if detail.role != "admin":
-            raise not_space_admin(space_id)
+        detail = await space.administered(owner, space_id)
         # What the owner allows: this name given to the space they were shown by its name now
         digest = digest_of(space_id, detail.name, name)
         if preview.asked:

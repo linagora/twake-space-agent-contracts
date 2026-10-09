@@ -507,14 +507,15 @@ class TwakeSpace:
         method: str,
         path: str,
         *,
+        scope: Scope,
         missing: Problem,
         refusals: dict[str, Problem],
         body: Any = None,
     ) -> None:
-        """Has Space take a write on the members of a space: `missing` when what it acts on is
+        """Has Space take a write on a space or its members: `missing` when what it acts on is
         gone, or out of the token's reach, since the contract read it, and each of the `refusals`
         for the error Space names it with, as when the user's role changed meanwhile."""
-        response = await self._call(owner, method, path, scope="members:write", body=body)
+        response = await self._call(owner, method, path, scope=scope, body=body)
         error = _error_of(response)
         if response.status_code == 404 and error == "not_found":
             raise missing
@@ -532,6 +533,7 @@ class TwakeSpace:
             owner,
             "POST",
             f"/spaces/{space_id}/members",
+            scope="members:write",
             missing=space_not_found(space_id),
             # Space's refusal of a user no longer an admin, and ldap-rest's, which Space passes
             # on: a direct member of another role, or a username the organization does not have
@@ -550,6 +552,7 @@ class TwakeSpace:
             owner,
             "PATCH",
             f"/spaces/{space_id}/members/{user_id}",
+            scope="members:write",
             missing=member_not_found(space_id, user_id),
             # Space's refusal of a user no longer an admin, and ldap-rest's, which Space passes
             # on: the last admin of its own the space has
@@ -568,6 +571,7 @@ class TwakeSpace:
             owner,
             "DELETE",
             f"/spaces/{space_id}/members/{user_id}",
+            scope="members:write",
             missing=member_not_found(space_id, user_id),
             # As for a role: Space's refusal of a user no longer an admin, and ldap-rest's of the
             # last admin of its own the space has
@@ -621,26 +625,22 @@ class TwakeSpace:
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Space gave the new space in an unexpected form.") from error
 
-    async def reaches(self, owner: SpaceOwner, space_id: str) -> bool:
-        """Whether the user's API token of Space reaches the space: one made for a list of spaces
-        reaches no other, not even a space it created since."""
-        found = await self._get(owner, f"/spaces/{space_id}", scope="space:read", missing_ok=True)
-        return found is not None
-
     async def rename(self, owner: SpaceOwner, space_id: str, name: str) -> None:
         """Gives the space that name, its tabs left as they are: Space tells its members at once.
         Space lets the admins of the space alone rename it."""
-        path = f"/spaces/{space_id}"
-        response = await self._call(owner, "PATCH", path, scope="space:write", body={"name": name})
-        error = _error_of(response)
-        if response.status_code == 404 and error == "not_found":
-            raise space_not_found(space_id)
-        if response.status_code == 403 and error == "not_space_admin":
-            raise not_space_admin(space_id)
-        if response.status_code == 400:
-            raise _refused("name")
-        if not response.is_success:
-            raise _unavailable(f"Space answered {response.status_code} to PATCH {path}.")
+        await self._write(
+            owner,
+            "PATCH",
+            f"/spaces/{space_id}",
+            scope="space:write",
+            missing=space_not_found(space_id),
+            # Space's refusal of a user no longer an admin, and of a name it counts longer
+            refusals={
+                "not_space_admin": not_space_admin(space_id),
+                "invalid_request": _refused("name"),
+            },
+            body={"name": name},
+        )
 
     async def space(self, owner: SpaceOwner, space_id: str) -> SpaceDetail:
         """The space, if the user is a member of it: Space answers for any other as for an
@@ -649,6 +649,14 @@ class TwakeSpace:
         if found is None:
             raise space_not_found(space_id)
         return found
+
+    async def administered(self, owner: SpaceOwner, space_id: str) -> SpaceDetail:
+        """The space, if the user is one of its admins: Space lets its admins alone rename it and
+        change its members."""
+        detail = await self.space(owner, space_id)
+        if detail.role != "admin":
+            raise not_space_admin(space_id)
+        return detail
 
     async def found_space(self, owner: SpaceOwner, space_id: str) -> SpaceDetail | None:
         """The space; None if the user is not a member of it, or no longer is."""
