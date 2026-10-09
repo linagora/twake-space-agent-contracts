@@ -263,12 +263,13 @@ async def _all_feeds(
     `limit` at most."""
     summaries = await space.spaces(owner)
     read = summaries[:MOST_READ]
-    # The user has the same user id in every space: the first one still theirs tells it
+    # The user has the same user id in every space: the first one that holds them tells it. A
+    # token of the organization reaches the spaces the user is not a member of too
     me = None
     for summary in read:
         detail = await space.found_space(owner, summary.space_id)
-        if detail is not None:
-            me = detail.user_id_of(owner.user.email)
+        me = None if detail is None else detail.user_id_of(owner.user.email)
+        if me is not None:
             break
     # One item more than limit tells whether a feed holds more since then, as far as Space gives
     asked = min(limit + 1, MOST_ITEMS)

@@ -8,9 +8,20 @@ import httpx
 import pytest
 from httpx import AsyncClient, Response
 
-from tests.fakes import FakeBoundary, SpaceRoom, as_space_owner, space_person, space_uuid
+from tests.fakes import (
+    MMAUDET_SPACE_TOKEN,
+    FakeBoundary,
+    SpaceRoom,
+    SpaceToken,
+    as_space_owner,
+    space_person,
+    space_uuid,
+)
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
+# The owner's API token of Space as a token of the organization, which reaches every space, the
+# user's or not, with a role of its own
+TOKEN_OF_THE_ORGANIZATION = {MMAUDET_SPACE_TOKEN: SpaceToken(None, role="viewer")}
 ALICE = space_person("alice", "Alice Martin")
 BOB = space_person("bob")
 DRIVE = "6650a1b2c3d4e5f6a7b8c9d0-drive"
@@ -561,3 +572,22 @@ async def test_a_space_gone_while_the_feeds_are_read_is_left_out(
     response = await client.get(FEEDS, headers=as_space_owner())
 
     assert items_of(response) == [kept[gone].id]
+
+
+async def test_the_users_own_items_are_told_apart_in_all_the_feeds_with_a_token_of_the_organization(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The first space by name may be one the user is not a member of
+    boundary.space.tokens.update(TOKEN_OF_THE_ORGANIZATION)
+    finance = boundary.space.space("Finance", {ALICE: "admin"})
+    roadmap = boundary.space.space("Roadmap", {MMAUDET: "viewer", BOB: "admin"})
+    budget = boundary.space.post(finance, ALICE, "Budget", time="2026-10-06T09:00:00.000Z")
+    mockups = boundary.space.post(roadmap, MMAUDET, "Mockups", time="2026-10-07T09:00:00.000Z")
+
+    response = await client.get(FEEDS, headers=as_space_owner())
+
+    assert response.status_code == 200, response.text
+    assert [(item["item_id"], item["by"]["you"]) for item in response.json()["items"]] == [
+        (mockups.id, True),
+        (budget.id, False),
+    ]
