@@ -21,10 +21,12 @@ SPACE = f"/contracts/v1/space/spaces/{space_uuid('Design')}"
 ITEM = f"{SPACE}/feed/items/{space_uuid('Hello')}"
 FEEDS = "/contracts/v1/space/feed"
 DESIGN = {"space_id": space_uuid("Design")}
+PEOPLE = "/contracts/v1/space/people"
 # Each operation's method, path, query and body
 OPERATIONS = [
     pytest.param("GET", "/contracts/v1/space/spaces", {}, None, id="list_spaces"),
     pytest.param("GET", SPACE, {}, None, id="read_space"),
+    pytest.param("GET", PEOPLE, {"q": "mm"}, None, id="search_space_people"),
     pytest.param("GET", FEEDS, DESIGN, None, id="list_feed_items"),
     pytest.param("GET", FEEDS, {}, None, id="list_feed_items, all spaces"),
     pytest.param("GET", ITEM, {}, None, id="read_feed_item"),
@@ -167,6 +169,7 @@ async def test_a_token_space_refuses_is_named_so(
             "/contracts/v1/space/spaces", {}, {"feed:read"}, "space:read", id="list_spaces"
         ),
         pytest.param(SPACE, {}, {"feed:read"}, "space:read", id="read_space"),
+        pytest.param(PEOPLE, {"q": "mm"}, {"feed:read"}, "space:read", id="search_space_people"),
         pytest.param(FEEDS, DESIGN, {"space:read"}, "feed:read", id="list_feed_items"),
         pytest.param(FEEDS, {}, {"space:read"}, "feed:read", id="list_feed_items, all spaces"),
         pytest.param(ITEM, {}, {"space:read"}, "feed:read", id="read_feed_item"),

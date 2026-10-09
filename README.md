@@ -641,6 +641,16 @@ The Space contracts call the REST API of the Twake Space backend 0.1.18, at `SPA
 - `read_space` gives the members by username, the people of its linked groups among them, each with their strongest role, the groups linked to the space, and the tabs the space shows (`apps`). `you` marks the one member who has the user's email, or nobody when no member has it, or several do. Each of its apps links one of its own to the space: its project in Tasks, which `open_boards` gives as `project_id`, its room in Chat, as the chat contracts take it, its shared mailbox, its calendar and its files; null while the app prepares it, or when the deployment has no such app.
 - `GET /spaces`, then `GET /spaces/{id}`.
 
+### `space.people.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `search_space_people` | `GET /contracts/v1/space/people?q=…` | `{"people": [{"username", "user_id", "email", "you", "spaces": [{"space_id", "role", "untrusted": {"name"}}], "untrusted": {"display_name"}}], "truncated"}`, by username |
+
+- `q` takes 2 to 100 characters, on one line and without what a reader does not see. The contract finds the members of the user's first 50 spaces by name whose username, email or name holds it, whatever its case and accents: each person once, the user too, whom `you` marks, with the spaces they share with the user, by name, and their role there. The list holds 20 people at most, `truncated` telling that more were found, or that the user has more than 50 spaces.
+- Space lets no API token search the directory of the organization: `GET /organization/members` takes a session alone. Someone who shares no space with the user is not found, and the agent asks the user for their username.
+- `GET /spaces`, then `GET /spaces/{id}` of each of the first 50, five at a time at most. A space the user left, or that was deleted, while they are read is left out.
+
 ### `space.feed.read.v1`
 
 The feed of a space, its Fil, shows a card per object of the space's apps, such as a file, an event, a task or an email, and the posts its members write, each with the reactions of its members.
