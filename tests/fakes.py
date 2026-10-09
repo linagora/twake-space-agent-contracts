@@ -3297,14 +3297,11 @@ class FakeSpace:
         return httpx.Response(200, json=shown)
 
     def _create(self, token: SpaceToken, request: httpx.Request) -> httpx.Response:
-        """A space of the token's account, as POST /spaces creates it: its creator its only
-        member, as admin, and every tab unless the body picks some."""
+        """A space of the token's account, as POST /spaces creates it without tabs picked: its
+        creator its only member, as admin, and every tab."""
         body = json.loads(request.content or b"null")
         if not isinstance(body, dict) or not (
-            _space_name(body.get("name"))
-            and _space_description(body.get("description", ""))
-            and _space_color(body.get("color"))
-            and _space_tabs(body.get("apps", []), "feed")
+            _space_name(body.get("name")) and _space_description(body.get("description", ""))
         ):
             return _space_refusal(400, "invalid_request")
         creator = None if token.account is None else self.people.get(token.account)
@@ -3316,20 +3313,15 @@ class FakeSpace:
             body["name"].strip(),
             {creator.user_id: SpaceMembership(creator, "admin")},
             description=body.get("description", "").strip(),
-            apps=[app for app in body.get("apps", SPACE_APPS) if app != "feed"],
         )
         self.spaces[room.id] = room
         return httpx.Response(201, json={"id": room.id, "name": room.name, "role": "admin"})
 
     def _rename(self, room_id: str, token: SpaceToken, request: httpx.Request) -> httpx.Response:
-        """A space renamed, or given other tabs, as PATCH /spaces/:id does: once its body is
-        checked, by an admin of the space alone."""
+        """A space renamed, as PATCH /spaces/:id does with a name: once the name is checked, by an
+        admin of the space alone."""
         body = json.loads(request.content or b"null")
-        if not isinstance(body, dict) or not (
-            ("name" in body or "apps" in body)
-            and ("name" not in body or _space_name(body["name"]))
-            and ("apps" not in body or _space_tabs(body["apps"]))
-        ):
+        if not isinstance(body, dict) or not _space_name(body.get("name")):
             return _space_refusal(400, "invalid_request")
         reached = self._reached(room_id, token)
         if reached is None:
@@ -3338,10 +3330,7 @@ class FakeSpace:
         if role != "admin":
             return _space_refusal(403, "not_space_admin")
         self.writes.append((request.method, request.url.path, body))
-        if "name" in body:
-            room.name = body["name"].strip()
-        if "apps" in body:
-            room.apps = list(dict.fromkeys(body["apps"]))
+        room.name = body["name"].strip()
         return httpx.Response(204)
 
     def _reached(self, room_id: str, token: SpaceToken) -> tuple[SpaceRoom, str] | None:
@@ -3657,18 +3646,6 @@ def _space_description(value: Any) -> bool:
     """Whether Space takes the value as the description of a space: text of 1,000 characters at
     most, once trimmed."""
     return isinstance(value, str) and _js_length(value.strip()) <= 1000
-
-
-def _space_color(value: Any) -> bool:
-    """Whether Space takes the value as the color of a space: none, or #rrggbb."""
-    return value is None or (
-        isinstance(value, str) and bool(re.fullmatch(r"#[0-9a-fA-F]{6}", value))
-    )
-
-
-def _space_tabs(value: Any, *more: str) -> bool:
-    """Whether Space takes the value as the tabs of a space, among its apps and `more`."""
-    return isinstance(value, list) and all(tab in (*SPACE_APPS, *more) for tab in value)
 
 
 def _role_of(room: SpaceRoom, token: SpaceToken) -> str | None:
