@@ -83,6 +83,18 @@ def _found(member: Member, wanted: str) -> bool:
     )
 
 
+def _person(member: Member, *, you: bool) -> Person:
+    """A member found, as the contracts give them, before the spaces they share with the user."""
+    return Person(
+        username=member.username,
+        user_id=member.user_id,
+        email=member.email,
+        you=you,
+        spaces=[],
+        untrusted=PersonText(display_name=line(member.display_name, LONGEST_NAME)[0]),
+    )
+
+
 def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/space", tags=["space.people.read.v1"])
 
@@ -121,7 +133,7 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         async def detail_of(summary: SpaceSummary) -> SpaceDetail | None:
             return await space.found_space(owner, summary.space_id)
 
-        found: dict[str, tuple[Member, bool, list[SharedSpace]]] = {}
+        found: dict[str, Person] = {}
         for detail in await for_each(summaries[:MOST_READ], detail_of):
             # The user left the space once Space listed it, or it was deleted
             if detail is None:
@@ -129,24 +141,17 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
             me = detail.user_id_of(owner.user.email)
             shared = SharedSpaceText(name=line(detail.name, LONGEST_NAME)[0])
             for member in detail.members:
-                if _found(member, wanted):
-                    person = found.setdefault(member.user_id, (member, member.user_id == me, []))
-                    person[2].append(
-                        SharedSpace(space_id=detail.space_id, role=member.role, untrusted=shared)
-                    )
-        listed = sorted(found.values(), key=lambda person: person[0].username)
-        return People(
-            people=[
-                Person(
-                    username=member.username,
-                    user_id=member.user_id,
-                    email=member.email,
-                    you=you,
-                    spaces=spaces,
-                    untrusted=PersonText(display_name=line(member.display_name, LONGEST_NAME)[0]),
+                if not _found(member, wanted):
+                    continue
+                person = found.get(member.user_id)
+                if person is None:
+                    person = found[member.user_id] = _person(member, you=member.user_id == me)
+                person.spaces.append(
+                    SharedSpace(space_id=detail.space_id, role=member.role, untrusted=shared)
                 )
-                for member, you, spaces in listed[:MOST_PEOPLE]
-            ],
+        listed = sorted(found.values(), key=lambda person: person.username)
+        return People(
+            people=listed[:MOST_PEOPLE],
             truncated=len(listed) > MOST_PEOPLE or len(summaries) > MOST_READ,
         )
 
