@@ -19,11 +19,14 @@ from tests.fakes import (
 MMAUDET = space_person("mmaudet")
 SPACE = f"/contracts/v1/space/spaces/{space_uuid('Design')}"
 ITEM = f"{SPACE}/feed/items/{space_uuid('Hello')}"
+FEEDS = "/contracts/v1/space/feed"
+DESIGN = {"space_id": space_uuid("Design")}
 # Each operation's method, path, query and body
 OPERATIONS = [
     pytest.param("GET", "/contracts/v1/space/spaces", {}, None, id="list_spaces"),
     pytest.param("GET", SPACE, {}, None, id="read_space"),
-    pytest.param("GET", f"{SPACE}/feed", {}, None, id="list_feed_items"),
+    pytest.param("GET", FEEDS, DESIGN, None, id="list_feed_items"),
+    pytest.param("GET", FEEDS, {}, None, id="list_feed_items, all spaces"),
     pytest.param("GET", ITEM, {}, None, id="read_feed_item"),
 ]
 PARAMETERS = ("method", "path", "params", "body")
@@ -158,24 +161,35 @@ async def test_a_token_space_refuses_is_named_so(
 
 
 @pytest.mark.parametrize(
-    ("path", "held", "missing"),
+    ("path", "params", "held", "missing"),
     [
-        pytest.param("/contracts/v1/space/spaces", {"feed:read"}, "space:read", id="list_spaces"),
-        pytest.param(SPACE, {"feed:read"}, "space:read", id="read_space"),
-        pytest.param(f"{SPACE}/feed", {"space:read"}, "feed:read", id="list_feed_items"),
-        pytest.param(ITEM, {"space:read"}, "feed:read", id="read_feed_item"),
-        # The feed is read once the space is, to tell which member the user is
-        pytest.param(f"{SPACE}/feed", {"feed:read"}, "space:read", id="list_feed_items, space"),
-        pytest.param(ITEM, {"feed:read"}, "space:read", id="read_feed_item, space"),
+        pytest.param(
+            "/contracts/v1/space/spaces", {}, {"feed:read"}, "space:read", id="list_spaces"
+        ),
+        pytest.param(SPACE, {}, {"feed:read"}, "space:read", id="read_space"),
+        pytest.param(FEEDS, DESIGN, {"space:read"}, "feed:read", id="list_feed_items"),
+        pytest.param(FEEDS, {}, {"space:read"}, "feed:read", id="list_feed_items, all spaces"),
+        pytest.param(ITEM, {}, {"space:read"}, "feed:read", id="read_feed_item"),
+        # A feed is read once the spaces are, to tell which member the user is
+        pytest.param(FEEDS, DESIGN, {"feed:read"}, "space:read", id="list_feed_items, space"),
+        pytest.param(
+            FEEDS, {}, {"feed:read"}, "space:read", id="list_feed_items, all spaces, spaces"
+        ),
+        pytest.param(ITEM, {}, {"feed:read"}, "space:read", id="read_feed_item, space"),
     ],
 )
 async def test_a_token_without_a_scope_the_contract_needs_is_refused_with_its_name(
-    client: AsyncClient, boundary: FakeBoundary, path: str, held: set[str], missing: str
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    path: str,
+    params: dict[str, str],
+    held: set[str],
+    missing: str,
 ) -> None:
     # The owner chose what the token may do when they made it in Space
     boundary.space.tokens[MMAUDET_SPACE_TOKEN] = SpaceToken(MMAUDET.user_id, frozenset(held))
 
-    response = await client.get(path, headers=as_space_owner())
+    response = await client.get(path, params=params, headers=as_space_owner())
 
     assert response.status_code == 403
     assert (response.json()["code"], response.json()["scope"]) == ("space_scope_missing", missing)
@@ -192,7 +206,8 @@ async def test_a_space_out_of_the_reach_of_the_token_answers_like_an_unknown_one
 
     listed = await client.get("/contracts/v1/space/spaces", headers=as_space_owner())
     responses = [
-        await client.get(path, headers=as_space_owner()) for path in (SPACE, f"{SPACE}/feed", ITEM)
+        await client.get(path, params=params, headers=as_space_owner())
+        for path, params in ((SPACE, {}), (FEEDS, DESIGN), (ITEM, {}))
     ]
 
     assert [space["space_id"] for space in listed.json()["spaces"]] == [roadmap.id]

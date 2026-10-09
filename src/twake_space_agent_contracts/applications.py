@@ -191,7 +191,10 @@ def _space(context: Context) -> list[APIRouter]:
         raise ValueError(f"PUBLISHED_APPS names space, which needs {' and '.join(missing)}")
     space = TwakeSpace(url, web_url, context.http)
     space_owner = space_owner_dependency(context.caller)
-    return [spaces.router(space, space_owner), feed.router(space, space_owner)]
+    return [
+        spaces.router(space, space_owner),
+        feed.router(space, space_owner, context.now),
+    ]
 
 
 APPLICATIONS = (

@@ -1,7 +1,8 @@
 """The Twake Space backend (0.1.18), called with the API token of Space the user made for their
 assistant: Space acts for the token, and shows it the spaces it reaches."""
 
-from collections.abc import Awaitable, Callable
+import asyncio
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -22,6 +23,28 @@ session."""
 Scope = Literal["space:read", "feed:read"]
 """What an API token of Space may do that the contracts need, by Space's names: read the spaces,
 and read their feeds."""
+
+AT_ONCE = 5
+"""The most calls to Space a contract makes at a time, when it reads several spaces."""
+
+
+async def for_each[Item, Result](
+    items: Iterable[Item], call: Callable[[Item], Coroutine[Any, Any, Result]]
+) -> list[Result]:
+    """What the call gives for each item, in their order, made for AT_ONCE items at a time at
+    most. The first call to fail stops the others, and raises what it raised."""
+    turns = asyncio.Semaphore(AT_ONCE)
+
+    async def take_turn(item: Item) -> Result:
+        async with turns:
+            return await call(item)
+
+    try:
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(take_turn(item)) for item in items]
+    except ExceptionGroup as failed:
+        raise failed.exceptions[0] from None
+    return [task.result() for task in tasks]
 
 
 def _unavailable(detail: str) -> Problem:
@@ -393,9 +416,16 @@ class TwakeSpace:
     async def space(self, owner: SpaceOwner, space_id: str) -> SpaceDetail:
         """The space, if the user is a member of it: Space answers for any other as for an
         unknown one."""
-        found = await self._get(owner, f"/spaces/{space_id}", scope="space:read", missing_ok=True)
+        found = await self.found_space(owner, space_id)
         if found is None:
             raise space_not_found(space_id)
+        return found
+
+    async def found_space(self, owner: SpaceOwner, space_id: str) -> SpaceDetail | None:
+        """The space; None if the user is not a member of it, or no longer is."""
+        found = await self._get(owner, f"/spaces/{space_id}", scope="space:read", missing_ok=True)
+        if found is None:
+            return None
         try:
             return SpaceDetail(
                 space_id=_text(found["id"]),
@@ -432,6 +462,24 @@ class TwakeSpace:
     ) -> tuple[list[FeedItem], str | None]:
         """A page of the feed of the space, newest first, and the cursor of the next one; None
         after the last."""
+        found = await self.found_feed(
+            owner, space_id, category=category, limit=limit, before=before
+        )
+        if found is None:
+            raise space_not_found(space_id)
+        return found
+
+    async def found_feed(
+        self,
+        owner: SpaceOwner,
+        space_id: str,
+        *,
+        category: str | None,
+        limit: int,
+        before: str | None,
+    ) -> tuple[list[FeedItem], str | None] | None:
+        """A page of the feed of the space, as `feed` gives it; None if the user is not a member
+        of the space, or no longer is."""
         params: dict[str, str | int] = {"limit": limit}
         if category is not None:
             params["category"] = category
@@ -449,7 +497,7 @@ class TwakeSpace:
             ),
         )
         if found is None:
-            raise space_not_found(space_id)
+            return None
         try:
             items = [_feed_item(item) for item in found["items"]]
             following = _optional_text(found["next"])
