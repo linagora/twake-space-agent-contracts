@@ -17,7 +17,7 @@ from pydantic.alias_generators import to_camel
 
 from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.problems import Problem
-from twake_space_agent_contracts.text import seen
+from twake_space_agent_contracts.text import paragraphs, seen
 
 CORE = "urn:ietf:params:jmap:core"
 MAIL = "urn:ietf:params:jmap:mail"
@@ -44,7 +44,16 @@ MOST_ADDRESSES = 100
 MAILBOX_PROPERTIES = ["id", "name", "parentId", "role", "totalEmails", "unreadEmails"]
 # What TMail itself tells of an email, then what other people wrote of it
 FACTS = ["id", "threadId", "mailboxIds", "keywords", "receivedAt", "hasAttachment"]
-SUMMARY_PROPERTIES = [*FACTS, "from", "subject", "preview"]
+# The header fields that tell an email sent in bulk, each as Email/get gives its text, null when
+# the email has none: those of a mailing list (RFC 2369 and 2919), Precedence, and Auto-Submitted
+# (RFC 3834)
+LIST_ID = "header:List-Id:asText"
+LIST_UNSUBSCRIBE = "header:List-Unsubscribe:asText"
+PRECEDENCE = "header:Precedence:asText"
+AUTO_SUBMITTED = "header:Auto-Submitted:asText"
+BULK_HEADERS = [LIST_ID, LIST_UNSUBSCRIBE, PRECEDENCE, AUTO_SUBMITTED]
+BULK_PRECEDENCES = {"bulk", "list", "junk"}
+SUMMARY_PROPERTIES = [*FACTS, "from", "to", "subject", "preview", *BULK_HEADERS]
 EMAIL_PROPERTIES = [*FACTS, "from", "to", "cc", "replyTo", "subject", "textBody", "bodyValues"]
 # What a reply needs of the email it answers: whom it was from and to, and the conversation
 REPLY_PROPERTIES = [
@@ -94,10 +103,10 @@ def _line(text: str | None, longest: int = LONGEST_LINE) -> str:
     return " ".join(seen(text or "").split())[:longest]
 
 
-def _paragraphs(text: str) -> str:
-    """Text other people wrote, without what a reader does not see, its blank runs collapsed."""
-    lines = (" ".join(line.split()) for line in seen(text).splitlines())
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+def _header_keyword(text: str | None) -> str:
+    """The keyword a header field gives, such as bulk or no, whatever its case, without the
+    parameters or the comment after it: empty when the email has no such field."""
+    return re.split(r"[;(]", text or "", maxsplit=1)[0].strip().lower()
 
 
 def _utc(time: datetime | None) -> str | None:
@@ -179,6 +188,10 @@ class _Facts(BaseModel):
 class EmailSummary(_Facts):
     """An email of the user, as a list shows it."""
 
+    bulk: bool
+    """Whether it was sent in bulk, such as a newsletter or an automatic notice."""
+    to_me: bool
+    """Whether the user's address is among its recipients in To, not only in Cc."""
     untrusted: EmailSummaryText
 
 
@@ -246,6 +259,22 @@ class _Email(_Jmap):
     message_id: list[str] | None = None
     in_reply_to: list[str] | None = None
     references: list[str] | None = None
+    list_id: str | None = Field(default=None, validation_alias=LIST_ID)
+    list_unsubscribe: str | None = Field(default=None, validation_alias=LIST_UNSUBSCRIBE)
+    precedence: str | None = Field(default=None, validation_alias=PRECEDENCE)
+    auto_submitted: str | None = Field(default=None, validation_alias=AUTO_SUBMITTED)
+
+    @property
+    def bulk(self) -> bool:
+        """Whether the email was sent in bulk: from a mailing list, as List-Id or List-Unsubscribe
+        tells even empty, with a precedence of bulk, list or junk, or submitted automatically, as
+        Auto-Submitted says unless it is no."""
+        return (
+            self.list_id is not None
+            or self.list_unsubscribe is not None
+            or _header_keyword(self.precedence) in BULK_PRECEDENCES
+            or _header_keyword(self.auto_submitted) not in {"", "no"}
+        )
 
     def _facts(self, own: set[str]) -> dict[str, Any]:
         return {
@@ -259,10 +288,13 @@ class _Email(_Jmap):
             "has_attachment": self.has_attachment,
         }
 
-    def summary(self, own: set[str]) -> EmailSummary:
-        """The email as a list shows it, for a user whose own mailboxes are those."""
+    def summary(self, own: set[str], address: str) -> EmailSummary:
+        """The email as a list shows it, for a user of that address, lowercased, whose own
+        mailboxes are those."""
         return EmailSummary(
             **self._facts(own),
+            bulk=self.bulk,
+            to_me=address in _lowered(self.to or []),
             untrusted=EmailSummaryText(
                 sender=_cleaned(self.sender),
                 subject=_line(self.subject),
@@ -278,7 +310,7 @@ class _Email(_Jmap):
             for part in self.text_body
             if part.part_id in self.body_values
         ]
-        body = _paragraphs("\n\n".join(value.value for value in values))
+        body = paragraphs("\n\n".join(value.value for value in values))
         senders, reply_to = _cleaned(self.sender), _cleaned(self.reply_to)
         return Email(
             **self._facts(own),
@@ -801,7 +833,7 @@ class TMail:
         }
         own = {mailbox.id for mailbox in mailboxes}
         summaries = [
-            emails[email_id].summary(own)
+            emails[email_id].summary(own, user.email)
             for email_id in found
             if email_id in emails and _in_own(emails[email_id].mailbox_ids, own)
         ]

@@ -23,7 +23,7 @@ from twake_space_agent_contracts.space.backend import (
     TwakeSpace,
     feed_item_not_found,
 )
-from twake_space_agent_contracts.text import line, paragraphs
+from twake_space_agent_contracts.text import line, paragraphs_within
 
 LONGEST_TITLE = 500
 LONGEST_PREVIEW = 1000
@@ -193,7 +193,7 @@ def feed_item(item: FeedItem, me: str | None) -> SpaceFeedItem:
             for reaction in item.reactions
         ],
         untrusted=ItemText(
-            text=paragraphs(item.body, LONGEST_TEXT)[0],
+            text=paragraphs_within(item.body, LONGEST_TEXT)[0],
             title=line(item.title, LONGEST_TITLE)[0],
             preview=line(item.preview, LONGEST_PREVIEW)[0],
             object_id=line(item.object_id, LONGEST_TITLE)[0],

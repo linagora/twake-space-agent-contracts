@@ -10,7 +10,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from twake_space_agent_contracts.contacts.cards import ContactText, fields_of
 from twake_space_agent_contracts.problems import Problem, invalid_email, invalid_request
-from twake_space_agent_contracts.text import EMAIL, line, paragraphs
+from twake_space_agent_contracts.text import EMAIL, line, paragraphs_within
 
 LONGEST_TEXT = 200
 """The most characters of a name, an organization, a job title or a part of an address."""
@@ -197,7 +197,7 @@ def written(fields: ContactFields, names: Iterable[str]) -> dict[str, Any]:
         elif name == "addresses":
             value = [_address(address) for address in value or []]
         elif name == "note":
-            value = paragraphs(value, LONGEST_NOTE)[0]
+            value = paragraphs_within(value, LONGEST_NOTE)[0]
         elif name == "birthday":
             value = value.isoformat() if value is not None else None
         else:

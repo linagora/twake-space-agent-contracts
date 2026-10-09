@@ -125,7 +125,7 @@ def serve(boundary: FakeBoundary, clock: FakeClock) -> Serve:
 
     def start(settings: Settings) -> AbstractAsyncContextManager[AsyncClient]:
         http = httpx.AsyncClient(transport=httpx.MockTransport(boundary.handle))
-        return serving(create_app(settings, http=http, clock=clock))
+        return serving(create_app(settings, http=http, clock=clock, now=clock.wall_time))
 
     return start
 

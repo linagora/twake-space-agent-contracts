@@ -3,18 +3,22 @@ its contracts belong to, the words the harness names it with, and the routers of
 
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, dataclass
+from datetime import datetime
 
 import httpx
 from fastapi import APIRouter
 
 from twake_space_agent_contracts import (
+    availability,
     boards,
     drive_contents,
     drive_create,
     drive_files,
     event_create,
+    event_reads,
     freebusy,
     invitations,
+    meeting_create,
     projects,
     task_comments,
     task_reads,
@@ -48,6 +52,8 @@ class Context:
     clock: Callable[[], float]
     """Seconds, as time.monotonic counts them, by which what an application keeps for a while
     expires."""
+    now: Callable[[], datetime]
+    """The date and time, aware in UTC, by which an application tells what is over."""
 
 
 @dataclass(frozen=True)
@@ -83,8 +89,11 @@ def _calendar(context: Context) -> list[APIRouter]:
     calendar = Calendar(context.settings.calendar_url, context.http)
     return [
         freebusy.router(calendar, context.caller),
-        invitations.router(calendar, context.caller),
+        event_reads.router(calendar, context.caller),
+        *invitations.routers(calendar, context.caller, context.now),
         event_create.router(calendar, context.caller),
+        availability.router(calendar, context.caller, context.now),
+        meeting_create.router(calendar, context.caller),
     ]
 
 
@@ -188,14 +197,18 @@ APPLICATIONS = (
         domain="calendar",
         name=Words(en="Twake Calendar", fr="Twake Agenda"),
         read=Words(
-            en="see your free and busy times in your calendars",
-            fr="voir tes créneaux libres et occupés dans tes agendas",
+            en="see your free and busy times and read your events, private ones included, in your"
+            " calendars, and find when you and others are free",
+            fr="voir tes créneaux libres et occupés et lire tes événements, privés compris, dans"
+            " tes agendas, et trouver quand toi et d'autres êtes libres",
         ),
         write=Words(
-            en="accept the invitations you received, which tells their organizer, and add events"
-            " to your calendar, with nobody invited",
-            fr="accepter les invitations que tu as reçues, ce qui prévient leur organisateur, et"
-            " ajouter des événements à ton agenda, sans y inviter personne",
+            en="accept or decline the invitations you received, even for a whole series, which"
+            " tells their organizer, add events to your calendar, and call meetings, which emails"
+            " an invitation to everyone invited",
+            fr="accepter ou refuser les invitations reçues, même pour toute une série, ce qui"
+            " prévient leur organisateur, ajouter des événements à ton agenda, et convoquer des"
+            " réunions, ce qui invite chacun par mail",
         ),
         routers=_calendar,
     ),

@@ -21,6 +21,13 @@ def seen(text: str) -> str:
     )
 
 
+def paragraphs(text: str) -> str:
+    """Text other people wrote, line by line, without what a reader does not see, the spaces of
+    each line and its blank runs collapsed."""
+    lines = (" ".join(part.split()) for part in seen(text).splitlines())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def line(text: str | None, longest: int) -> tuple[str | None, bool]:
     """Words someone wrote, as the contracts give them back: on one line, without what a reader
     does not see, cut after `longest` characters; None for none. Whether they were cut comes
@@ -29,13 +36,23 @@ def line(text: str | None, longest: int) -> tuple[str | None, bool]:
     return words[:longest] or None, len(words) > longest
 
 
-def paragraphs(text: str | None, longest: int) -> tuple[str | None, bool]:
-    """Text someone wrote on several lines, as the contracts give it back: without what a reader
-    does not see, the blanks at the end of its lines and its runs of blank lines, cut after
-    `longest` characters; None for none. Whether it was cut comes with it."""
-    lines = (" ".join(part.split()) for part in seen(text or "").splitlines())
-    kept = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+def paragraphs_within(text: str | None, longest: int) -> tuple[str | None, bool]:
+    """Text someone wrote on several lines, as `paragraphs` gives it back, cut after `longest`
+    characters; None for none. Whether it was cut comes with it."""
+    kept = paragraphs(text or "")
     return kept[:longest] or None, len(kept) > longest
+
+
+# A web address: http or https, a host, then anything but spaces
+_WEB_LINK = re.compile(r"https?://[^\s/?#]+(?:[/?#]\S*)?", re.IGNORECASE)
+
+
+def web_link(written: str | None, longest: int) -> str | None:
+    """A link someone else wrote, passed on when it is a web address alone, which a reader sees
+    whole, `longest` characters at most; None for anything else."""
+    if written and len(written) <= longest and seen(written) == written:
+        return written if _WEB_LINK.fullmatch(written) else None
+    return None
 
 
 # An email address: its local part, dot-separated atoms of letters, digits and the signs RFC 5322
