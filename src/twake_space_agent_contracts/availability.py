@@ -1,6 +1,6 @@
 """calendar.availability.read.v1: when the user and some people are all free, by free/busy alone."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, time, timedelta
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -65,6 +65,12 @@ def free_slots(
     return slots, False
 
 
+def _next_half_hour(moment: datetime) -> datetime:
+    """The moment if it falls on the half hour, else the half hour after it."""
+    on = moment.replace(minute=moment.minute // 30 * 30, second=0, microsecond=0)
+    return on if on == moment else on + STEP
+
+
 def person_not_found(email: str) -> Problem:
     return Problem(
         status=404,
@@ -74,7 +80,7 @@ def person_not_found(email: str) -> Problem:
     )
 
 
-def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
+def router(calendar: Calendar, caller: CallerDependency, now: Callable[[], datetime]) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/calendar", tags=["calendar.availability.read.v1"])
 
     @routes.get(
@@ -87,10 +93,11 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
             f"{LONGEST_WINDOW.days} days. It reads free/busy alone, never what anyone's events "
             "are. Slots are within the user's business hours, Monday to Friday 09:00 to 18:00 "
             f"in their time zone, start every half hour, and come earliest first, {MOST_SLOTS} "
-            "at most: truncated says there are more. A person who is not a user of Calendar is "
-            "answered person_not_found. Pass the email of each person once per value. Example, "
-            "for a meeting of 30 minutes with two colleagues in the week of 12 October: "
-            "email=alice@example.com, email=bob@example.com, duration=30, "
+            "at most: truncated says there are more. No slot is in the past: a period that has "
+            "begun is searched from the next half hour, which start gives in the answer. A person "
+            "who is not a user of Calendar is answered person_not_found. Pass the email of each "
+            "person once per value. Example, for a meeting of 30 minutes with two colleagues in "
+            "the week of 12 October: email=alice@example.com, email=bob@example.com, duration=30, "
             "start=2026-10-12T00:00:00+02:00, end=2026-10-16T00:00:00+02:00."
         ),
     )
@@ -132,6 +139,13 @@ def router(calendar: Calendar, caller: CallerDependency) -> APIRouter:
         if end <= start or end - start > LONGEST_WINDOW:
             raise invalid_request(
                 f"The period must end after it starts, and last at most {LONGEST_WINDOW.days} days."
+            )
+        # No slot in the past: from the next half hour at the earliest, where slots start
+        start = max(start, _next_half_hour(now()))
+        if end <= start:
+            raise invalid_request(
+                "The period is over: it must end after the next half hour, "
+                f"{start:%Y-%m-%dT%H:%M:%SZ}."
             )
         for address in email:
             if not EMAIL.fullmatch(address.strip()):

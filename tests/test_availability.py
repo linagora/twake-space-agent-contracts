@@ -1,10 +1,11 @@
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET
-from tests.fakes import ALICE_CALENDAR_ID, MMAUDET_CALENDAR_ID, FakeBoundary, email_of
+from tests.fakes import ALICE_CALENDAR_ID, MMAUDET_CALENDAR_ID, FakeBoundary, FakeClock, email_of
 
 SLOTS = "/contracts/v1/calendar/availability/slots"
 ALICE = email_of("alice")
@@ -110,6 +111,69 @@ async def test_a_slot_cannot_start_before_the_period_or_end_after_it(client: Asy
     answer = await find(client, period, duration=30)
 
     assert starts(answer) == ["10:30", "11:00"]
+
+
+@pytest.mark.parametrize(
+    ("now", "first", "asked_from"),
+    [
+        pytest.param(
+            datetime(2026, 10, 13, 8, 10, tzinfo=UTC), "10:30", "20261013T083000Z", id="10:10"
+        ),
+        pytest.param(
+            datetime(2026, 10, 13, 8, tzinfo=UTC), "10:00", "20261013T080000Z", id="10:00"
+        ),
+        pytest.param(
+            datetime(2026, 10, 13, 8, 30, 0, 1, tzinfo=UTC),
+            "11:00",
+            "20261013T090000Z",
+            id="just after 10:30",
+        ),
+    ],
+)
+async def test_a_period_that_has_begun_is_searched_from_the_next_half_hour(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    now: datetime,
+    first: str,
+    asked_from: str,
+) -> None:
+    # During Tuesday in Paris, two hours ahead of UTC
+    clock.wall = now
+
+    answer = await find(client, duration=30)
+
+    assert starts(answer)[0] == first
+    assert answer["start"] == f"2026-10-13T{first}:00+02:00"
+    assert answer["end"] == "2026-10-14T00:00:00+02:00"
+    assert boundary.calendar.free_busy_requests[-1]["start"] == asked_from
+
+
+@pytest.mark.parametrize(
+    ("now", "period"),
+    [
+        pytest.param(datetime(2026, 10, 14, 8, tzinfo=UTC), TUESDAY, id="over"),
+        pytest.param(
+            datetime(2026, 10, 13, 8, 10, tzinfo=UTC),
+            {"start": "2026-10-13T10:00:00+02:00", "end": "2026-10-13T10:20:00+02:00"},
+            id="ends before the next half hour",
+        ),
+    ],
+)
+async def test_a_period_with_no_time_left_is_refused_without_asking_calendar(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    clock: FakeClock,
+    now: datetime,
+    period: dict[str, str],
+) -> None:
+    clock.wall = now
+
+    response = await client.get(SLOTS, params=asked(period), headers=AS_MMAUDET)
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
+    assert boundary.calendar.free_busy_requests == []
 
 
 async def test_a_person_calendar_does_not_know_is_not_found(client: AsyncClient) -> None:

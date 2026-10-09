@@ -90,7 +90,7 @@ def _calendar(context: Context) -> list[APIRouter]:
         event_reads.router(calendar, context.caller),
         *invitations.routers(calendar, context.caller, context.now),
         event_create.router(calendar, context.caller),
-        availability.router(calendar, context.caller),
+        availability.router(calendar, context.caller, context.now),
         meeting_create.router(calendar, context.caller),
     ]
 
