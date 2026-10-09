@@ -91,7 +91,7 @@ class Output:
 
     def stop(self, words: str) -> None:
         """Ends the text with a note between brackets, which says why the rest of the document is
-        not read: whatever the budget and the time, which have run out."""
+        not read: whatever the budget and the time, which may have run out."""
         self.cut = True
         self._lines.append(f"[{words}]")
 

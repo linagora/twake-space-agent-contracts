@@ -40,8 +40,8 @@ def read(kind: str, content: bytes, budget: int, seconds: float) -> dict[str, ob
     except Refusal as refusal:
         return {"refused": refusal.reason}
     except MemoryError:
-        # Said past this clause, where the error no longer holds through its traceback what the
-        # reading took, which leaves the note the memory to be written
+        # The note is written past this clause: within it, the error still holds, through its
+        # traceback, what the reading took, which may leave no memory for the note
         out_of_memory = True
     except Exception:
         # Whatever a damaged document makes a parser raise, or one crafted against it
@@ -70,12 +70,12 @@ def main() -> None:
     _bound(memory=int(sys.argv[4]), processor=int(sys.argv[5]))
     try:
         answer = read(kind, sys.stdin.buffer.read(), budget, seconds)
+        # In ASCII, which carries any text, a lone surrogate included
+        sys.stdout.write(json.dumps(answer))
     except MemoryError:
         # The document itself takes more than the process may hold, or the text read before the
-        # memory ran out finds none left for its note
-        answer = {"refused": "memory"}
-    # In ASCII, which carries any text, a lone surrogate included
-    sys.stdout.write(json.dumps(answer))
+        # memory ran out finds none left for its note or its JSON
+        sys.stdout.write(json.dumps({"refused": "memory"}))
 
 
 if __name__ == "__main__":
