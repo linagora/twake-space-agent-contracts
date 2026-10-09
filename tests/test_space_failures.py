@@ -181,6 +181,29 @@ async def test_a_token_without_a_scope_the_contract_needs_is_refused_with_its_na
     assert (response.json()["code"], response.json()["scope"]) == ("space_scope_missing", missing)
 
 
+async def test_a_space_out_of_the_reach_of_the_token_answers_like_an_unknown_one(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The owner chose the spaces the token reaches when they made it in Space
+    roadmap = boundary.space.space("Roadmap", {MMAUDET: "viewer"})
+    boundary.space.tokens[MMAUDET_SPACE_TOKEN] = SpaceToken(
+        MMAUDET.user_id, space_ids=frozenset({roadmap.id})
+    )
+
+    listed = await client.get("/contracts/v1/space/spaces", headers=as_space_owner())
+    responses = [
+        await client.get(path, headers=as_space_owner()) for path in (SPACE, f"{SPACE}/feed", ITEM)
+    ]
+
+    assert [space["space_id"] for space in listed.json()["spaces"]] == [roadmap.id]
+    assert [response.status_code for response in responses] == [404, 404, 404]
+    assert {response.json()["code"] for response in responses} == {"space_not_found"}
+    assert responses[0].json()["detail"] == (
+        f"The user is a member of no space {space_uuid('Design')} their API token of Space "
+        "reaches: list_spaces gives the spaces it reaches."
+    )
+
+
 @pytest.mark.parametrize(
     ("failure", "told"), [("down", "Space answered 503"), ("unreachable", "Space did not answer")]
 )

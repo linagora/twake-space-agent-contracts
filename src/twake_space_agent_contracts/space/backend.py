@@ -37,7 +37,8 @@ def space_not_found(space_id: str) -> Problem:
         status=404,
         code="space_not_found",
         title="Space not found",
-        detail=f"The user is a member of no space {space_id}: list_spaces gives theirs.",
+        detail=f"The user is a member of no space {space_id} their API token of Space reaches: "
+        "list_spaces gives the spaces it reaches.",
     )
 
 
