@@ -50,6 +50,9 @@ class Output:
 
     def __init__(self, budget: int, deadline: float) -> None:
         self._lines: list[str] = []
+        self._notes: set[int] = set()
+        """Which of the lines are notes, by their place: what the text says of the document, rather
+        than any of its text."""
         self._size = 0
         self._budget = budget
         self._deadline = deadline
@@ -82,6 +85,7 @@ class Output:
         """Says, on a line of its own between brackets, what the text leaves out of the
         document."""
         self.cut = True
+        self._notes.add(len(self._lines))
         self.add(f"[{words}]")
 
     def tick(self) -> None:
@@ -97,7 +101,8 @@ class Output:
 
     @property
     def empty(self) -> bool:
-        return not any(self._lines)
+        """Whether the text holds none of the document's, its notes aside."""
+        return not any(line for place, line in enumerate(self._lines) if place not in self._notes)
 
     def text(self) -> str:
         return "\n".join(self._lines).strip("\n")

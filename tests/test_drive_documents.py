@@ -3,6 +3,7 @@ some of them crafted to take down whatever reads them."""
 
 import asyncio
 import json
+import sys
 import zipfile
 from collections.abc import Callable
 
@@ -251,6 +252,42 @@ async def test_a_document_that_gives_no_text_in_time_is_not_extractable(
     assert response.status_code == 415, response.text
     assert response.json()["code"] == "content_not_extractable"
     assert "too long" in response.json()["detail"]
+
+
+async def test_a_pdf_that_gives_no_text_but_its_note_in_time_is_not_extractable(
+    client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The line between brackets that says how many of its pages are read, written first, is none
+    # of its text: the time is over once it is written
+    monkeypatch.setattr(documents, "READING_SECONDS", 0)
+    content = pdf(*["Plans"] * (documents.MOST_PAGES + 1))
+    boundary.drive.add(text_file("slow", "Slow.pdf", content=content, mime=PDF))
+
+    response = await read_content(client, "slow")
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"
+    assert "too long" in response.json()["detail"]
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux bounds a process's address space")
+async def test_a_pdf_that_gives_no_text_but_its_note_in_the_memory_is_not_extractable(
+    client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Its first page, of 500,000 operations, takes more than the 160 MiB the service gives, with
+    # all the time it wants: the line between brackets that says how many of its pages are read,
+    # written before, is none of its text
+    monkeypatch.setattr(documents, "PROCESSOR_SECONDS", 60)
+    monkeypatch.setattr(documents, "READING_SECONDS", 60.0)
+    monkeypatch.setattr(documents, "LONGEST_SECONDS", 60.0)
+    content = pdf("\n".join([" "] * 500_000), *["Plans"] * documents.MOST_PAGES)
+    boundary.drive.add(text_file("heavy", "Heavy.pdf", content=content, mime=PDF))
+
+    response = await read_content(client, "heavy")
+
+    assert response.status_code == 415, response.text
+    assert response.json()["code"] == "content_not_extractable"
+    assert "memory" in response.json()["detail"]
 
 
 async def test_a_reading_that_does_not_stop_in_time_is_stopped(
