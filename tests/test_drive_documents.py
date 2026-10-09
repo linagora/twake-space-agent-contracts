@@ -271,6 +271,26 @@ async def test_a_pdf_that_gives_no_text_but_its_note_in_time_is_not_extractable(
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="only Linux bounds a process's address space")
+async def test_a_document_that_takes_too_much_memory_comes_as_far_as_it_was_read(
+    client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Its second page, of 500,000 operations, takes more than the 160 MiB the service gives, with
+    # all the time it wants: as a reading that runs out of time, it gives the text it read
+    monkeypatch.setattr(documents, "PROCESSOR_SECONDS", 60)
+    monkeypatch.setattr(documents, "READING_SECONDS", 60.0)
+    monkeypatch.setattr(documents, "LONGEST_SECONDS", 60.0)
+    content = pdf("Plans", "\n".join([" "] * 500_000))
+    boundary.drive.add(text_file("heavy", "Heavy.pdf", content=content, mime=PDF))
+
+    answer = (await read_content(client, "heavy")).json()
+
+    assert answer["untrusted"]["content"] == (
+        "# Page 1\nPlans\n[The rest of the document was not read: reading it took too much memory.]"
+    )
+    assert answer["truncated"] is True
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux bounds a process's address space")
 async def test_a_pdf_that_gives_no_text_but_its_note_in_the_memory_is_not_extractable(
     client: AsyncClient, boundary: FakeBoundary, monkeypatch: pytest.MonkeyPatch
 ) -> None:
