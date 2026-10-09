@@ -511,8 +511,8 @@ class TwakeSpace:
             "POST",
             f"/spaces/{space_id}/members",
             missing=space_not_found(space_id),
-            # ldap-rest's refusals, which Space passes on: a direct member of another role, or a
-            # username the organization does not have
+            # Space's refusal of a user no longer an admin, and ldap-rest's, which Space passes
+            # on: a direct member of another role, or a username the organization does not have
             refusals={
                 "not_space_admin": not_space_admin(space_id),
                 "MEMBER_EXISTS": member_exists(space_id, []),
@@ -529,7 +529,8 @@ class TwakeSpace:
             "PATCH",
             f"/spaces/{space_id}/members/{user_id}",
             missing=member_not_found(space_id, user_id),
-            # ldap-rest's refusal, which Space passes on
+            # Space's refusal of a user no longer an admin, and ldap-rest's, which Space passes
+            # on: the last admin of its own the space has
             refusals={
                 "not_space_admin": not_space_admin(space_id),
                 "LAST_ADMIN": last_admin(space_id),
@@ -546,6 +547,8 @@ class TwakeSpace:
             "DELETE",
             f"/spaces/{space_id}/members/{user_id}",
             missing=member_not_found(space_id, user_id),
+            # As for a role: Space's refusal of a user no longer an admin, and ldap-rest's of the
+            # last admin of its own the space has
             refusals={
                 "not_space_admin": not_space_admin(space_id),
                 "LAST_ADMIN": last_admin(space_id),

@@ -149,12 +149,14 @@ def _add(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         # with another role: update_space_member changes their role
         if others and not groups:
             raise member_exists(space_id, others)
-        # What the owner allows: the people to add, and those of them the space lists, as what
+        # What the owner allows: the people to add, those of them the space lists, as they are,
+        # and whether it links groups, which the preview tells of
         digest = digest_of(
             space_id,
             new.role,
             sorted(username.lower() for username in added),
             sorted([member.username.lower(), member.email, member.role] for member in listed),
+            groups,
         )
         if preview.asked:
             known = await _known(space, owner, added)
@@ -229,10 +231,11 @@ def _update(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
     ) -> SpaceMember | JSONResponse:
         detail = await _administered(space, owner, space_id)
         member = _member(detail, user_id)
-        # What the owner allows: the member as they are
-        digest = digest_of(space_id, user_id, member.email, member.role)
+        groups = bool(detail.groups)
+        # What the owner allows: the member as they are, and whether the space links groups,
+        # which the preview tells of
+        digest = digest_of(space_id, user_id, member.email, member.role, groups)
         if preview.asked:
-            groups = bool(detail.groups)
             summary = changing_role(member, changed.role, detail.name, groups, preview.language)
             return preview.answer(summary, digest)
         preview.check(digest)
@@ -276,10 +279,11 @@ def _remove(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         detail = await _administered(space, owner, space_id)
         member = _member(detail, user_id)
         removed = space_member(member, detail.user_id_of(owner.user.email))
-        # What the owner allows: the member as they are
-        digest = digest_of(space_id, user_id, member.email, member.role)
+        groups = bool(detail.groups)
+        # What the owner allows: the member as they are, and whether the space links groups,
+        # which the preview tells of
+        digest = digest_of(space_id, user_id, member.email, member.role, groups)
         if preview.asked:
-            groups = bool(detail.groups)
             summary = removing(member, removed.you, detail.name, groups, preview.language)
             return preview.answer(summary, digest)
         preview.check(digest)

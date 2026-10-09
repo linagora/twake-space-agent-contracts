@@ -717,3 +717,26 @@ async def test_the_preview_of_a_removal_warns_that_a_linked_group_keeps_its_peop
         "Sauf si tu en es membre par un groupe lié, et le restes tant que le groupe est lié et que"
         " tu en fais partie."
     )
+
+
+async def test_a_group_linked_since_the_preview_changes_no_member(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # What a group linked to the space does to its members, which each preview tells, is not what
+    # the owner was shown
+    room = design(boundary)
+    body = {"usernames": ["jmartin"], "role": "editor"}
+    _, adding = preview_of(await add(client, room, body, asking_preview("en")))
+    _, changing = preview_of(
+        await change(client, room, BOB.user_id, {"role": "editor"}, asking_preview("en"))
+    )
+    _, removing = preview_of(await remove(client, room, BOB.user_id, asking_preview("en")))
+    room.groups.append(SpaceGroupLink(DESIGNERS, "Designers", "editor", [CAROL]))
+
+    added = await add(client, room, body, allowed_after(adding))
+    changed = await change(client, room, BOB.user_id, {"role": "editor"}, allowed_after(changing))
+    removed = await remove(client, room, BOB.user_id, allowed_after(removing))
+
+    answers = [(answer.status_code, answer.json()["code"]) for answer in (added, changed, removed)]
+    assert answers == [(409, "changed_since_preview")] * 3
+    assert sent(boundary) == []
