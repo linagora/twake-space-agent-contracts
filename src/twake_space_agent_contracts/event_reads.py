@@ -33,7 +33,7 @@ from twake_space_agent_contracts.event_create import (
 from twake_space_agent_contracts.invitations import EXAMPLE_UID
 from twake_space_agent_contracts.previews import one_line
 from twake_space_agent_contracts.problems import Problem
-from twake_space_agent_contracts.text import EMAIL, paragraphs, web_link
+from twake_space_agent_contracts.text import LONGEST_ADDRESS, email_address, paragraphs, web_link
 from twake_space_agent_contracts.zones import bounded, exact, midnight
 
 DESCRIPTION_START = 200
@@ -42,9 +42,6 @@ LONGEST_DAYS = 31
 """The most days a list reads; and how far before and after them, at most, it reads the
 occurrences that may overlap one crossing their edges, so that a long event does not have Calendar
 expand months of others."""
-LONGEST_ADDRESS = 320
-"""How long an email address can be, as mail takes one: 64 characters before the @ and 255 after
-it."""
 LONGEST_NAME = 200
 """How much of an attendee's name an event read in full gives, at most, as mail gives a name."""
 MOST_ATTENDEES = 100
@@ -339,13 +336,6 @@ def _in_zone(moment: date | datetime, zone: ZoneInfo) -> date | datetime:
     return exact(bounded(moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(zone))
 
 
-def _address(written: str | None) -> str | None:
-    """An address someone's calendar wrote, passed on when it is an email address alone."""
-    if written and len(written) <= LONGEST_ADDRESS and EMAIL.fullmatch(written):
-        return written
-    return None
-
-
 def _video_link(written: str | None) -> str | None:
     """A video link someone's calendar wrote, passed on when it is a web address a reader sees
     whole and as it leads: of printable ASCII alone, which leaves out the letters a reader does not
@@ -396,7 +386,7 @@ def _listed_text(event: CalendarEvent) -> ListedEventText:
         title=one_line(event.title, LONGEST_TITLE) or None,
         location=one_line(event.location, LONGEST_LOCATION) or None,
         description=one_line(event.description, DESCRIPTION_START) or None,
-        organizer=_address(event.organizer[1]),
+        organizer=email_address(event.organizer[1]),
     )
 
 
@@ -450,10 +440,10 @@ def _detail(event: CalendarEvent, zone: ZoneInfo, email: str) -> EventDetail:
             title=one_line(event.title, LONGEST_TITLE) or None,
             location=one_line(event.location, LONGEST_LOCATION) or None,
             description=description[:LONGEST_DESCRIPTION] or None,
-            organizer=_address(event.organizer[1]),
+            organizer=email_address(event.organizer[1]),
             attendees=[
                 AttendeeText(
-                    email=_address(attendee.address),
+                    email=email_address(attendee.address),
                     name=one_line(attendee.name, LONGEST_NAME) or None,
                     partstat=attendee.participation,
                 )
