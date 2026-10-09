@@ -28,28 +28,29 @@ def read(kind: str, content: bytes, budget: int, seconds: float) -> dict[str, ob
     """The answer for the document: its text, up to its budget and as far as it is read in these
     seconds and in the memory the process has, or why it has none."""
     output = Output(budget, time.monotonic() + seconds)
-    out_of_memory = False
+    # Why the reading stopped before the end of the document, if it did: the reason it is refused
+    # for when it gave no text, and what the note that ends its text says otherwise
+    stopped: tuple[str, str] | None = None
     try:
         READERS[kind](content, output)
     except Full:
         output.cut = True
     except OutOfTime:
-        if output.empty:
-            return {"refused": "too_long"}
-        output.stop("The rest of the document was not read: reading it took too long.")
+        stopped = ("too_long", "reading it took too long")
     except Refusal as refusal:
         return {"refused": refusal.reason}
     except MemoryError:
         # The note is written past this clause: within it, the error still holds, through its
         # traceback, what the reading took, which may leave no memory for the note
-        out_of_memory = True
+        stopped = ("memory", "reading it took too much memory")
     except Exception:
         # Whatever a damaged document makes a parser raise, or one crafted against it
         return {"refused": "unreadable"}
-    if out_of_memory:
+    if stopped is not None:
+        reason, why = stopped
         if output.empty:
-            return {"refused": "memory"}
-        output.stop("The rest of the document was not read: reading it took too much memory.")
+            return {"refused": reason}
+        output.stop(f"The rest of the document was not read: {why}.")
     return {"text": output.text(), "cut": output.cut}
 
 
@@ -73,8 +74,8 @@ def main() -> None:
         # In ASCII, which carries any text, a lone surrogate included
         sys.stdout.write(json.dumps(answer))
     except MemoryError:
-        # The document itself takes more than the process may hold, or the text read before the
-        # memory ran out finds none left for its note or its JSON
+        # The document itself takes more than the process may hold, or no memory is left to give
+        # the answer: its text, its note or its JSON
         sys.stdout.write(json.dumps({"refused": "memory"}))
 
 
