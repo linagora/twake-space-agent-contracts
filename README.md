@@ -669,6 +669,25 @@ The feed of a space, its Fil, shows a card per object of the space's apps, such 
 - `category` keeps `messages`, the posts and the mail, `files`, `activities`, such as tasks, or `events`, of the calendar. `limit` goes from 1 to 50 and is 20 by default.
 - With `space_id`, and for `read_feed_item`, the contract reads the space first (`GET /spaces/{id}`), for the member who is the user, then `GET /spaces/{id}/feed` or `GET /spaces/{id}/feed/items/{item_id}`. Without, it reads `GET /spaces`, then the first of the spaces still found (`GET /spaces/{id}`), for the member who is the user, and `GET /spaces/{id}/feed` of each.
 
+### `space.space.create.v1` and `space.space.update.v1`
+
+The spaces the user creates, and those they rename where they are an admin.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `create_space` | `POST /contracts/v1/space/spaces` `{"name", "description"}` | 201, `{"space_id", "url", "role", "member_count", "reachable", "untrusted": {"name", "description"}}` |
+| `rename_space` | `PATCH /contracts/v1/space/spaces/{space_id}` `{"name"}` | the space as `list_spaces` gives it, with its new name |
+
+- `create_space` creates a space as Space does for a person (`POST /spaces`): the user is its only member, as its admin, and it has every tab Space gives a space whose creator picked none, chat, tasks, drive, mail and calendar, in Space's own color, the contract sending neither `apps` nor `color`. `name` takes 1 to 255 characters and `description` 1,000 at most, both trimmed. Space counts them in UTF-16 code units, an emoji counting two: a text it refuses answers `invalid_request`, and nothing is created.
+- Space creates a space for the API token of a person's account alone, who becomes its admin: a token of the organization answers `needs_an_account`, and nothing is created.
+- Space takes the name of a space the user has already, and no idempotency key: each call creates a new space.
+- `reachable` tells whether the API token reaches the new space, which the contract reads back (`GET /spaces/{id}`): Space adds no space it creates to a token the user made for a list of spaces, so that no contract can then read or change it.
+- `create_space` reads the user's spaces first (`GET /spaces`), for those of that name, and so needs `space:read` too.
+- `rename_space` reads the space (`GET /spaces/{id}`), then gives it the new name (`PATCH /spaces/{id}` with `{"name"}` alone), its tabs left as they are, and Space tells every member of the space at once. The name the space has already, written the same, writes nothing: Space would rename it all the same, and tell every member. A space where the user is not an admin answers `not_space_admin` before anything is written, and before the owner is asked.
+- An API token of Space without `space:write` answers `space_scope_missing` once either contract writes, and nothing is written; their previews, which only read, do not tell.
+- `create_space` is a low-risk write (`x-twake-risk: low`): a space the user alone is a member of, which the owner's consent to write in Space covers without a confirmation each time. `rename_space` is a high-risk write (`x-twake-risk: high`), which the owner confirms call by call: every member of the space sees the new name.
+- Each tells what it would do ([Previews](#previews)). `create_space` tells the space's name, its description, whole when it fits, how many spaces of that name, whatever its case, the user is a member of already, of those their API token reaches, and that they will be its only member; the digest covers the name, the description and those spaces, so that a call made once one more was created answers `changed_since_preview`. `rename_space` tells the name the space has, the new one, and how many members will see it; the digest covers the space's name as it is, so that a call made once it changed answers `changed_since_preview`.
+
 ### `space.member.add.v1`, `space.member.update.v1` and `space.member.remove.v1`
 
 Add people of the user's organization to one of their spaces, change the role of its members, and remove them, where the user is an admin.
@@ -689,24 +708,6 @@ Add people of the user's organization to one of their spaces, change the role of
 - `POST /spaces/{id}/members` `{"usernames", "role"}`, `PATCH /spaces/{id}/members/{user_id}` `{"role"}` and `DELETE /spaces/{id}/members/{user_id}`, each after `GET /spaces/{id}`, which `add_space_members` reads again after the write, and `update_space_member` after a change. The preview of `add_space_members` reads `GET /spaces`, then `GET /spaces/{id}` of each of the first 50, five at a time at most, to name the people it adds by what the user's spaces tell of them.
 - All three are high-risk writes (`x-twake-risk: high`), which the owner confirms call by call: they change who sees what a space holds, and who manages it.
 - Each tells what it would do ([Previews](#previews)): whom the space takes in and as what, each by their name and their email when one of the user's first 50 spaces lists them, else by the username, to be checked, and who it lists already, left as they are, or made direct members, with the role each has now, in a space that links groups; a member's new role and their former one, what an admin does, and, in a space that links groups, that a member through one too keeps the stronger role; or who leaves the space, the user maybe, and, in a space that links groups, that a member through one stays. The digest covers the people, their membership and whether the space links groups: a call made once one of them changed answers `changed_since_preview`, or `member_not_found` for a member gone, and writes nothing.
-
-### `space.space.create.v1` and `space.space.update.v1`
-
-The spaces the user creates, and those they rename where they are an admin.
-
-| Operation | Request | Answer |
-|---|---|---|
-| `create_space` | `POST /contracts/v1/space/spaces` `{"name", "description"}` | 201, `{"space_id", "url", "role", "member_count", "reachable", "untrusted": {"name", "description"}}` |
-| `rename_space` | `PATCH /contracts/v1/space/spaces/{space_id}` `{"name"}` | the space as `list_spaces` gives it, with its new name |
-
-- `create_space` creates a space as Space does for a person (`POST /spaces`): the user is its only member, as its admin, and it has every tab Space gives a space whose creator picked none, chat, tasks, drive, mail and calendar, in Space's own color, the contract sending neither `apps` nor `color`. `name` takes 1 to 255 characters and `description` 1,000 at most, both trimmed. Space counts them in UTF-16 code units, an emoji counting two: a text it refuses answers `invalid_request`, and nothing is created.
-- Space creates a space for the API token of a person's account alone, who becomes its admin: a token of the organization answers `needs_an_account`, and nothing is created.
-- Space takes the name of a space the user has already, and no idempotency key: each call creates a new space.
-- `reachable` tells whether the API token reaches the new space, which the contract reads back (`GET /spaces/{id}`): Space adds no space it creates to a token the user made for a list of spaces, so that no contract can then read or change it.
-- `create_space` reads the user's spaces first (`GET /spaces`), for those of that name, and so needs `space:read` too.
-- `rename_space` reads the space (`GET /spaces/{id}`), then gives it the new name (`PATCH /spaces/{id}` with `{"name"}` alone), its tabs left as they are, and Space tells every member of the space at once. A space where the user is not an admin answers `not_space_admin` before anything is written, and before the owner is asked.
-- `create_space` is a low-risk write (`x-twake-risk: low`): a space the user alone is a member of, which the owner's consent to write in Space covers without a confirmation each time. `rename_space` is a high-risk write (`x-twake-risk: high`), which the owner confirms call by call: every member of the space sees the new name.
-- Each tells what it would do ([Previews](#previews)). `create_space` tells the space's name, its description, whole when it fits, how many spaces of that name, whatever its case, the user is a member of already, of those their API token reaches, and that they will be its only member; the digest covers the name, the description and those spaces, so that a call made once one more was created answers `changed_since_preview`. `rename_space` tells the name the space has, the new one, and how many members will see it; the digest covers the space's name as it is, so that a call made once it changed answers `changed_since_preview`.
 
 ## Previews
 
