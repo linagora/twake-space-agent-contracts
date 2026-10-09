@@ -118,6 +118,25 @@ async def test_a_page_that_takes_more_memory_to_read_than_given_is_refused_for_m
     assert refused.value.reason == "memory"
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux bounds a process's address space")
+async def test_a_reading_that_runs_out_of_memory_gives_the_text_it_read_and_says_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The page that runs out of the 160 MiB comes after one the reading wrote: as a reading that
+    # runs out of time, it gives that text, cut, and a last line says why the rest is missing
+    monkeypatch.setattr(documents, "MOST_MEMORY", 160 * MIB)
+    monkeypatch.setattr(documents, "PROCESSOR_SECONDS", 60)
+    monkeypatch.setattr(documents, "READING_SECONDS", 60.0)
+    monkeypatch.setattr(documents, "LONGEST_SECONDS", 60.0)
+
+    text = await Reader().read("pdf", pdf("Plans", "\n".join([" "] * 500_000)), 1_000)
+
+    assert text.cut is True
+    assert text.text == (
+        "# Page 1\nPlans\n[The rest of the document was not read: reading it took too much memory.]"
+    )
+
+
 # The service as uvicorn starts it, then whether it may be inspected, which prctl tells
 SERVICE_STARTED = """
 import ctypes, os

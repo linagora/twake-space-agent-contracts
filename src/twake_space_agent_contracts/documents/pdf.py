@@ -34,8 +34,8 @@ def read(content: bytes, output: Output) -> None:
         try:
             lines = _lines(pages[number - 1])
         except MemoryError:
-            # Not a damaged page: its reading takes more memory than the process is given, for
-            # which the process refuses the document
+            # Not a damaged page: its reading takes more memory than the process is given, which
+            # stops the reading there, as when its time runs out
             raise
         except Exception:
             # Whatever a damaged page makes pypdf raise: the other pages may still be read

@@ -26,8 +26,9 @@ READERS: dict[str, Callable[[bytes, Output], None]] = {
 
 def read(kind: str, content: bytes, budget: int, seconds: float) -> dict[str, object]:
     """The answer for the document: its text, up to its budget and as far as it is read in these
-    seconds, or why it has none."""
+    seconds and in the memory the process has, or why it has none."""
     output = Output(budget, time.monotonic() + seconds)
+    out_of_memory = False
     try:
         READERS[kind](content, output)
     except Full:
@@ -39,10 +40,16 @@ def read(kind: str, content: bytes, budget: int, seconds: float) -> dict[str, ob
     except Refusal as refusal:
         return {"refused": refusal.reason}
     except MemoryError:
-        return {"refused": "memory"}
+        # Said past this clause, where the error no longer holds through its traceback what the
+        # reading took, which leaves the note the memory to be written
+        out_of_memory = True
     except Exception:
         # Whatever a damaged document makes a parser raise, or one crafted against it
         return {"refused": "unreadable"}
+    if out_of_memory:
+        if output.empty:
+            return {"refused": "memory"}
+        output.stop("The rest of the document was not read: reading it took too much memory.")
     return {"text": output.text(), "cut": output.cut}
 
 
@@ -64,7 +71,8 @@ def main() -> None:
     try:
         answer = read(kind, sys.stdin.buffer.read(), budget, seconds)
     except MemoryError:
-        # The document itself takes more than the process may hold
+        # The document itself takes more than the process may hold, or the text read before the
+        # memory ran out finds none left for its note
         answer = {"refused": "memory"}
     # In ASCII, which carries any text, a lone surrogate included
     sys.stdout.write(json.dumps(answer))

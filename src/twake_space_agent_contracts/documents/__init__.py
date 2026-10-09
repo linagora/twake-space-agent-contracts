@@ -40,8 +40,8 @@ MOST_PAGES = 200
 Reason = Literal["encrypted", "too_large", "unreadable", "no_text", "too_long", "memory"]
 """Why a document's text cannot be read: it is protected by a password; it holds more than the
 service reads, once uncompressed; it is not the document its type says, or damaged; it holds no
-text, as a PDF of images; its reading gave no text in the time it has; or it took more memory than
-the reading is given."""
+text, as a PDF of images; its reading gave no text in the time it has; or none in the memory it
+has."""
 
 _REASONS: dict[str, Reason] = {reason: reason for reason in get_args(Reason)}
 # The option of Linux's prctl that sets whether the process may be dumped
