@@ -1,30 +1,37 @@
-"""space.feed.read.v1: the feed of a space of the user in Twake Space, its Fil: a card per object of
-its apps, such as a file, an event, a task or an email, the posts of its members, and the reactions
-to both."""
+"""space.feed.read.v1: the feeds of the user's spaces in Twake Space, their Fil: a card per object
+of their apps, such as a file, an event, a task or an email, the posts of their members, and the
+reactions to both."""
 
-from datetime import datetime
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
+from twake_space_agent_contracts.problems import invalid_request
 from twake_space_agent_contracts.space import (
     EXAMPLE_ITEM,
     EXAMPLE_SPACE,
     LONGEST_NAME,
+    MOST_READ,
     NO_POSTING,
     UNTRUSTED,
     ItemId,
     SpaceId,
 )
 from twake_space_agent_contracts.space.backend import (
+    SPACE_ID,
     Actor,
     FeedItem,
     SpaceOwner,
     SpaceOwnerDependency,
+    SpaceSummary,
     TwakeSpace,
     feed_item_not_found,
+    for_each,
 )
+from twake_space_agent_contracts.space.spaces import FEED_URL
 from twake_space_agent_contracts.text import line, paragraphs_within
 
 LONGEST_TITLE = 500
@@ -36,6 +43,10 @@ LONGEST_KEY = 16
 LONGEST_STATE_TEXT = 500
 MOST_STATE_ENTRIES = 20
 DEEPEST_STATE = 3
+MOST_ITEMS = 50
+"""The most items Space gives of a feed at once."""
+RECENT = timedelta(days=7)
+"""How far back the feeds of all the user's spaces go, unless told."""
 
 Category = Literal["messages", "files", "activities", "events"]
 CATEGORIES = (
@@ -125,10 +136,32 @@ class SpaceFeedItem(BaseModel):
     untrusted: ItemText
 
 
+class ItemSpaceText(BaseModel):
+    name: str | None
+
+
+class ItemSpace(BaseModel):
+    """The space whose feed holds an item."""
+
+    space_id: str
+    url: str = Field(description=FEED_URL)
+    untrusted: ItemSpaceText
+
+
+class ListedFeedItem(SpaceFeedItem):
+    space: ItemSpace
+
+
 class SpaceFeed(BaseModel):
-    items: list[SpaceFeedItem]
+    items: list[ListedFeedItem]
     next: str | None = Field(
-        description="The cursor of the older items, to pass as before; null after the last."
+        description="With space_id, the cursor of the older items, to pass as before; null after "
+        "the last, and without space_id."
+    )
+    truncated: bool = Field(
+        description="Without space_id, whether items since since were left out: more than limit, "
+        f"or in the feeds of the spaces after the first {MOST_READ}. False with space_id, where "
+        "next tells of older items."
     )
 
 
@@ -204,25 +237,103 @@ def feed_item(item: FeedItem, me: str | None) -> SpaceFeedItem:
     )
 
 
-def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
+def _item_space(space: TwakeSpace, space_id: str, name: str) -> ItemSpace:
+    """The space whose feed holds an item, as the contracts name it."""
+    return ItemSpace(
+        space_id=space_id,
+        url=space.feed_url(space_id),
+        untrusted=ItemSpaceText(name=line(name, LONGEST_NAME)[0]),
+    )
+
+
+def _listed(item: FeedItem, me: str | None, held_in: ItemSpace) -> ListedFeedItem:
+    """An item of a list of the feeds, with the space whose feed holds it."""
+    return ListedFeedItem(**dict(feed_item(item, me)), space=held_in)
+
+
+async def _all_feeds(
+    space: TwakeSpace,
+    owner: SpaceOwner,
+    *,
+    category: Category | None,
+    limit: int,
+    since: datetime,
+) -> SpaceFeed:
+    """The items of the feeds of the user's first MOST_READ spaces since `since`, newest first,
+    `limit` at most."""
+    summaries = await space.spaces(owner)
+    read = summaries[:MOST_READ]
+    # The user has the same user id in every space: the first one that holds them tells it. A
+    # token of the organization reaches the spaces the user is not a member of too
+    me = None
+    for summary in read:
+        detail = await space.found_space(owner, summary.space_id)
+        me = None if detail is None else detail.user_id_of(owner.user.email)
+        if me is not None:
+            break
+    # One item more than limit tells whether a feed holds more since then, as far as Space gives
+    asked = min(limit + 1, MOST_ITEMS)
+
+    async def page_of(summary: SpaceSummary) -> tuple[list[FeedItem], str | None] | None:
+        return await space.found_feed(
+            owner, summary.space_id, category=category, limit=asked, before=None
+        )
+
+    pages = await for_each(read, page_of)
+    found: list[tuple[FeedItem, ItemSpace]] = []
+    more = len(summaries) > MOST_READ
+    for summary, page in zip(read, pages, strict=True):
+        # The user left the space once Space listed it, or it was deleted
+        if page is None:
+            continue
+        items, following = page
+        held_in = _item_space(space, summary.space_id, summary.name)
+        found += [(item, held_in) for item in items if item.time >= since]
+        # Older items follow the last one Space gave, which is since then too
+        more = more or (following is not None and len(items) > 0 and items[-1].time >= since)
+    # As each feed orders them
+    found.sort(key=lambda pair: (pair[0].time, pair[0].item_id), reverse=True)
+    return SpaceFeed(
+        items=[_listed(item, me, held_in) for item, held_in in found[:limit]],
+        next=None,
+        truncated=more or len(found) > limit,
+    )
+
+
+def router(
+    space: TwakeSpace, owner_of: SpaceOwnerDependency, now: Callable[[], datetime]
+) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/space", tags=["space.feed.read.v1"])
 
     @routes.get(
-        "/spaces/{space_id}/feed",
+        "/feed",
         operation_id="list_feed_items",
-        summary="Read the feed of one of the user's spaces in Twake Space",
+        summary="Read the feeds of the user's spaces in Twake Space",
         description=(
-            "Reads the feed of a space the user you act for is a member of, its Fil, newest first: "
-            "a card per object of the space's apps, such as a file, an event, a task or an email, "
-            "showing its latest activity, and the posts its members wrote, each with its "
-            "reactions. category keeps messages, the posts and the mail, files, activities, such "
-            f"as tasks, or events. {NO_POSTING} {UNTRUSTED} Example, for the latest files of a "
-            f"space: {EXAMPLE_SPACE}, category=files, limit=20."
+            "Reads the feeds of the spaces the user you act for is a member of, their Fil, newest "
+            "first: a card per object of a space's apps, such as a file, an event, a task or an "
+            "email, at the time of the object's first activity and showing its latest, and the "
+            "posts the members wrote, each with its reactions and the space it is in. Without "
+            f"space_id, the feeds of the user's spaces, the first {MOST_READ} by name, merged: "
+            "the items since since, 7 days ago by default, limit at most, truncated telling that "
+            "more were left out. With space_id, the feed of that space alone: when next is not "
+            "null, older items follow: make the same call with before set to it. category keeps "
+            "messages, the posts and the mail, files, activities, such as tasks, or events. "
+            f"{NO_POSTING} {UNTRUSTED} Example, for what is new in the user's spaces: (no "
+            f"parameters); for the latest files of a space: {EXAMPLE_SPACE}, category=files, "
+            "limit=20."
         ),
     )
     async def list_feed_items(
-        space_id: SpaceId,
         owner: Annotated[SpaceOwner, Depends(owner_of)],
+        space_id: Annotated[
+            str | None,
+            Query(
+                pattern=SPACE_ID,
+                description="The space_id of a space, as list_spaces gives it, for its feed "
+                "alone; the feeds of all the user's spaces without it.",
+            ),
+        ] = None,
         category: Annotated[
             Category | None,
             Query(description="messages, files, activities or events; all of them by default."),
@@ -234,15 +345,43 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
             str | None,
             Query(
                 pattern=r"^[A-Za-z0-9_-]{1,200}$",
-                description="The next of the previous answer, for the items older than it.",
+                description="With space_id, the next of the previous answer, for the items "
+                "older than it.",
+            ),
+        ] = None,
+        since: Annotated[
+            AwareDatetime | None,
+            Query(
+                description="An RFC 3339 time with its offset, such as "
+                "2026-10-01T00:00:00+02:00: the items of a time since then. Without space_id, 7 "
+                "days ago by default; with it, the whole feed by default."
             ),
         ] = None,
     ) -> SpaceFeed:
-        me = (await space.space(owner, space_id)).user_id_of(owner.user.email)
+        if space_id is None:
+            # A cursor of Space names an item, not the feed it is in
+            if before is not None:
+                raise invalid_request(
+                    "before: A cursor pages the feed of one space: give the space_id of the call "
+                    "whose next it is."
+                )
+            return await _all_feeds(
+                space, owner, category=category, limit=limit, since=since or now() - RECENT
+            )
+        detail = await space.space(owner, space_id)
         items, following = await space.feed(
             owner, space_id, category=category, limit=limit, before=before
         )
-        return SpaceFeed(items=[feed_item(item, me) for item in items], next=following)
+        if since is not None:
+            recent = [item for item in items if item.time >= since]
+            # The items Space gives next are older still
+            following = following if len(recent) == len(items) else None
+            items = recent
+        me = detail.user_id_of(owner.user.email)
+        held_in = _item_space(space, detail.space_id, detail.name)
+        return SpaceFeed(
+            items=[_listed(item, me, held_in) for item in items], next=following, truncated=False
+        )
 
     @routes.get(
         "/spaces/{space_id}/feed/items/{item_id}",

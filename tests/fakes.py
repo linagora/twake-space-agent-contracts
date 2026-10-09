@@ -3,6 +3,7 @@ the Calendar side service, with the address books of Twake Contacts behind it, T
 the gateway's outbound route, the owner's cozy-stack instance and Twake Tasks. Also the clock the
 token checks read."""
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -3137,6 +3138,22 @@ class FakeSpace:
         self.cards: dict[str, SpaceCard] = {}
         self.posts: dict[str, SpacePost] = {}
         self.reactions: list[SpaceReaction] = []
+        self.at_once = 0
+        """The calls Space is answering."""
+        self.most_at_once = 0
+        """The most calls Space answered at once."""
+
+    async def answer(self, request: httpx.Request) -> httpx.Response:
+        """Space's answer, once the other calls under way had their turn, as a backend that takes
+        time to answer lets them: so that most_at_once tells how many calls the contracts make at a
+        time."""
+        self.at_once += 1
+        self.most_at_once = max(self.most_at_once, self.at_once)
+        try:
+            await asyncio.sleep(0)
+            return self.handle(request)
+        finally:
+            self.at_once -= 1
 
     def card(
         self,
@@ -3478,7 +3495,7 @@ class FakeBoundary:
         self.contacts = self.calendar.contacts
         self.space = FakeSpace()
 
-    def handle(self, request: httpx.Request) -> httpx.Response:
+    async def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.url == SETTINGS.jwks_url:
             return self.issuer.handle(request)
@@ -3493,5 +3510,5 @@ class FakeBoundary:
         if request.url.host == "tasks.test":
             return self.tasks.handle(request)
         if request.url.host == "space.test":
-            return self.space.handle(request)
+            return await self.space.answer(request)
         return httpx.Response(404)

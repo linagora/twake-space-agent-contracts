@@ -35,7 +35,7 @@ from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
-from twake_space_agent_contracts.space import feed, spaces
+from twake_space_agent_contracts.space import feed, people, spaces
 from twake_space_agent_contracts.space.backend import TwakeSpace, space_owner_dependency
 from twake_space_agent_contracts.tasks import Tasks
 
@@ -191,7 +191,11 @@ def _space(context: Context) -> list[APIRouter]:
         raise ValueError(f"PUBLISHED_APPS names space, which needs {' and '.join(missing)}")
     space = TwakeSpace(url, web_url, context.http)
     space_owner = space_owner_dependency(context.caller)
-    return [spaces.router(space, space_owner), feed.router(space, space_owner)]
+    return [
+        spaces.router(space, space_owner),
+        people.router(space, space_owner),
+        feed.router(space, space_owner, context.now),
+    ]
 
 
 APPLICATIONS = (

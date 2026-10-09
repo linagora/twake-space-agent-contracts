@@ -641,19 +641,32 @@ The Space contracts call the REST API of the Twake Space backend 0.1.18, at `SPA
 - `read_space` gives the members by username, the people of its linked groups among them, each with their strongest role, the groups linked to the space, and the tabs the space shows (`apps`). `you` marks the one member who has the user's email, or nobody when no member has it, or several do. Each of its apps links one of its own to the space: its project in Tasks, which `open_boards` gives as `project_id`, its room in Chat, as the chat contracts take it, its shared mailbox, its calendar and its files; null while the app prepares it, or when the deployment has no such app.
 - `GET /spaces`, then `GET /spaces/{id}`.
 
+### `space.people.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `search_space_people` | `GET /contracts/v1/space/people?q=…` | `{"people": [{"username", "user_id", "email", "you", "spaces": [{"space_id", "role", "untrusted": {"name"}}], "untrusted": {"display_name"}}], "truncated"}`, by username |
+
+- `q` takes 2 to 100 characters, on one line and without what a reader does not see. The contract finds the members of the user's first 50 spaces by name whose username, email or name holds it, whatever its case and accents: each person once, the user too, whom `you` marks, with the spaces they share with the user, by name, and their role there. The list holds 20 people at most, `truncated` telling that more were found, or that the user has more than 50 spaces.
+- Space lets no API token search the directory of the organization: `GET /organization/members` takes a session alone. Someone who shares no space with the user is not found, and the agent asks the user for their username.
+- `GET /spaces`, then `GET /spaces/{id}` of each of the first 50, five at a time at most. A space the user left, or that was deleted, while they are read is left out.
+
 ### `space.feed.read.v1`
 
 The feed of a space, its Fil, shows a card per object of the space's apps, such as a file, an event, a task or an email, and the posts its members write, each with the reactions of its members.
 
 | Operation | Request | Answer |
 |---|---|---|
-| `list_feed_items` | `GET /contracts/v1/space/spaces/{space_id}/feed?category=…&limit=…&before=…` | `{"items": [...], "next"}`, newest first |
+| `list_feed_items` | `GET /contracts/v1/space/feed?space_id=…&since=…&category=…&limit=…&before=…` | `{"items": [...], "next", "truncated"}`, newest first |
 | `read_feed_item` | `GET /contracts/v1/space/spaces/{space_id}/feed/items/{item_id}` | the item |
 
-- An item is `{"item_id", "kind", "category", "time", "updated_at", "edited_at", "event_type", "object", "by", "reactions", "untrusted": {"text", "title", "preview", "object_id", "state"}}`. A card shows the latest activity of an app on one object, and keeps the place of its first: `event_type` is the type of its latest event, such as `com.twake.drive.file.updated.v1`, `object` `{"type", "container_kind", "container_id"}` what it is and what of the space's apps it lies in, and its title, preview, id and what its app tells of it come under `untrusted`. A post gives its `text` under `untrusted`, and when it was last edited.
+- An item is `{"item_id", "kind", "category", "time", "updated_at", "edited_at", "event_type", "object", "by", "reactions", "untrusted": {"text", "title", "preview", "object_id", "state"}}`. A card shows the latest activity of an app on one object, and keeps the place of its first: `event_type` is the type of its latest event, such as `com.twake.drive.file.updated.v1`, `object` `{"type", "container_kind", "container_id"}` what it is and what of the space's apps it lies in, and its title, preview, id and what its app tells of it come under `untrusted`. A post gives its `text` under `untrusted`, and when it was last edited. `list_feed_items` gives each item its `space` too, `{"space_id", "url", "untrusted": {"name"}}`, the space whose feed holds it.
 - `by` is `{"kind", "user_id", "you", "untrusted": {"name"}}`: a `user`, with their `user_id` as `read_space` gives it, null for someone outside the space, a `token` of Space an application acts with, or a `deleted_user`; null for an activity no one in particular made. `reactions` are `{"count", "mine", "untrusted": {"key"}}`, in the order they were first added.
-- `category` keeps `messages`, the posts and the mail, `files`, `activities`, such as tasks, or `events`, of the calendar. `limit` goes from 1 to 50 and is 20 by default; `next` is the `before` of the older items, null after the last, and a cursor Space did not write is an invalid request.
-- Each reads the space first (`GET /spaces/{id}`), for the member who is the user, then `GET /spaces/{id}/feed` or `GET /spaces/{id}/feed/items/{item_id}`.
+- Without `space_id`, `list_feed_items` reads the feeds of the user's first 50 spaces by name, five at a time at most, and merges their items since `since`, 7 days ago by default, newest first: `limit` items at most, `truncated` telling that it left out items since then, beyond `limit` or in the feeds of the spaces after the first 50. A space the user left, or that was deleted, while the feeds are read is left out. `next` is null, and a `before` is an invalid request.
+- With `space_id`, it reads the feed of that space page by page: `next` is the `before` of the older items, null after the last, and a cursor Space did not write is an invalid request. `since`, when given, keeps the items since then, and `next` is null once a page reaches before it. `truncated` is false.
+- `since` is an RFC 3339 time with its offset, such as `2026-10-01T00:00:00+02:00`; one without is an invalid request. A card keeps the place and the `time` of its object's first event, which `since` bounds: the card of an older object that an app changed since stays out, further down the feed.
+- `category` keeps `messages`, the posts and the mail, `files`, `activities`, such as tasks, or `events`, of the calendar. `limit` goes from 1 to 50 and is 20 by default.
+- With `space_id`, and for `read_feed_item`, the contract reads the space first (`GET /spaces/{id}`), for the member who is the user, then `GET /spaces/{id}/feed` or `GET /spaces/{id}/feed/items/{item_id}`. Without, it reads `GET /spaces`, then the first of the spaces still found (`GET /spaces/{id}`), for the member who is the user, and `GET /spaces/{id}/feed` of each.
 
 ## Previews
 

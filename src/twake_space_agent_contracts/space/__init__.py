@@ -22,6 +22,10 @@ NO_POSTING = (
 LONGEST_NAME = 255
 """The most characters a read gives of the name of a space, a group, a person or a token."""
 
+MOST_READ = 50
+"""The most spaces a contract reads the feeds or the members of: the first by name, as Space lists
+them."""
+
 ROLES = (
     "viewer, who reads the space and reacts; editor, who posts too; admin, who also adds, changes "
     "and removes its members."
