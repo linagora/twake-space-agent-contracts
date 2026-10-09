@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from twake_space_agent_contracts.caller import CallerDependency, User
-from twake_space_agent_contracts.contacts import UNTRUSTED, line
+from twake_space_agent_contracts.contacts import UNTRUSTED
 from twake_space_agent_contracts.contacts.carddav import Book, Contacts, Kind
+from twake_space_agent_contracts.text import line
 
 LONGEST_NAME = 200
 LONGEST_DESCRIPTION = 1000

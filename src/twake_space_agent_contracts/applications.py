@@ -35,6 +35,8 @@ from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
+from twake_space_agent_contracts.space import feed, spaces
+from twake_space_agent_contracts.space.backend import TwakeSpace, space_owner_dependency
 from twake_space_agent_contracts.tasks import Tasks
 
 # An application's entry in x-twake-domains: by level, name included, its words in each language
@@ -177,6 +179,21 @@ def _tasks(context: Context) -> list[APIRouter]:
     ]
 
 
+def _space(context: Context) -> list[APIRouter]:
+    url, web_url = context.settings.space_url, context.settings.space_web_url
+    # A deployment that does not publish Space has no need to know where it is
+    if url is None or web_url is None:
+        missing = [
+            name
+            for name, value in (("SPACE_URL", url), ("SPACE_WEB_URL", web_url))
+            if value is None
+        ]
+        raise ValueError(f"PUBLISHED_APPS names space, which needs {' and '.join(missing)}")
+    space = TwakeSpace(url, web_url, context.http)
+    space_owner = space_owner_dependency(context.caller)
+    return [spaces.router(space, space_owner), feed.router(space, space_owner)]
+
+
 APPLICATIONS = (
     Application(
         domain="calendar",
@@ -266,6 +283,16 @@ APPLICATIONS = (
             fr="créer, modifier et supprimer des contacts dans tes propres carnets d'adresses",
         ),
         routers=_contacts,
+    ),
+    Application(
+        domain="space",
+        name=Words(en="Twake Space", fr="Twake Space"),
+        read=Words(
+            en="list your spaces and their members, and read their feeds",
+            fr="lister tes espaces et leurs membres, et lire leur fil",
+        ),
+        write=None,
+        routers=_space,
     ),
 )
 

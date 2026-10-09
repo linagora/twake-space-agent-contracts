@@ -5,8 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_serializer
 
-from twake_space_agent_contracts.contacts import line, paragraphs
 from twake_space_agent_contracts.contacts.carddav import Card, Kind
+from twake_space_agent_contracts.text import line, paragraphs_within
 
 LONGEST_LINE = 200
 """The most characters a read gives of a name, an organization, a job title or a part of an
@@ -229,7 +229,7 @@ def fields_of(card: list[Any]) -> tuple[ContactText, bool]:
         )
         for prop in _properties(card, "adr")
     ]
-    note, cut = paragraphs(_first(card, "note"), LONGEST_NOTE)
+    note, cut = paragraphs_within(_first(card, "note"), LONGEST_NOTE)
     reading.truncated |= cut
     organizations = _properties(card, "org")
     text = ContactText(

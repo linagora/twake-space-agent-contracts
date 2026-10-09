@@ -288,6 +288,20 @@ def shown_size(text: str) -> int:
     return 2 * plain + 4 * text.count("&") + 3 * (text.count("<") + text.count(">"))
 
 
+def fitted(text: str, room: int) -> str:
+    """Text on one line that takes at most `room` of a summary, cut with an ellipsis when it would
+    take more."""
+    if shown_size(text) <= room:
+        return text
+    kept, spent = [], shown_size("…")
+    for character in text:
+        spent += shown_size(character)
+        if spent > room:
+            break
+        kept.append(character)
+    return "".join(kept).rstrip() + "…"
+
+
 # The line that says how much of a text a summary leaves out, for one character and for more
 _CUT: dict[Language, tuple[str, str]] = {
     "fr": (

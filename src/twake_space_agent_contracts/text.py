@@ -24,8 +24,23 @@ def seen(text: str) -> str:
 def paragraphs(text: str) -> str:
     """Text other people wrote, line by line, without what a reader does not see, the spaces of
     each line and its blank runs collapsed."""
-    lines = (" ".join(line.split()) for line in seen(text).splitlines())
+    lines = (" ".join(part.split()) for part in seen(text).splitlines())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def line(text: str | None, longest: int) -> tuple[str | None, bool]:
+    """Words someone wrote, as the contracts give them back: on one line, without what a reader
+    does not see, cut after `longest` characters; None for none. Whether they were cut comes
+    with them."""
+    words = " ".join(seen(text or "").split())
+    return words[:longest] or None, len(words) > longest
+
+
+def paragraphs_within(text: str | None, longest: int) -> tuple[str | None, bool]:
+    """Text someone wrote on several lines, as `paragraphs` gives it back, cut after `longest`
+    characters; None for none. Whether it was cut comes with it."""
+    kept = paragraphs(text or "")
+    return kept[:longest] or None, len(kept) > longest
 
 
 # A web address: http or https, a host, then anything but spaces

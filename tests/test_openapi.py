@@ -271,6 +271,10 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "create_contact": ["contacts.contact.create.v1"],
         "update_contact": ["contacts.contact.update.v1"],
         "delete_contact": ["contacts.contact.delete.v1"],
+        "list_spaces": ["space.spaces.read.v1"],
+        "read_space": ["space.spaces.read.v1"],
+        "list_feed_items": ["space.feed.read.v1"],
+        "read_feed_item": ["space.feed.read.v1"],
     }
 
 
@@ -288,7 +292,29 @@ async def test_agents_neither_hold_a_token_nor_choose_the_user(client: AsyncClie
         "x-twake-user",
         "x-twake-drive-token",
         "x-twake-drive-instance",
+        "x-twake-space-token",
     }
+
+
+async def test_the_space_contracts_say_the_assistant_drafts_what_the_user_posts(
+    client: AsyncClient,
+) -> None:
+    # Space lets no API token post or react: asked to post, the assistant drafts the text and gives
+    # the link to the feed, where the user posts it
+    document = (await client.get("/openapi.json")).json()
+
+    descriptions = {
+        operation["operationId"]: operation["description"]
+        for _, _, operation in operations_of(document)
+        if operation["tags"][0].startswith("space.")
+    }
+
+    assert descriptions
+    assert [
+        name
+        for name, description in descriptions.items()
+        if not all(words in description for words in ("post or react", "draft the text", "url"))
+    ] == []
 
 
 async def test_list_parameters_are_plain_arrays_the_gateway_can_check(client: AsyncClient) -> None:
@@ -405,6 +431,8 @@ READS_NAMED = {
     ],
     # Who shared which files and folders with the user, beyond the files themselves
     "drive": [("others shared with you", "que d'autres ont partagés avec toi")],
+    # Who else is in the user's spaces, and what their feeds hold, beyond the spaces themselves
+    "space": [("their members", "leurs membres"), ("read their feeds", "lire leur fil")],
     "tasks": [("your projects", "tes projets")],
 }
 

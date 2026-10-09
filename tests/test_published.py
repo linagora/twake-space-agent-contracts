@@ -8,7 +8,16 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET, Serve, operations_of, serving
-from tests.fakes import CHAT_GATEWAY_KEY, ISSUER, SETTINGS, FakeBoundary, as_drive_owner, email_of
+from tests.fakes import (
+    CHAT_GATEWAY_KEY,
+    ISSUER,
+    SETTINGS,
+    FakeBoundary,
+    as_drive_owner,
+    as_space_owner,
+    email_of,
+    space_person,
+)
 from twake_space_agent_contracts.app import create_app_from_env
 from twake_space_agent_contracts.settings import Settings
 
@@ -21,6 +30,9 @@ CHAT_SETTINGS = {
     "MATRIX_SERVER_NAME": "twake.test",
 }
 DRIVE_SETTINGS = ("DRIVE_INSTANCE_DOMAIN", "DRIVE_SCHEME", "DRIVE_PORT")
+# Space's backend and its web app, each with a slash at its end, as an operator may write them
+SPACE_SETTINGS = {"SPACE_URL": "https://space.test/", "SPACE_WEB_URL": "https://space.twake.test/"}
+SPACE_MEMBER = space_person("mmaudet")
 TASKS_OPERATIONS = {
     "open_boards",
     "list_projects",
@@ -59,7 +71,7 @@ def operations_in(document: dict[str, Any], domain: str) -> set[tuple[str, str]]
 @pytest.fixture
 def environment(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     """The environment the image reads, without a database, which nothing it serves reads, nor
-    PUBLISHED_APPS, nor any setting of Chat, Mail, Drive or Tasks."""
+    PUBLISHED_APPS, nor any setting of Chat, Mail, Drive, Tasks or Space."""
     monkeypatch.setenv("OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("CALENDAR_URL", SETTINGS.calendar_url)
     for name in (
@@ -70,6 +82,7 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
         "MAIL_URL",
         *DRIVE_SETTINGS,
         "TASKS_URL",
+        *SPACE_SETTINGS,
     ):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
@@ -365,3 +378,52 @@ def test_tasks_published_without_its_url_stops_the_service_from_starting(
 
     with pytest.raises(ValueError, match="TASKS_URL"):
         create_app_from_env()
+
+
+@pytest.mark.parametrize(
+    "missing", [("SPACE_URL",), ("SPACE_WEB_URL",), ("SPACE_URL", "SPACE_WEB_URL")]
+)
+def test_space_published_without_its_urls_stops_the_service_from_starting(
+    environment: pytest.MonkeyPatch, missing: tuple[str, ...]
+) -> None:
+    # Its tools would otherwise reach the agents, every call of them failing, or linking nowhere
+    environment.setenv("PUBLISHED_APPS", "calendar,space")
+    for name, value in SPACE_SETTINGS.items():
+        if name not in missing:
+            environment.setenv(name, value)
+
+    with pytest.raises(ValueError, match=f"space, which needs {' and '.join(missing)}$"):
+        create_app_from_env()
+
+
+async def test_space_left_unpublished_needs_no_url(environment: pytest.MonkeyPatch) -> None:
+    # A deployment that does not publish Space starts as before, knowing nothing of it
+    environment.setenv("PUBLISHED_APPS", "calendar")
+
+    async with serving(create_app_from_env()) as client:
+        document = await document_of(client)
+
+    assert "space" not in document["x-twake-domains"]
+    assert not {path for path in document["paths"] if path.startswith("/contracts/v1/space/")}
+
+
+async def test_space_published_with_its_urls_is_served(
+    environment: pytest.MonkeyPatch, serve: Serve, boundary: FakeBoundary
+) -> None:
+    # Its backend is reached at SPACE_URL, and the feeds are linked under SPACE_WEB_URL, a slash
+    # at their end or not
+    environment.setenv("PUBLISHED_APPS", "space")
+    for name, value in SPACE_SETTINGS.items():
+        environment.setenv(name, value)
+    design = boundary.space.space("Design", {SPACE_MEMBER: "admin"})
+
+    async with serve(Settings.from_env()) as client:
+        document = await document_of(client)
+        spaces = await client.get("/contracts/v1/space/spaces", headers=as_space_owner())
+
+    assert set(document["x-twake-domains"]) == {"space"}
+    assert spaces.status_code == 200, spaces.text
+    assert boundary.space.requests == [("GET", "/spaces")]
+    assert [space["url"] for space in spaces.json()["spaces"]] == [
+        f"https://space.twake.test/spaces/{design.id}/feed"
+    ]

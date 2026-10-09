@@ -46,6 +46,8 @@ SETTINGS = Settings(
     mail_url="https://tmail.test",
     # Where the users' cozy-stack instances are, one name each under it
     drive_instance_domain="twake.test",
+    space_url="https://space.test",
+    space_web_url="https://space.twake.test",
 )
 SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 KEY_ID = "sig-1"
@@ -106,6 +108,16 @@ def as_drive_owner() -> dict[str, str]:
         "X-Twake-Drive-Token": MMAUDET_DRIVE_TOKEN,
         "X-Twake-Drive-Instance": MMAUDET_INSTANCE,
     }
+
+
+# The API token of Space the owner made for their assistant, which the token broker holds for them
+MMAUDET_SPACE_TOKEN = "tws_api-token-of-mmaudet"
+
+
+def as_space_owner() -> dict[str, str]:
+    """What APISIX sends on a Space contract: the user's token, as on every contract, then the API
+    token of Space that the broker gives."""
+    return as_user(email_of("mmaudet")) | {"X-Twake-Space-Token": MMAUDET_SPACE_TOKEN}
 
 
 class FakeClock:
@@ -2950,6 +2962,507 @@ _CHANGES: dict[str, Callable[[Any], bool]] = {
 }
 
 
+SPACE_APPS = ("chat", "tasks", "drive", "mail", "calendar")
+"""The apps the deployment provides, by the tab each gives a space."""
+SPACE_KINDS = ("drive", "mailbox", "calendar", "matrix_space", "project")
+"""The kind of what each app links to a space, in Space's order."""
+SPACE_ROLES = ("viewer", "editor", "admin")
+
+
+def space_uuid(name: str) -> str:
+    """The UUID Twake Space gives a person, a space or an item of a feed, the same for the same
+    name."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"space:{name}"))
+
+
+@dataclass(frozen=True)
+class SpacePerson:
+    """A person of the organization, as its directory gives them: their user id, the LDAP
+    entryUUID that LemonLDAP-NG gives as uuid, their username, email and display name."""
+
+    user_id: str
+    username: str
+    email: str
+    display_name: str | None = None
+
+
+def space_person(uid: str, display_name: str | None = None) -> SpacePerson:
+    """The person of that uid, by the email of their token."""
+    return SpacePerson(space_uuid(email_of(uid)), uid, email_of(uid), display_name)
+
+
+@dataclass(frozen=True)
+class SpaceMembership:
+    """A person's membership of a space: who they are, and their role there, viewer, editor or
+    admin."""
+
+    person: SpacePerson
+    role: str
+
+
+@dataclass
+class SpaceGroupLink:
+    """A group of the organization linked to a space, whose people are its members with the
+    group's role, which ldap-rest's member routes do not see: only the group's link changes it."""
+
+    group_id: str
+    name: str
+    role: str
+    people: list[SpacePerson] = field(default_factory=list)
+
+
+@dataclass
+class SpaceRoom:
+    """A space, as Twake Space copies it from the directory, with what its creator picked."""
+
+    id: str
+    name: str
+    members: dict[str, SpaceMembership]
+    """Its direct members by user id, whom ldap-rest's member routes change."""
+    description: str = ""
+    created_at: str = "2026-10-01T08:00:00.000Z"
+    apps: list[str] = field(default_factory=lambda: list(SPACE_APPS))
+    """The tabs its creator picked."""
+    resources: dict[str, str | None] = field(default_factory=dict)
+    """The id of what each app linked to it, by kind: project, matrix_space, mailbox, calendar
+    and drive; None while the app still prepares it."""
+    groups: list[SpaceGroupLink] = field(default_factory=list)
+    """The groups linked to it, whose people are members too."""
+
+    def listed(self) -> dict[str, SpaceMembership]:
+        """Its members as Space lists them, by user id: its direct members and the people of its
+        linked groups, each with their strongest role, as ldap-rest resolves it."""
+        listed: dict[str, SpaceMembership] = {}
+        held = [*self.members.values()] + [
+            SpaceMembership(person, group.role) for group in self.groups for person in group.people
+        ]
+        for membership in held:
+            found = listed.get(membership.person.user_id)
+            if found is None or SPACE_ROLES.index(membership.role) > SPACE_ROLES.index(found.role):
+                listed[membership.person.user_id] = membership
+        return listed
+
+
+@dataclass
+class SpaceCard:
+    """A card of a space's feed: the latest activity of an app on one object, which keeps the
+    place of the object's first."""
+
+    id: str
+    space: str
+    category: str
+    """files, events, activities or messages."""
+    type: str
+    """The type of the latest activity's event."""
+    actor: Any
+    """Who made the latest activity, as Space stores them: {"type": "user", "id", "email"}, the id
+    null for someone outside the space, {"type": "token", "id", "name"}, {"type": "deleted_user"},
+    or None for no one in particular."""
+    object: dict[str, Any]
+    preview: str | None
+    state: Any
+    time: str
+    updated_at: str
+
+
+@dataclass
+class SpacePost:
+    """A post a member wrote in a space's feed."""
+
+    id: str
+    space: str
+    author: str | None
+    """The user id of its author; None once their account is deleted."""
+    body: str
+    time: str
+    edited_at: str | None = None
+
+
+@dataclass(frozen=True)
+class SpaceReaction:
+    """A person's reaction to an item of a space's feed."""
+
+    item: str
+    user_id: str
+    key: str
+    created_at: int
+    """The order reactions were added in."""
+
+
+@dataclass(frozen=True)
+class SpaceToken:
+    """An API token of Space, of prefix tws_, as Space keeps it."""
+
+    account: str | None
+    """The user id of the account it acts as, with the account's role in each space the account
+    is a member of; None for a token of the organization, which has a role of its own in every
+    space."""
+    scopes: frozenset[str] = frozenset({"space:read", "feed:read"})
+    """What it may do, by Space's names: by default, read the spaces and their feeds."""
+    space_ids: frozenset[str] | None = None
+    """The spaces it covers, among those it would reach; None for all of them."""
+    role: str | None = None
+    """The role of a token of the organization."""
+
+
+class FakeSpace:
+    """The Twake Space backend 0.1.18, as the contracts call its REST API with an API token of
+    Space.
+
+    Space looks the token up first, then checks that it holds the scope of the route, and only
+    then the route's parameters: a token it does not know answers 401 invalid_token, and one
+    without the scope 403 insufficient_scope, as does any route that takes no token, such as the
+    posts and the reactions, which are a person's own. A token of an account reaches the spaces the
+    account is a member of, with the account's role in each; a token of the organization reaches
+    every space, with its own role; and a token made for a few spaces reaches those alone. Any
+    other space answers 404 {"error": "not_found"}, as an unknown one does.
+
+    A space lists its direct members and the people of its linked groups alike."""
+
+    def __init__(self) -> None:
+        self.spaces: dict[str, SpaceRoom] = {}
+        self.tokens: dict[str, SpaceToken] = {
+            MMAUDET_SPACE_TOKEN: SpaceToken(space_uuid(email_of("mmaudet")))
+        }
+        """The API tokens Space knows, by their value: the one the owner made for their assistant,
+        which reads, unless a test sets others."""
+        self.requests: list[tuple[str, str]] = []
+        """The method and path of each request received."""
+        self.down = False
+        """Whether Space answers 503, as when it cannot look a token up."""
+        self.unreachable = False
+        self.unexpected: object = None
+        """What Space answers every call of a token it takes with, in a form the contracts do not
+        know, if set: JSON of another form, or text."""
+        self.cards: dict[str, SpaceCard] = {}
+        self.posts: dict[str, SpacePost] = {}
+        self.reactions: list[SpaceReaction] = []
+
+    def card(
+        self,
+        room: SpaceRoom,
+        category: str,
+        type: str,
+        *,
+        actor: SpacePerson | dict[str, Any] | None,
+        object: dict[str, Any],
+        time: str,
+        updated_at: str | None = None,
+        preview: str | None = None,
+        state: Any = None,
+    ) -> SpaceCard:
+        """Arranges a card in the feed of the space, by a person, or by an actor as Space stores
+        it."""
+        stored = (
+            {"type": "user", "id": actor.user_id, "email": actor.email}
+            if isinstance(actor, SpacePerson)
+            else actor
+        )
+        card = SpaceCard(
+            space_uuid(f"card {room.id} {object['id']}"),
+            room.id,
+            category,
+            type,
+            stored,
+            object,
+            preview,
+            {} if state is None else state,
+            time,
+            updated_at or time,
+        )
+        self.cards[card.id] = card
+        return card
+
+    def post(
+        self, room: SpaceRoom, author: SpacePerson | None, body: str, *, time: str, **more: Any
+    ) -> SpacePost:
+        """Arranges a post in the feed of the space, by its author, None once deleted."""
+        post = SpacePost(
+            space_uuid(f"post {room.id} {time} {body}"),
+            room.id,
+            author.user_id if author else None,
+            body,
+            time,
+            **more,
+        )
+        self.posts[post.id] = post
+        return post
+
+    def react(self, item: SpaceCard | SpacePost, person: SpacePerson, key: str) -> None:
+        """Arranges a reaction of the person to the item."""
+        self.reactions.append(SpaceReaction(item.id, person.user_id, key, len(self.reactions)))
+
+    def space(self, name: str, members: dict[SpacePerson, str], **more: Any) -> SpaceRoom:
+        """Arranges a space of that name, with its members and their roles, who are people of its
+        organization."""
+        room = SpaceRoom(
+            space_uuid(name),
+            name,
+            {person.user_id: SpaceMembership(person, role) for person, role in members.items()},
+            **more,
+        )
+        self.spaces[room.id] = room
+        return room
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if self.unreachable:
+            raise httpx.ConnectError("Space is unreachable", request=request)
+        path = request.url.path
+        self.requests.append((request.method, path))
+        scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() != "bearer" or not bearer:
+            return _unauthorized(None)
+        if self.down:
+            return _space_refusal(503, "unavailable")
+        token = self.tokens.get(bearer)
+        if token is None:
+            return _unauthorized("invalid_token")
+        scope = _scope_of(request.method, path)
+        if scope is None or scope not in token.scopes:
+            return _insufficient_scope(scope)
+        if isinstance(self.unexpected, str):
+            return httpx.Response(200, text=self.unexpected)
+        if self.unexpected is not None:
+            return httpx.Response(200, json=self.unexpected)
+        if path == "/spaces":
+            return httpx.Response(200, json={"spaces": self._listed(token)})
+        found = re.fullmatch(r"/spaces/([^/]+)(/.*)?", path)
+        reached = self._reached(found[1], token) if found else None
+        if found is None or reached is None:
+            return _space_refusal(404, "not_found")
+        room, role = reached
+        rest = found[2] or ""
+        if rest == "":
+            return httpx.Response(200, json=self._space(room, role))
+        if rest == "/feed":
+            return self._feed(room, request.url.params)
+        item = re.fullmatch(r"/feed/items/([^/]+)", rest)
+        shown = self._item(room, item[1]) if item else None
+        if shown is None:
+            return _space_refusal(404, "not_found")
+        return httpx.Response(200, json=shown)
+
+    def _reached(self, room_id: str, token: SpaceToken) -> tuple[SpaceRoom, str] | None:
+        """The space of that id and the role the token acts with there, if it reaches it."""
+        room = self.spaces.get(room_id)
+        role = None if room is None else _role_of(room, token)
+        return None if room is None or role is None else (room, role)
+
+    def _listed(self, token: SpaceToken) -> list[dict[str, Any]]:
+        """The spaces the token reaches, by name, as GET /spaces gives them."""
+        return [
+            {
+                "id": room.id,
+                "name": room.name,
+                "role": role,
+                "color": None,
+                "description": room.description,
+                "pinnedAt": None,
+                "openedAt": None,
+                "members": [
+                    {
+                        "id": person.user_id,
+                        "username": person.username,
+                        "displayName": person.display_name,
+                        "workplaceFqdn": None,
+                    }
+                    for person in (membership.person for membership in _by_username(room))
+                ],
+            }
+            for room in sorted(self.spaces.values(), key=lambda room: room.name)
+            if (role := _role_of(room, token)) is not None
+        ]
+
+    def _feed(self, room: SpaceRoom, params: httpx.QueryParams) -> httpx.Response:
+        """A page of the feed of the space, newest first, as GET /spaces/:id/feed gives it."""
+        category = params.get("category")
+        limit = params.get("limit", "20")
+        before = _feed_cursor(params["before"]) if "before" in params else None
+        if (
+            category not in (None, "messages", "files", "activities", "events")
+            or not limit.isdigit()
+            or not 1 <= int(limit) <= 50
+            or before is False
+        ):
+            return _space_refusal(400, "invalid_request")
+        rows = [
+            (card.time, card.id)
+            for card in self.cards.values()
+            if card.space == room.id and category in (None, card.category)
+        ]
+        # A post is a message: other categories hold cards only
+        if category in (None, "messages"):
+            rows += [(post.time, post.id) for post in self.posts.values() if post.space == room.id]
+        rows = sorted((row for row in rows if before is None or row < before), reverse=True)
+        shown = rows[: int(limit)]
+        more = len(rows) > int(limit)
+        return httpx.Response(
+            200,
+            json={
+                "items": [self._item(room, item_id) for _, item_id in shown],
+                "next": _feed_cursor_of(*shown[-1]) if more else None,
+            },
+        )
+
+    def _item(self, room: SpaceRoom, item_id: str) -> dict[str, Any] | None:
+        """An item of the feed of the space, as Space serializes it; None for any other."""
+        reactions: dict[str, list[str]] = {}
+        for reaction in sorted(self.reactions, key=lambda reaction: reaction.created_at):
+            if reaction.item == item_id:
+                reactions.setdefault(reaction.key, []).append(reaction.user_id)
+        common = {
+            "id": item_id,
+            "reactions": [{"key": key, "userIds": users} for key, users in reactions.items()],
+        }
+        card = self.cards.get(item_id)
+        if card is not None and card.space == room.id:
+            return common | {
+                "kind": "card",
+                "category": card.category,
+                "time": card.time,
+                "updatedAt": card.updated_at,
+                "type": card.type,
+                "actor": self._named(room, card.actor),
+                "object": {
+                    "type": card.object["type"],
+                    "id": card.object["id"],
+                    "title": card.object["title"],
+                    "container": card.object.get("container"),
+                },
+                "preview": card.preview,
+                "state": card.state,
+            }
+        post = self.posts.get(item_id)
+        if post is not None and post.space == room.id:
+            author = {"type": "user", "id": post.author} if post.author else None
+            return common | {
+                "kind": "post",
+                "category": "messages",
+                "time": post.time,
+                "updatedAt": post.edited_at or post.time,
+                "author": self._named(room, author) or {"type": "deleted_user"},
+                "body": post.body,
+                "editedAt": post.edited_at,
+            }
+        return None
+
+    def _named(self, room: SpaceRoom, actor: Any) -> Any:
+        """An actor as Space gives it: a user by their id and the name the space knows them by,
+        their display name or their username, null for someone outside the space."""
+        if not isinstance(actor, dict) or actor.get("type") != "user":
+            return actor
+        member = room.listed().get(actor.get("id") or "")
+        name = (member.person.display_name or member.person.username) if member else None
+        return {"type": "user", "id": actor.get("id"), "name": name}
+
+    def _space(self, room: SpaceRoom, role: str) -> dict[str, Any]:
+        """A space the token reaches, with the role it acts with there, as GET /spaces/:id gives
+        it."""
+        return {
+            "id": room.id,
+            "name": room.name,
+            "createdAt": room.created_at,
+            "color": None,
+            "description": room.description,
+            "apps": room.apps,
+            "role": role,
+            "pinnedAt": None,
+            "openedAt": None,
+            "chat": True,
+            "mail": True,
+            "homeserverUrl": "https://matrix.twake.test",
+            "banner": None,
+            "members": [_member(membership) for membership in _by_username(room)],
+            "groups": [
+                {"id": group.group_id, "name": group.name, "role": group.role}
+                for group in sorted(room.groups, key=lambda group: group.name)
+            ],
+            # Each kind the deployment provides, with its id once its app linked one
+            "resources": [{"kind": kind, "id": room.resources.get(kind)} for kind in SPACE_KINDS],
+        }
+
+
+def _feed_cursor_of(time: str, item_id: str) -> str:
+    """The cursor of the page that follows an item, as Space writes it."""
+    return base64.urlsafe_b64encode(f"{time}|{item_id}".encode()).decode().rstrip("=")
+
+
+def _feed_cursor(cursor: str) -> tuple[str, str] | Literal[False]:
+    """The time and id of the item a cursor follows; False for a cursor Space did not write."""
+    try:
+        time, item_id = (
+            base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode().split("|")
+        )
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return (time, item_id)
+
+
+def _space_refusal(status: int, error: str) -> httpx.Response:
+    """Space's answer to a request it refuses."""
+    return httpx.Response(status, json={"error": error})
+
+
+def _unauthorized(error: str | None) -> httpx.Response:
+    """Space's answer to a request without a bearer token, or with one it does not know: revoked,
+    expired, or of an account that left the organization."""
+    challenge = "Bearer" if error is None else f'Bearer error="{error}"'
+    return httpx.Response(
+        401, json={"error": "unauthorized"}, headers={"www-authenticate": challenge}
+    )
+
+
+def _insufficient_scope(scope: str | None) -> httpx.Response:
+    """Space's answer to a token without the scope of the route, which it names, if the route has
+    one."""
+    named = "" if scope is None else f', scope="{scope}"'
+    return httpx.Response(
+        403,
+        json={"error": "insufficient_scope"},
+        headers={"www-authenticate": f'Bearer error="insufficient_scope"{named}'},
+    )
+
+
+def _scope_of(method: str, path: str) -> str | None:
+    """The scope a token needs for the route, as Space names it; None for a route only a person's
+    session takes."""
+    if method != "GET":
+        return None
+    if re.fullmatch(r"/spaces(/[^/]+)?", path):
+        return "space:read"
+    if re.fullmatch(r"/spaces/[^/]+/feed(/items/[^/]+)?", path):
+        return "feed:read"
+    return None
+
+
+def _role_of(room: SpaceRoom, token: SpaceToken) -> str | None:
+    """The role the token acts with in the space; None for a space it does not reach."""
+    if token.space_ids is not None and room.id not in token.space_ids:
+        return None
+    if token.account is None:
+        return token.role
+    membership = room.listed().get(token.account)
+    return None if membership is None else membership.role
+
+
+def _member(membership: SpaceMembership) -> dict[str, Any]:
+    """A member of a space, as GET /spaces/:id gives them."""
+    person = membership.person
+    return {
+        "id": person.user_id,
+        "username": person.username,
+        "email": person.email,
+        "displayName": person.display_name,
+        "role": membership.role,
+        "workplaceFqdn": None,
+    }
+
+
+def _by_username(room: SpaceRoom) -> list[SpaceMembership]:
+    """The members of a space as it lists them, by username, as Twake Space sorts them."""
+    return sorted(room.listed().values(), key=lambda membership: membership.person.username)
+
+
 class FakeBoundary:
     """Routes the service's HTTP calls to the fakes."""
 
@@ -2963,6 +3476,7 @@ class FakeBoundary:
         """Every request the service sent, wherever to."""
         self.tasks = FakeTasks()
         self.contacts = self.calendar.contacts
+        self.space = FakeSpace()
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -2978,4 +3492,6 @@ class FakeBoundary:
             return self.drive.handle(request)
         if request.url.host == "tasks.test":
             return self.tasks.handle(request)
+        if request.url.host == "space.test":
+            return self.space.handle(request)
         return httpx.Response(404)

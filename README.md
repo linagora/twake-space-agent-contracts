@@ -16,7 +16,7 @@ The service checks the token against the signing keys of LemonLDAP-NG:
 
 The user is the token's subject, their email, lowercased. Neither the token nor the user appears in the OpenAPI document: an agent never holds a user's token, nor chooses whom it acts for.
 
-On a Drive contract, APISIX also passes the token of the user's Drive instance, and its host: see [Drive, as the user](#drive-as-the-user).
+On a Drive contract, APISIX also passes the token of the user's Drive instance, and its host: see [Drive, as the user](#drive-as-the-user). On a Space contract, it passes the API token of Space the user made for their assistant, which the service calls Space with: see [Space, as the user](#space-as-the-user).
 
 ## Applications
 
@@ -52,7 +52,7 @@ An application comes as a module of its own, as Calendar does: its client, its `
 
 In this order:
 
-1. **LemonLDAP-NG.** Give the `twake-space-agents` client the audience the application checks and the attributes it needs, then restart the token broker: it keeps each user's access token until shortly before it expires, and a token carries a new audience only from its next refresh.
+1. **LemonLDAP-NG**, for an application that takes the user's access token, which Space never sees. Give the `twake-space-agents` client the audience the application checks and the attributes it needs, then restart the token broker: it keeps each user's access token until shortly before it expires, and a token carries a new audience only from its next refresh.
 2. **The gateway's routes**, in the `apisix-contracts` values of the deployment repository, applied before the new image of this service or with it: the agents see a contract's tool as soon as the service publishes it, and without its route a call answers 404.
 3. **The new image and `PUBLISHED_APPS`**, with the application's domain added to the setting, kept equal to the applications the gateway routes.
 4. **The address of the OpenAPI document** in the gateway's values, against which it checks every call, once the new pods serve. APISIX fetches the document at the first call that needs it and keeps it an hour by its address: changed earlier, the new address could keep an old pod's document for that hour. Each new document takes a new address: with each image, as `?image=<digest>`, and with each change of `PUBLISHED_APPS`.
@@ -611,6 +611,50 @@ Create, change and delete contacts in the user's own address books, as the user.
 - `create_contact` and `update_contact` are low-risk writes (`x-twake-risk: low`): the user's own contacts, which nobody is told of, and which the owner's consent to write in Contacts covers without a confirmation each time. `delete_contact` is a high-risk write (`x-twake-risk: high`), which the owner confirms call by call: a contact deleted is lost.
 - Each tells what it would do ([Previews](#previews)). `create_contact` tells each field the contact holds, its note whole when it fits, or that the contact is in the address book already; `update_contact`, each field it changes, the name Contacts shows too, as it would be and as it was, what it clears and the entries a list loses named as removed; `delete_contact`, that the contact goes for good, and each field it holds. The digest covers the contact as the address book holds it, for `create_contact` by its UID, if at all: a call made once it changed answers `changed_since_preview`, and writes nothing.
 
+### Space, as the user
+
+The Space contracts call the REST API of the Twake Space backend 0.1.18, at `SPACE_URL`, under which it serves `/spaces`, with an API token of Space: one the user makes for their assistant in Twake Space, choosing what it may do, which of their spaces it reaches and for how long, and pastes on the token broker's consent page, never in a conversation. Space never sees the user's access token, so it needs nothing of LemonLDAP-NG: no audience, no attribute. The gateway's route for a Space contract asks the token broker for the API token, and passes two headers:
+
+| Header | |
+|---|---|
+| `Authorization` | the user's access token, checked as on every contract: it gives the user |
+| `X-Twake-Space-Token` | the user's API token of Space, which the broker holds for them, and which starts with `tws_` |
+
+- The gateway removes `X-Twake-Space-Token` from what an agent sends, so only the broker sets it. A user who gave the broker no API token of Space never reaches the service: the broker answers `space_token_missing`, with its consent link, which APISIX returns as is. The service reads the header like the bearer token, out of the OpenAPI document, and never stores it. Without it, or with a token that does not start with `tws_`, a Space contract answers `missing_space_token`, and nothing goes to Space.
+- The service sends the API token to Space alone, as a bearer token. Space acts for it with the role the user has in each space, and shows it the spaces it reaches. A token Space refuses, one the user revoked, one expired, or one whose account left the organization, answers `space_token_rejected`. A token without a scope the call needs answers `space_scope_missing`, `scope` naming it as Space does: `space:read`, to read the spaces, which every Space contract needs, and `feed:read`, to read their feeds, which `list_feed_items` and `read_feed_item` need too.
+- Space is published once `PUBLISHED_APPS` names `space`. The service then needs `SPACE_URL` and `SPACE_WEB_URL`, and does not start without them; while Space is not published, it needs neither.
+- Space lets no API token post in a feed or react there, and no contract writes in Space. `list_spaces` and `read_space` give the `url` of each space's feed in Twake Space's web app, `<SPACE_WEB_URL>/spaces/<space_id>/feed`, where the user posts and reacts, and every Space contract tells the agent to draft the text for the user and give them that link.
+- A space the user is not a member of, or one their API token does not reach, answers exactly like an unknown one, and an item outside the feed of the space like a missing one.
+- Space does not say which member the user is: the contracts take the member who has the user's email, whatever its case, as the user, to tell their own posts and reactions, which `you` and `mine` mark. With no such member, or several, none is marked.
+- What people wrote comes under `untrusted`, on one line but a post, which keeps its lines, all without what a reader does not see: the names of spaces, groups, people and tokens, descriptions, posts, reactions, and the titles, previews and ids of the objects of the cards. What an app tells of an object, such as an event's times or where it takes place, comes under `untrusted` too, each of its texts so cleaned and cut at 500 characters, 20 entries of each list or object and three levels at most.
+- `role` is the user's in a space, or a member's: `viewer`, who reads and reacts, `editor`, who posts too, or `admin`, who also adds, changes and removes members.
+- Its words in `x-twake-domains` say what reading covers there: "list your spaces and their members, and read their feeds". It has none for writing, which no Space contract does.
+
+### `space.spaces.read.v1`
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_spaces` | `GET /contracts/v1/space/spaces` | `{"spaces": [{"space_id", "url", "role", "member_count", "untrusted": {"name", "description"}}], "truncated"}`, by name |
+| `read_space` | `GET /contracts/v1/space/spaces/{space_id}` | `{"space_id", "url", "role", "created_at", "apps", "tasks_project_id", "chat_room_id", "mailbox_id", "calendar_id", "drive_id", "members": [{"user_id", "username", "email", "role", "you", "untrusted": {"display_name"}}], "groups": [{"group_id", "role", "untrusted": {"name"}}], "untrusted": {"name", "description"}}` |
+
+- The list holds 100 spaces at most, `truncated` telling that the user has more.
+- `read_space` gives the members by username, the people of its linked groups among them, each with their strongest role, the groups linked to the space, and the tabs the space shows (`apps`). `you` marks the one member who has the user's email, or nobody when no member has it, or several do. Each of its apps links one of its own to the space: its project in Tasks, which `open_boards` gives as `project_id`, its room in Chat, as the chat contracts take it, its shared mailbox, its calendar and its files; null while the app prepares it, or when the deployment has no such app.
+- `GET /spaces`, then `GET /spaces/{id}`.
+
+### `space.feed.read.v1`
+
+The feed of a space, its Fil, shows a card per object of the space's apps, such as a file, an event, a task or an email, and the posts its members write, each with the reactions of its members.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_feed_items` | `GET /contracts/v1/space/spaces/{space_id}/feed?category=…&limit=…&before=…` | `{"items": [...], "next"}`, newest first |
+| `read_feed_item` | `GET /contracts/v1/space/spaces/{space_id}/feed/items/{item_id}` | the item |
+
+- An item is `{"item_id", "kind", "category", "time", "updated_at", "edited_at", "event_type", "object", "by", "reactions", "untrusted": {"text", "title", "preview", "object_id", "state"}}`. A card shows the latest activity of an app on one object, and keeps the place of its first: `event_type` is the type of its latest event, such as `com.twake.drive.file.updated.v1`, `object` `{"type", "container_kind", "container_id"}` what it is and what of the space's apps it lies in, and its title, preview, id and what its app tells of it come under `untrusted`. A post gives its `text` under `untrusted`, and when it was last edited.
+- `by` is `{"kind", "user_id", "you", "untrusted": {"name"}}`: a `user`, with their `user_id` as `read_space` gives it, null for someone outside the space, a `token` of Space an application acts with, or a `deleted_user`; null for an activity no one in particular made. `reactions` are `{"count", "mine", "untrusted": {"key"}}`, in the order they were first added.
+- `category` keeps `messages`, the posts and the mail, `files`, `activities`, such as tasks, or `events`, of the calendar. `limit` goes from 1 to 50 and is 20 by default; `next` is the `before` of the older items, null after the last, and a cursor Space did not write is an invalid request.
+- Each reads the space first (`GET /spaces/{id}`), for the member who is the user, then `GET /spaces/{id}/feed` or `GET /spaces/{id}/feed/items/{item_id}`.
+
 ## Previews
 
 When the harness asks an owner about a write, for a first use, a high-risk write or a write that a turn an event started prepared, it shows them what the call would do rather than the call as the model wrote it, if the write's operation declares `x-twake-preview: true`. It first calls the contract as the call would go, same method, path, query and body, in the owner's name, with `x-twake-preview: true` and the owner's language in `accept-language`:
@@ -654,8 +698,11 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 401 | `missing_token` | no bearer token |
 | 401 | `invalid_token` | the token is not one the broker got for this service: another type, issuer, audience, client or key, or expired |
 | 401 | `missing_drive_token` | a Drive contract without the user's Drive token |
-| 403 | `forbidden_role` | the user is a viewer of the board: they only read it, and comment |
+| 401 | `missing_space_token` | a Space contract without the user's API token of Space |
+| 401 | `space_token_rejected` | Space refused the user's API token of Space: they revoked it, it expired, or their account left the organization |
+| 403 | `forbidden_role` | the user is a viewer of the board, where they only read and comment |
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
+| 403 | `space_scope_missing` | the user's API token of Space lacks a scope the call needs, which `scope` names as Space does: `space:read` or `feed:read` |
 | 404 | `invitation_not_found` | no invitation to an event of this UID was sent to the user: their calendars have no copy of the event, their copy does not list them as an attendee, or they organize it |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `person_not_found` | Calendar has no user with an email `find_meeting_slots` is given, whose free/busy it cannot read |
@@ -672,6 +719,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `contacts_user_not_found` | Contacts has no user with the user's email |
 | 404 | `address_book_not_found` | the user reads no address book with this id: neither their own, nor one shared with them, nor their domain's |
 | 404 | `contact_not_found` | the address book has no contact with this id |
+| 404 | `space_not_found` | the user is a member of no space with this id that their API token of Space reaches |
+| 404 | `feed_item_not_found` | the feed of the space has no item with this id |
 | 409 | `changed_since_preview` | what the call acts on changed since its owner was shown what it would do: nothing was done |
 | 409 | `recurring_invitation` | the invitation repeats, or holds several occurrences of a series, and the call does not answer for the whole series |
 | 409 | `invitation_cancelled` | the organizer cancelled the invitation itself: the event that does not repeat, the whole series, or each occurrence the user was invited to without the series; an occurrence cancelled alone is not refused for the whole series |
@@ -713,6 +762,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 502 | `task_created_partially` | Tasks created the task, then failed to set its priority or due date: `board_id`, `task_id` and `key` name it |
 | 502 | `contacts_refused` | Contacts refused the user's token |
 | 502 | `contacts_unavailable` | Contacts did not answer, or answered in an unexpected form |
+| 502 | `space_unavailable` | Space did not answer, answered an error, or in an unexpected form |
 | 503 | `keys_unavailable` | the signing keys of LemonLDAP-NG could not be fetched, and none are held |
 | 503 | `reading_busy` | the service reads as many documents as it may at once, or one of the user's, and none ended in the 10 seconds a request waits: try again in a few seconds |
 
@@ -742,12 +792,14 @@ CALENDAR_URL=https://calendar-backend.dev.twake.lin-saas.com \
 | `DRIVE_SCHEME` | how the service reaches the users' Drive instances, `https` by default; `http` for a local cozy-stack |
 | `DRIVE_PORT` | the port of those instances, when it is not the scheme's, such as `8080` for a local cozy-stack |
 | `TASKS_URL` | Twake Tasks, whose REST API is under `/api`; needed once `PUBLISHED_APPS` names `tasks`, and only then |
+| `SPACE_URL` | the Twake Space backend, which serves `/spaces` under it, called with the user's API token of Space; needed once `PUBLISHED_APPS` names `space`, and only then |
+| `SPACE_WEB_URL` | Twake Space's web app, under which the contracts link the feed of each space, `<SPACE_WEB_URL>/spaces/<space_id>/feed`; needed once `PUBLISHED_APPS` names `space`, and only then |
 
 The image `ghcr.io/linagora/twake-space-agent-contracts` listens on 8080 as user 10001 and reads the same variables. It is published as `latest` from `main` and with the version from `v*` tags.
 
 ## Test
 
-The tests call the HTTP API, and need neither a database nor Docker. LemonLDAP-NG's signing keys, the Calendar side service, with esn-sabre's address books behind its `/dav` proxy and its search across them, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance and Twake Tasks are faked at the HTTP boundary. The documents the fake cozy-stack serves are built in the tests, by python-docx, python-pptx and openpyxl, which only the tests use, or by hand, as are OpenDocument files, PDFs and the documents crafted against a reader, and each is read in its own process, as the service reads them. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
+The tests call the HTTP API, and need neither a database nor Docker. LemonLDAP-NG's signing keys, the Calendar side service, with esn-sabre's address books behind its `/dav` proxy and its search across them, TMail, Synapse, behind the gateway's outbound route, the user's cozy-stack instance, Twake Tasks and the Twake Space backend, which answers an API token of Space as Space 0.1.18 does, are faked at the HTTP boundary. The documents the fake cozy-stack serves are built in the tests, by python-docx, python-pptx and openpyxl, which only the tests use, or by hand, as are OpenDocument files, PDFs and the documents crafted against a reader, and each is read in its own process, as the service reads them. [`tests/test_openapi.py`](tests/test_openapi.py) holds the OpenAPI document to the rules of the catalog: a risk for every write, the writes that tell what they would do, the words of every published application, a worked call in every description, and schemas written whole.
 
 ```sh
 uv run pytest
