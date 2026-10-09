@@ -180,10 +180,16 @@ def _tasks(context: Context) -> list[APIRouter]:
 
 
 def _space(context: Context) -> list[APIRouter]:
+    url, web_url = context.settings.space_url, context.settings.space_web_url
     # A deployment that does not publish Space has no need to know where it is
-    if context.settings.space_url is None:
-        raise ValueError("PUBLISHED_APPS names space, which needs SPACE_URL")
-    space = TwakeSpace(context.settings.space_url, context.http)
+    if url is None or web_url is None:
+        missing = [
+            name
+            for name, value in (("SPACE_URL", url), ("SPACE_WEB_URL", web_url))
+            if value is None
+        ]
+        raise ValueError(f"PUBLISHED_APPS names space, which needs {' and '.join(missing)}")
+    space = TwakeSpace(url, web_url, context.http)
     space_owner = space_owner_dependency(context.caller)
     return [spaces.router(space, space_owner), feed.router(space, space_owner)]
 

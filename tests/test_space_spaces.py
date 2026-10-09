@@ -37,12 +37,14 @@ async def test_the_user_lists_the_spaces_they_are_a_member_of(
         "spaces": [
             {
                 "space_id": design.id,
+                "url": f"https://space.twake.test/spaces/{design.id}/feed",
                 "role": "admin",
                 "member_count": 3,
                 "untrusted": {"name": "Design", "description": "Brand and product design"},
             },
             {
                 "space_id": roadmap.id,
+                "url": f"https://space.twake.test/spaces/{roadmap.id}/feed",
                 "role": "viewer",
                 "member_count": 2,
                 "untrusted": {"name": "Roadmap", "description": None},
@@ -111,6 +113,7 @@ async def test_the_user_reads_a_space_with_its_members_and_what_its_apps_linked_
     assert response.status_code == 200, response.text
     assert response.json() == {
         "space_id": design.id,
+        "url": f"https://space.twake.test/spaces/{design.id}/feed",
         "role": "admin",
         "created_at": "2026-10-01T08:00:00Z",
         "apps": ["chat", "tasks", "calendar"],

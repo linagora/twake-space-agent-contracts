@@ -26,6 +26,7 @@ from twake_space_agent_contracts.text import line
 
 LONGEST_DESCRIPTION = 1000
 MOST_SPACES = 100
+FEED_URL = "The link to the space's feed in Twake Space, where the user posts and reacts."
 
 
 class SpaceText(BaseModel):
@@ -37,6 +38,7 @@ class SpaceText(BaseModel):
 
 class ListedSpace(BaseModel):
     space_id: str
+    url: str = Field(description=FEED_URL)
     role: str = Field(description=f"The user's role in the space: {ROLES}")
     member_count: int
     untrusted: SpaceText
@@ -57,8 +59,7 @@ class MemberText(BaseModel):
 
 class SpaceMember(BaseModel):
     user_id: str = Field(
-        description="Who the member is in Space, as update_space_member and remove_space_member "
-        "take it."
+        description="Who the member is in Space, as the items of the feed name who made them."
     )
     username: str
     email: str
@@ -83,6 +84,7 @@ class Space(BaseModel):
     """A space the user is a member of, with its members and what its apps linked to it."""
 
     space_id: str
+    url: str = Field(description=FEED_URL)
     role: str = Field(description=f"The user's role in the space: {ROLES}")
     created_at: datetime
     apps: list[str] = Field(
@@ -124,12 +126,13 @@ def space_member(member: Member, me: str | None) -> SpaceMember:
     )
 
 
-def space_of(detail: SpaceDetail, user: User) -> Space:
-    """A space as read_space gives it, to the user."""
+def space_of(detail: SpaceDetail, user: User, url: str) -> Space:
+    """A space as read_space gives it, to the user, with the link to its feed."""
     me = detail.user_id_of(user.email)
     linked = detail.resources
     return Space(
         space_id=detail.space_id,
+        url=url,
         role=detail.role,
         created_at=detail.created_at,
         apps=list(detail.apps),
@@ -163,9 +166,9 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         summary="List the user's spaces in Twake Space",
         description=(
             "Lists the spaces of Twake Space the user you act for is a member of, by name, "
-            f"{MOST_SPACES} at most, with their role in each and how many members each has. Give "
-            "space_id to read_space for its members and the apps linked to it, or to "
-            f"list_feed_items for its feed. {UNTRUSTED} Example: (no parameters)."
+            f"{MOST_SPACES} at most, with their role in each, how many members each has and the "
+            "url of its feed. Give space_id to read_space for its members and the apps linked to "
+            f"it, or to list_feed_items for its feed. {UNTRUSTED} Example: (no parameters)."
         ),
     )
     async def list_spaces(owner: Annotated[SpaceOwner, Depends(owner_of)]) -> SpaceList:
@@ -174,6 +177,7 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
             spaces=[
                 ListedSpace(
                     space_id=summary.space_id,
+                    url=space.feed_url(summary.space_id),
                     role=summary.role,
                     member_count=summary.member_count,
                     untrusted=SpaceText(
@@ -192,15 +196,17 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         summary="Read one of the user's spaces in Twake Space",
         description=(
             "Reads a space the user you act for is a member of, by the space_id list_spaces "
-            "gives: the user's role there, its members with theirs, by username, you telling "
-            "which one is the user, the groups linked to it, and what its apps linked to it: its "
-            "Tasks project, Chat room, shared mailbox, calendar and files. A space the user is "
-            f"not a member of answers like an unknown one. {UNTRUSTED} Example: {EXAMPLE_SPACE}."
+            "gives: the user's role there, the url of its feed, its members with their roles, by "
+            "username, you telling which one is the user, the groups linked to it, and what its "
+            "apps linked to it: its Tasks project, Chat room, shared mailbox, calendar and files. "
+            "A space the user is not a member of answers like an unknown one. "
+            f"{UNTRUSTED} Example: {EXAMPLE_SPACE}."
         ),
     )
     async def read_space(
         space_id: SpaceId, owner: Annotated[SpaceOwner, Depends(owner_of)]
     ) -> Space:
-        return space_of(await space.space(owner, space_id), owner.user)
+        detail = await space.space(owner, space_id)
+        return space_of(detail, owner.user, space.feed_url(detail.space_id))
 
     return routes

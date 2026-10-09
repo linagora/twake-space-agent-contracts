@@ -47,6 +47,7 @@ SETTINGS = Settings(
     # Where the users' cozy-stack instances are, one name each under it
     drive_instance_domain="twake.test",
     space_url="https://space.test",
+    space_web_url="https://space.twake.test",
 )
 SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 KEY_ID = "sig-1"

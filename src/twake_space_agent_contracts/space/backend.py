@@ -300,11 +300,17 @@ def _member(item: Any) -> Member:
 
 
 class TwakeSpace:
-    """The Twake Space backend, called with the user's API token of Space."""
+    """The Twake Space backend, called with the user's API token of Space, and its web app, where
+    the contracts link the feeds."""
 
-    def __init__(self, url: str, http: httpx.AsyncClient) -> None:
+    def __init__(self, url: str, web_url: str, http: httpx.AsyncClient) -> None:
         self._url = url
+        self._web_url = web_url
         self._http = http
+
+    def feed_url(self, space_id: str) -> str:
+        """The feed of the space in Space's web app, where the user posts and reacts."""
+        return f"{self._web_url}/spaces/{space_id}/feed"
 
     async def _call(
         self, owner: SpaceOwner, method: str, path: str, *, scope: Scope, params: Any = None
