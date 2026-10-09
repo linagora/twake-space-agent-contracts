@@ -72,10 +72,13 @@ async def test_a_reading_that_takes_more_time_on_a_processor_than_given_is_stopp
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A second of a processor, where a page of 200,000 operations that show blanks takes some four
-    # to read, and all the time it wants otherwise: the kernel stops it
+    # to read, and all the time and the memory it wants otherwise: the kernel stops it. Its reading
+    # takes up to some 175 MiB, beyond the 160 MiB the service gives, which a fast processor
+    # reaches within that second
     monkeypatch.setattr(documents, "PROCESSOR_SECONDS", 1)
     monkeypatch.setattr(documents, "READING_SECONDS", 60.0)
     monkeypatch.setattr(documents, "LONGEST_SECONDS", 60.0)
+    monkeypatch.setattr(documents, "MOST_MEMORY", 1_024 * MIB)
 
     with pytest.raises(Refused) as refused:
         await Reader().read("pdf", pdf("\n".join([" "] * 200_000)), 1_000)
@@ -90,6 +93,24 @@ async def test_a_reading_that_takes_more_memory_than_given_is_refused(
     # Less address space than the process takes once started, so that the first memory it takes
     # anew fails: for the document itself, 5 MB, which no memory it freed holds
     monkeypatch.setattr(documents, "MOST_MEMORY", 1_048_576)
+
+    with pytest.raises(Refused) as refused:
+        await Reader().read("pdf", pdf("\n".join([" "] * 500_000)), 1_000)
+
+    assert refused.value.reason == "memory"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux bounds a process's address space")
+async def test_a_page_that_takes_more_memory_to_read_than_given_is_refused_for_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 160 MiB of address space, as the service gives: room for the process and the document, 5 MB,
+    # but not for the reading of its page of 500,000 operations, which takes some 250 MiB more, and
+    # all the time it wants: a page that runs out of memory is not a damaged one
+    monkeypatch.setattr(documents, "MOST_MEMORY", 160 * MIB)
+    monkeypatch.setattr(documents, "PROCESSOR_SECONDS", 60)
+    monkeypatch.setattr(documents, "READING_SECONDS", 60.0)
+    monkeypatch.setattr(documents, "LONGEST_SECONDS", 60.0)
 
     with pytest.raises(Refused) as refused:
         await Reader().read("pdf", pdf("\n".join([" "] * 500_000)), 1_000)
