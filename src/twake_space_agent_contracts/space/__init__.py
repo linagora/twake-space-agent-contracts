@@ -1,7 +1,7 @@
 """Twake Space: the contracts on the user's spaces, their feeds and their members, through the
 Twake Space backend, as the user."""
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import Path
 
@@ -16,7 +16,6 @@ UNTRUSTED = (
 LONGEST_NAME = 255
 """The most characters a read gives of the name of a space, a group, a person or a token."""
 
-Role = Literal["viewer", "editor", "admin"]
 ROLES = (
     "viewer, who reads the space and reacts; editor, who posts too; admin, who also adds, changes "
     "and removes its members."
@@ -31,17 +30,8 @@ EXAMPLE_ITEM = (
 )
 """An item of the feed of a space, as list_feed_items gives it, for the worked calls."""
 
-EXAMPLE_MEMBER = (
-    "space_id=3b9e2c71-5d4a-4f0e-9c8b-1a2d6e7f8091, user_id=c9f0f895-fb98-4b91-a1a4-7f3e2d1c0b5a"
-)
-"""A member of a space, as read_space gives them, for the worked calls."""
-
 SpaceId = Annotated[
     str, Path(pattern=SPACE_ID, description="The space_id of the space, as list_spaces gives it.")
-]
-UserId = Annotated[
-    str,
-    Path(pattern=SPACE_ID, description="The user_id of the member, as read_space gives it."),
 ]
 ItemId = Annotated[
     str,

@@ -35,7 +35,7 @@ from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
-from twake_space_agent_contracts.space import feed, memberships, people, posts, reactions, spaces
+from twake_space_agent_contracts.space import feed, spaces
 from twake_space_agent_contracts.space.backend import TwakeSpace
 from twake_space_agent_contracts.tasks import Tasks
 
@@ -184,14 +184,7 @@ def _space(context: Context) -> list[APIRouter]:
     if context.settings.space_url is None:
         raise ValueError("PUBLISHED_APPS names space, which needs SPACE_URL")
     space = TwakeSpace(context.settings.space_url, context.http)
-    return [
-        spaces.router(space, context.caller),
-        people.router(space, context.caller),
-        feed.router(space, context.caller),
-        *reactions.routers(space, context.caller),
-        *posts.routers(space, context.caller),
-        *memberships.routers(space, context.caller),
-    ]
+    return [spaces.router(space, context.caller), feed.router(space, context.caller)]
 
 
 APPLICATIONS = (
@@ -288,19 +281,10 @@ APPLICATIONS = (
         domain="space",
         name=Words(en="Twake Space", fr="Twake Space"),
         read=Words(
-            en="list your spaces and their members, read their feeds and search the people of"
-            " your organization",
-            fr="lister tes espaces et leurs membres, lire leur fil et chercher les personnes de"
-            " ton organisation",
+            en="list your spaces and their members, and read their feeds",
+            fr="lister tes espaces et leurs membres, et lire leur fil",
         ),
-        write=Words(
-            en="react in your spaces' feeds and take your reactions back, post there, edit and"
-            " delete your posts, which members see, and add members, change their roles and"
-            " remove them where you are admin",
-            fr="réagir dans le fil de tes espaces et retirer tes réactions, y publier, modifier et"
-            " supprimer tes messages, vus des membres, et ajouter des membres, changer leur rôle"
-            " et les retirer où tu es admin",
-        ),
+        write=None,
         routers=_space,
     ),
 )

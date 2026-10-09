@@ -4,7 +4,6 @@ of the token's user in their org_id, and shows them the spaces they are a member
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
-from urllib.parse import quote
 
 import httpx
 
@@ -30,101 +29,6 @@ def space_not_found(space_id: str) -> Problem:
         code="space_not_found",
         title="Space not found",
         detail=f"The user is a member of no space {space_id}: list_spaces gives theirs.",
-    )
-
-
-def forbidden_role(space_id: str) -> Problem:
-    return Problem(
-        status=403,
-        code="forbidden_role",
-        title="Role forbids writing",
-        detail=f"The user is a viewer of space {space_id}: they read its feed and react, but do"
-        " not post.",
-    )
-
-
-def not_author(space_id: str, item_id: str) -> Problem:
-    return Problem(
-        status=403,
-        code="not_author",
-        title="Not the author",
-        detail=f"The user did not write post {item_id} of space {space_id}: only its author"
-        " edits or deletes it.",
-    )
-
-
-def not_a_post(space_id: str, item_id: str) -> Problem:
-    return Problem(
-        status=409,
-        code="not_a_post",
-        title="Not a post",
-        detail=f"Item {item_id} of the feed of space {space_id} is a card, which shows what an"
-        " app did: only posts are edited or deleted.",
-    )
-
-
-def not_space_admin(space_id: str) -> Problem:
-    return Problem(
-        status=403,
-        code="not_space_admin",
-        title="Not an admin of the space",
-        detail=f"The user is not an admin of space {space_id}: only its admins add, change and"
-        " remove its members, which the user asks one of them to do.",
-    )
-
-
-def person_not_found(usernames: list[str]) -> Problem:
-    return Problem(
-        status=404,
-        code="person_not_found",
-        title="Person not found",
-        detail="The user's organization has no active person whose username is"
-        f" {', '.join(usernames)}: search_organization_people finds its people.",
-        extensions={"usernames": usernames},
-    )
-
-
-def member_exists(space_id: str, members: "list[Member]") -> Problem:
-    return Problem(
-        status=409,
-        code="member_exists",
-        title="Member exists",
-        detail=f"Some of these people are direct members of space {space_id} already, with"
-        " another role, which update_space_member changes: nobody was added. members names those"
-        " the space lists with another role, when the contract tells.",
-        extensions={
-            "members": [{"user_id": member.user_id, "role": member.role} for member in members]
-        },
-    )
-
-
-def member_not_found(space_id: str, user_id: str) -> Problem:
-    return Problem(
-        status=404,
-        code="member_not_found",
-        title="Member not found",
-        detail=f"Space {space_id} has no member {user_id}: read_space gives its members.",
-    )
-
-
-def group_member(space_id: str, user_id: str) -> Problem:
-    return Problem(
-        status=409,
-        code="group_member",
-        title="Member through a group",
-        detail=f"Member {user_id} of space {space_id} is a member through a linked group, which"
-        " gives them their role: change the group's role in Twake Space, or take them out of the"
-        " group, instead. The contracts change the direct members of a space alone.",
-    )
-
-
-def last_admin(space_id: str) -> Problem:
-    return Problem(
-        status=409,
-        code="last_admin",
-        title="Last admin",
-        detail=f"Space {space_id} would be left without an admin, which it keeps at least one"
-        " of: make another member an admin first.",
     )
 
 
@@ -219,25 +123,6 @@ class SpaceDetail:
         found = [member.user_id for member in self.members if member.email.lower() == email.lower()]
         return found[0] if len(found) == 1 else None
 
-    def member(self, user_id: str) -> Member | None:
-        """The member of that user id; None if the space has none."""
-        return next((member for member in self.members if member.user_id == user_id), None)
-
-    @property
-    def audience(self) -> list[str]:
-        """Who reads what is written in the space, by user id: its members, sorted, so that the
-        same members make the same digest."""
-        return sorted(member.user_id for member in self.members)
-
-
-@dataclass(frozen=True)
-class Person:
-    """A person of the organization, as its directory gives them."""
-
-    username: str
-    email: str
-    display_name: str | None
-
 
 ActorKind = Literal["user", "token", "deleted_user"]
 ItemKind = Literal["card", "post"]
@@ -285,13 +170,6 @@ class FeedItem:
     """What the app tells of the object, such as an event's times, as the app sent it."""
     body: str | None = None
     edited_at: datetime | None = None
-
-    def reacted(self, user_id: str | None, key: str) -> bool:
-        """Whether the member of that user id reacted to the item so; False for None, whom the
-        contract cannot tell."""
-        return any(
-            reaction.key == key and user_id in reaction.user_ids for reaction in self.reactions
-        )
 
 
 def _actor(value: Any) -> Actor | None:
@@ -437,32 +315,6 @@ class TwakeSpace:
             raise invalid
         return self._json(response, "GET", path)
 
-    async def _write(
-        self,
-        user: User,
-        method: str,
-        path: str,
-        *,
-        missing: Problem,
-        refusals: dict[str, Problem] | None = None,
-        body: Any = None,
-    ) -> httpx.Response:
-        """Space's answer to a write it took; `missing` when what the write acts on is gone, or no
-        longer the user's, since the contract read it, and each of the `refusals` for the error
-        Space names it with, as when the user's role changed meanwhile."""
-        response = await self._call(user, method, path, body=body)
-        error = _error_of(response)
-        if response.status_code == 404 and error == "not_found":
-            raise missing
-        if not response.is_success and error in (refusals or {}):
-            raise (refusals or {})[error]
-        # Space checks what the contract cannot
-        if response.status_code == 400:
-            raise invalid_request(f"Space refused {method} {path}: {error}.")
-        if not response.is_success:
-            raise _unavailable(f"Space answered {response.status_code} to {method} {path}.")
-        return response
-
     async def spaces(self, user: User) -> list[SpaceSummary]:
         """The spaces the user is a member of, by name."""
         found = await self._get(user, "/spaces")
@@ -511,27 +363,6 @@ class TwakeSpace:
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Space gave the space in an unexpected form.") from error
 
-    async def people(self, user: User, words: str | None, page: int) -> tuple[list[Person], bool]:
-        """The active people of the user's organization whose name, username or email holds the
-        words, if any, by pages of 20; whether more pages follow comes with them."""
-        params: dict[str, str | int] = {"page": page} | ({"search": words} if words else {})
-        found = await self._get(user, "/organization/members", params)
-        try:
-            people = [
-                Person(
-                    username=_text(person["username"]),
-                    email=_text(person["email"]),
-                    display_name=_optional_text(person.get("displayName")),
-                )
-                for person in found["members"]
-            ]
-            more = found["hasNextPage"]
-        except (KeyError, TypeError, AttributeError) as error:
-            raise _unavailable("Space gave the people in an unexpected form.") from error
-        if not isinstance(more, bool):
-            raise _unavailable("Space gave the people in an unexpected form.")
-        return people, more
-
     async def feed(
         self,
         user: User,
@@ -577,102 +408,3 @@ class TwakeSpace:
             return _feed_item(found)
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Space gave the item in an unexpected form.") from error
-
-    async def react(self, user: User, space_id: str, item_id: str, key: str) -> None:
-        """Adds the user's reaction to the item, which Space keeps once."""
-        path = f"/spaces/{space_id}/feed/items/{item_id}/reactions/{quote(key, safe='')}"
-        await self._write(user, "PUT", path, missing=feed_item_not_found(space_id, item_id))
-
-    async def unreact(self, user: User, space_id: str, item_id: str, key: str) -> None:
-        """Takes the user's reaction to the item back."""
-        path = f"/spaces/{space_id}/feed/items/{item_id}/reactions/{quote(key, safe='')}"
-        await self._write(user, "DELETE", path, missing=feed_item_not_found(space_id, item_id))
-
-    async def post(self, user: User, space_id: str, text: str) -> FeedItem:
-        """Posts the text in the feed of the space, as the user: the post as Space keeps it."""
-        path = f"/spaces/{space_id}/feed/posts"
-        response = await self._write(
-            user,
-            "POST",
-            path,
-            missing=space_not_found(space_id),
-            refusals={"cannot_post": forbidden_role(space_id)},
-            body={"body": text},
-        )
-        try:
-            return _feed_item(response.json())
-        except (KeyError, TypeError, ValueError) as error:
-            raise _unavailable("Space gave the new post in an unexpected form.") from error
-
-    async def edit(self, user: User, space_id: str, item_id: str, text: str) -> FeedItem:
-        """Changes the text of the user's post: the post as Space keeps it."""
-        path = f"/spaces/{space_id}/feed/posts/{item_id}"
-        response = await self._write(
-            user,
-            "PATCH",
-            path,
-            missing=feed_item_not_found(space_id, item_id),
-            refusals={"not_author": not_author(space_id, item_id)},
-            body={"body": text},
-        )
-        try:
-            return _feed_item(response.json())
-        except (KeyError, TypeError, ValueError) as error:
-            raise _unavailable("Space gave the post in an unexpected form.") from error
-
-    async def delete(self, user: User, space_id: str, item_id: str) -> None:
-        """Deletes the user's post, and its reactions, for good."""
-        await self._write(
-            user,
-            "DELETE",
-            f"/spaces/{space_id}/feed/posts/{item_id}",
-            missing=feed_item_not_found(space_id, item_id),
-            refusals={"not_author": not_author(space_id, item_id)},
-        )
-
-    async def add_members(self, user: User, space_id: str, usernames: list[str], role: str) -> None:
-        """Adds people of the user's organization to the space, by username, with one role."""
-        await self._write(
-            user,
-            "POST",
-            f"/spaces/{space_id}/members",
-            missing=space_not_found(space_id),
-            # ldap-rest's refusals, which Space passes on: someone made a member, or whose
-            # account was disabled, since the contract read them
-            refusals={
-                "not_space_admin": not_space_admin(space_id),
-                "MEMBER_EXISTS": member_exists(space_id, []),
-                "USER_NOT_FOUND": person_not_found(usernames),
-            },
-            body={"usernames": usernames, "role": role},
-        )
-
-    async def set_role(self, user: User, space_id: str, user_id: str, role: str) -> None:
-        """Changes the role of a member of the space."""
-        await self._write(
-            user,
-            "PATCH",
-            f"/spaces/{space_id}/members/{user_id}",
-            missing=member_not_found(space_id, user_id),
-            # ldap-rest's refusals, which Space passes on
-            refusals={
-                "not_space_admin": not_space_admin(space_id),
-                "LAST_ADMIN": last_admin(space_id),
-                "MEMBER_NOT_FOUND": member_not_found(space_id, user_id),
-            },
-            body={"role": role},
-        )
-
-    async def remove_member(self, user: User, space_id: str, user_id: str) -> None:
-        """Removes a member from the space: Space takes one another admin removed first for
-        removed."""
-        await self._write(
-            user,
-            "DELETE",
-            f"/spaces/{space_id}/members/{user_id}",
-            missing=member_not_found(space_id, user_id),
-            refusals={
-                "not_space_admin": not_space_admin(space_id),
-                "LAST_ADMIN": last_admin(space_id),
-            },
-        )
