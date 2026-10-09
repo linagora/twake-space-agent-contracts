@@ -14,6 +14,7 @@ from twake_space_agent_contracts import (
     drive_contents,
     drive_create,
     drive_files,
+    drive_shares,
     event_create,
     event_reads,
     freebusy,
@@ -146,6 +147,7 @@ def _drive(context: Context) -> list[APIRouter]:
     drive_owner = drive_owner_dependency(context.caller, domain)
     return [
         drive_files.router(drive, drive_owner),
+        drive_shares.router(drive, drive_owner),
         drive_contents.router(drive, drive_owner),
         drive_create.router(drive, drive_owner),
     ]
@@ -239,8 +241,10 @@ APPLICATIONS = (
         domain="drive",
         name=Words(en="Twake Drive", fr="Twake Drive"),
         read=Words(
-            en="list, search and read your files",
-            fr="lister, chercher et lire tes fichiers",
+            en="list, search and read your files, and see the files and folders others shared with"
+            " you",
+            fr="lister, chercher et lire tes fichiers, et voir les fichiers et dossiers que"
+            " d'autres ont partagés avec toi",
         ),
         write=Words(
             en="create text files in your Drive, never in a folder shared with others",

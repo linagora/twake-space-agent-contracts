@@ -97,6 +97,24 @@ Cursor = Annotated[
     Query(max_length=1024, description="The next_cursor of the previous answer, to go on."),
 ]
 Limit = Annotated[int, Query(ge=1, le=100, description="How many items to return, 20 by default.")]
+Since = Annotated[
+    AwareDatetime | None,
+    Query(
+        description="An RFC 3339 time with its offset, such as 2026-10-01T00:00:00+02:00, "
+        f"at most {LONGEST_RECENT.days} days ago; {RECENT.days} days ago by default."
+    ),
+]
+
+
+def recent_since(since: datetime | None) -> datetime:
+    """When a list of what Drive gave the user lately starts: since, LONGEST_RECENT ago at most,
+    or RECENT ago without it; invalid_request for a time further back."""
+    now = datetime.now(UTC)
+    if since is None:
+        return now - RECENT
+    if since < now - LONGEST_RECENT:
+        raise invalid_request(f"since: at most {LONGEST_RECENT.days} days ago")
+    return since
 
 
 def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
@@ -225,22 +243,11 @@ def router(drive: Drive, drive_owner: DriveOwnerDependency) -> APIRouter:
     )
     async def list_recent_files(
         owner: Annotated[DriveOwner, Depends(drive_owner)],
-        since: Annotated[
-            AwareDatetime | None,
-            Query(
-                description="An RFC 3339 time with its offset, such as 2026-10-01T00:00:00+02:00, "
-                f"at most {LONGEST_RECENT.days} days ago; {RECENT.days} days ago by default."
-            ),
-        ] = None,
+        since: Since = None,
         limit: Limit = 20,
         cursor: Cursor = None,
     ) -> DriveItemList:
-        now = datetime.now(UTC)
-        if since is None:
-            since = now - RECENT
-        elif since < now - LONGEST_RECENT:
-            raise invalid_request(f"since: at most {LONGEST_RECENT.days} days ago")
-        page = await drive.recent_files(owner, since, limit, cursor)
+        page = await drive.recent_files(owner, recent_since(since), limit, cursor)
         app = await drive.app(owner)
         return DriveItemList(
             items=[DriveItem.of(item, app) for item in page.items], next_cursor=page.next_cursor

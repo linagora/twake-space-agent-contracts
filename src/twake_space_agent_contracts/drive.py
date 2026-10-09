@@ -292,6 +292,98 @@ def _links(resources: Any) -> list[_Link]:
         raise _unavailable("Drive gave its links in an unexpected form.") from error
 
 
+class SharingRule(BaseModel):
+    """What a sharing shares of a doctype: for files and folders by id, the id of the one it
+    shares, as the stack lets such a rule name only one, the name its sharer gave it, and its type
+    when it is a file."""
+
+    title: str = ""
+    doctype: str = ""
+    mime: str = ""
+    selector: str = ""
+    values: list[str] = Field(default_factory=list)
+    add: str = ""
+    update: str = ""
+    remove: str = ""
+
+    @property
+    def shared_id(self) -> str | None:
+        """The id of the file or folder it shares, for a rule on files and folders by id, which
+        the stack lets name only one; None for any other, such as one on the files of a Photos
+        album, which it shares by reference."""
+        by_id = self.doctype == "io.cozy.files" and self.selector in ("", "id", "_id")
+        return self.values[0] if by_id and len(self.values) == 1 else None
+
+    @property
+    def syncs(self) -> bool:
+        """Whether a change made on a recipient's instance goes back to the sharer's, by one of
+        its actions."""
+        return "sync" in (self.add, self.update, self.remove)
+
+
+class SharingMember(BaseModel):
+    """A member of a sharing, as the instance of each member knows them."""
+
+    name: str = ""
+    """How the user's contacts name them, when one has their address."""
+    public_name: str = ""
+    """The name they gave themselves."""
+    email: str = ""
+    instance: str = ""
+    """Their instance, which the sharer's gives a recipient's only for the sharer and for that
+    recipient."""
+    read_only: bool = False
+
+
+class StackSharing(BaseModel):
+    """A sharing of files and folders, as the stack gives it in its JSON:API: what the contracts
+    read of it."""
+
+    id: str
+    sent: bool = Field(False, alias="owner")
+    """Whether the user sent it; the stack leaves it out when they received it."""
+    active: bool = False
+    """Whether it goes on: on a recipient's instance, once they accepted it, until it is revoked.
+    The stack leaves it out when it does not."""
+    drive: bool = False
+    """Whether it is a shared drive: its files stay on the sharer's instance, which its rules
+    name them by, where those of another sharing name the copies on each recipient's."""
+    received_at: AwareDatetime = Field(alias="updated_at")
+    """For a sharing the user received, when its invitation reached their instance, which writes
+    it then, again when the sharer invites them anew before they answer, and never once they
+    accept; also when they move their instance, which writes it for every sharing. Its created_at
+    is when the sharer created it, before the user was invited when the sharer added them later."""
+    rules: list[SharingRule] = Field(default_factory=list)
+    members: list[SharingMember] = Field(min_length=1)
+    """The sharer first, whom every sharing has, then the recipients."""
+
+    @property
+    def sharer(self) -> SharingMember:
+        """Who sent it, the first of its members."""
+        return self.members[0]
+
+    @property
+    def read_only(self) -> bool:
+        """Whether the user, who received it, may only read what it shares, as the stack tells it:
+        by their own member, the one recipient whose instance it knows; or, but for a shared
+        drive, whose rules leave every change to the stack, by rules by which no change of theirs
+        goes back to the sharer."""
+        own = next((member for member in self.members[1:] if member.instance), None)
+        if own is not None and own.read_only:
+            return True
+        return not self.drive and not any(rule.syncs for rule in self.rules)
+
+
+def _sharings(resources: Any) -> list[StackSharing]:
+    try:
+        return [
+            StackSharing.model_validate(resource["attributes"] | {"id": resource["id"]})
+            for resource in resources
+        ]
+    except (KeyError, TypeError, ValidationError) as error:
+        raise _unavailable("Drive gave its sharings in an unexpected form.") from error
+
+
 def _next(answer: dict[str, Any], parameter: str) -> str | None:
     """The parameter of the stack's link to the next page, None after the last."""
     links = answer.get("links")
@@ -432,6 +524,15 @@ class Drive:
             if cursor is None:
                 return ids
         raise _unavailable("Drive gave more links than the service reads.")
+
+    async def sharings(self, owner: DriveOwner) -> list[StackSharing]:
+        """The sharings of files and folders the user sent or received, whatever their state, all
+        at once and in no order, as the stack gives them, without the documents each shares,
+        which it would look up for them."""
+        answer = await self._request(
+            owner, "GET", "/sharings/doctype/io.cozy.files", params={"shared_docs": "false"}
+        )
+        return _sharings(_data(answer))
 
     async def create_file(
         self, owner: DriveOwner, folder_id: str, name: str, content: bytes, mime: str

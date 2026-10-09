@@ -367,10 +367,10 @@ The Drive contracts act in the user's cozy-stack instance, which accepts only it
 - Drive is published once `PUBLISHED_APPS` names `drive`. The service then needs `DRIVE_INSTANCE_DOMAIN`, and does not start without it; while Drive is not published, it needs none of its settings.
 - An instance is one name under `DRIVE_INSTANCE_DOMAIN`, such as `alice.<domain>`. Without an instance, or with any other host, such as an address or a host of another domain, a Drive contract answers `drive_instance_unknown`, and the Drive token goes nowhere. Without a Drive token, it answers `missing_drive_token`.
 - The service calls the instance over HTTPS, with the Drive token as a bearer token: it must reach the users' instances. What is in the trash, or out of the token's reach, answers exactly like what does not exist.
-- The contracts need no more of the Drive token than `io.cozy.files:GET,POST`: `GET` on all the user's files, to read them, their index of recent files and their links, and `POST`, to create a file. A token without `POST` finds every folder out of its reach: `create_file` answers `folder_not_found`.
+- The contracts need no more of the Drive token than `io.cozy.files:GET,POST`: `GET` on all the user's files, to read them, their index of recent files, their links and their sharings, which the stack lists only for a token that may read every file, and `POST`, to create a file. A token without `POST` finds every folder out of its reach: `create_file` answers `folder_not_found`.
 - Names, paths, types and contents come in an `untrusted` object, apart from what the contract computed: the user wrote them, or anyone who shared a file with them, and the type of a file is the one its uploader declared. They come without control characters, but for the tabs and line breaks of a text, each line break a line feed: a carriage return alone would have a terminal write what follows it over the line.
 - `web_url` opens the item in the Drive web app, for the user: on `<name>-drive.<domain>` when the stack serves its apps on flat subdomains, as its capabilities say, else on `drive.<instance>`.
-- Lists hold 1 to 100 items, 20 by default. When `next_cursor` is not null, more follow: pass it as `cursor`.
+- Lists of files and folders hold 1 to 100 items, 20 by default. When `next_cursor` is not null, more follow: pass it as `cursor`.
 - Its words in `x-twake-domains` say what reading and writing cover there.
 
 ### `drive.file.read.v1`
@@ -389,6 +389,23 @@ Reads the user's files and folders, as they see them in Drive.
 - `search_files` finds the names that hold `name`, 1 to 100 characters, whatever their case, out of the trash. `kind` (`file` or `directory`) and `class` (of files, such as `text`, `pdf` or `image`) narrow it. CouchDB holds no index of names: a search reads all the user's files.
 - `list_recent_files` gives the files changed since `since`, an RFC 3339 time with its offset, at most 31 days back and 7 by default, out of the trash and of the shared drives, as the recent view of Drive does. CouchDB sorts them along an index like the one that view makes: the first call adds it to the user's database (`POST /data/io.cozy.files/_index`), and is slower.
 - The service lists a folder with `GET /files/{folder_id}` and `page[skip]`, `0` on the first page: without it, the stack pages with its own cursor, which carries the name of the next item, and that name must come under `untrusted` only. It reads an item with `POST /files/_all_docs`, which gives the path of a file, and searches with `POST /files/_find`, on a selector it builds, the text escaped. It reads `GET /settings/capabilities` once per instance, for `web_url`.
+
+### `drive.sharing.read.v1`
+
+Reads the shares of files and folders that other people gave the user, such as for a brief to say what reached them, and from whom.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `list_received_shares` | `GET /contracts/v1/drive/received-shares?since=…&limit=…` | `{"shares": [...], "truncated"}`, the newest first |
+
+- A share is `{"id", "received_at", "read_only", "shared_drive", "items": [{"id", "type", "untrusted": {"name"}}], "untrusted": {"shared_by": {"name", "email"}}}`, its time in UTC.
+- A share comes when another member gave it to the user, who accepted it, it goes on, and its invitation reached the user since `since`, an RFC 3339 time with its offset, at most 31 days back and 7 by default. A share the user sent, one waiting for their answer or revoked, which the stack does not tell apart, and an older one are left out, as is a share of an album of Photos, which names its files by reference rather than by id.
+- A share counts from when its invitation reached the user's instance, `received_at`: the sharing's `updated_at`, which that instance writes then, again when the sharer invites the user anew before they answer, and leaves as it is when they accept. A sharing the user was added to after its sharer created it counts from their invitation; one that reached them before `since` and that they accepted after is left out. Moving the user's instance writes it anew for every sharing.
+- `limit` takes 1 to 50 shares, 20 by default, without a cursor: `truncated` tells that it left out older ones.
+- An item is a file or folder, by the name its sharer gave it when they shared it. Outside a shared drive, its id is the one of its copy on the user's instance, which the other Drive operations read once the stack has copied it there. A shared drive (`shared_drive`) keeps its files on its sharer's instance, and its items come by their ids there, out of reach of the other Drive operations.
+- `read_only` is true when the user's own member of the sharing may only read, or when no change of theirs goes back to the sharer; a shared drive leaves every change to the stack, so its member alone tells.
+- The sharer's name is the one the user's contacts give them, else the one they gave themselves, null without either. Their email address is null unless the sharing gives an address alone, 320 characters at most. Both come under `untrusted`, as do the names of the items.
+- The service reads `GET /sharings/doctype/io.cozy.files?shared_docs=false`: the stack gives every sharing of files the user sent or received, whatever its state, at once and in no order, and the service keeps and sorts those it gives.
 
 ### `drive.content.read.v1`
 

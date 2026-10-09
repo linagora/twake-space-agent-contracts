@@ -243,6 +243,7 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "read_file": ["drive.file.read.v1"],
         "search_files": ["drive.file.read.v1"],
         "list_recent_files": ["drive.file.read.v1"],
+        "list_received_shares": ["drive.sharing.read.v1"],
         "read_file_content": ["drive.content.read.v1"],
         "list_my_tasks": ["tasks.task.read.v1"],
         "search_tasks": ["tasks.task.read.v1"],
@@ -425,6 +426,8 @@ READS_NAMED = {
         ("your organization's directory", "l'annuaire de ton organisation"),
         ("the address books shared with you", "les carnets partagés avec toi"),
     ],
+    # Who shared which files and folders with the user, beyond the files themselves
+    "drive": [("others shared with you", "que d'autres ont partagés avec toi")],
     "tasks": [("your projects", "tes projets")],
 }
 
