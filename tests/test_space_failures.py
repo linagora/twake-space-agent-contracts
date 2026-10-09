@@ -42,6 +42,8 @@ OPERATIONS = [
     pytest.param("GET", FEEDS, DESIGN, None, id="list_feed_items"),
     pytest.param("GET", FEEDS, {}, None, id="list_feed_items, all spaces"),
     pytest.param("GET", ITEM, {}, None, id="read_feed_item"),
+    pytest.param("POST", "/contracts/v1/space/spaces", {}, {"name": "Launch"}, id="create_space"),
+    pytest.param("PATCH", SPACE, {}, {"name": "Brand design"}, id="rename_space"),
     *WRITES,
 ]
 PARAMETERS = ("method", "path", "params", "body")
@@ -80,7 +82,7 @@ async def test_space_is_called_with_the_owners_space_token_alone(
         method, path, params=params, json=body, headers=as_space_owner()
     )
 
-    assert response.status_code == 200, response.text
+    assert response.is_success, response.text
     sent = [
         request.headers.get("authorization")
         for request in boundary.requests

@@ -276,6 +276,8 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "search_space_people": ["space.people.read.v1"],
         "list_feed_items": ["space.feed.read.v1"],
         "read_feed_item": ["space.feed.read.v1"],
+        "create_space": ["space.space.create.v1"],
+        "rename_space": ["space.space.update.v1"],
         "add_space_members": ["space.member.add.v1"],
         "update_space_member": ["space.member.update.v1"],
         "remove_space_member": ["space.member.remove.v1"],
@@ -419,6 +421,8 @@ WRITES_NAMED = {
         "delete_contact": ("delete", "supprimer"),
     },
     "space": {
+        "create_space": ("create", "créer"),
+        "rename_space": ("rename", "renommer"),
         "add_space_members": ("add members", "ajouter des membres"),
         "update_space_member": ("change their roles", "changer leur rôle"),
         "remove_space_member": ("remove them", "les retirer"),
@@ -565,6 +569,8 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "create_contact": ("post", True),
         "update_contact": ("patch", True),
         "delete_contact": ("delete", True),
+        "create_space": ("post", True),
+        "rename_space": ("patch", True),
         "add_space_members": ("post", True),
         "update_space_member": ("patch", True),
         "remove_space_member": ("delete", True),
@@ -980,6 +986,46 @@ async def test_the_bodies_of_the_batched_mail_moves_are_whole_and_closed(
         {"required": ["mailbox_id"]},
         {"required": ["mailbox_name"]},
     ]
+
+
+async def test_creating_a_space_is_a_low_risk_write_and_renaming_one_a_high_risk_write(
+    client: AsyncClient,
+) -> None:
+    # A new space has the user alone as its member: once the owner allowed writing in Space, it
+    # runs without asking. Every member of a space sees its new name at once: the owner confirms
+    # each one
+    document = (await client.get("/openapi.json")).json()
+    paths = document["paths"]
+
+    risks = {
+        "create_space": paths["/contracts/v1/space/spaces"]["post"]["x-twake-risk"],
+        "rename_space": paths["/contracts/v1/space/spaces/{space_id}"]["patch"]["x-twake-risk"],
+    }
+
+    assert risks == {"create_space": "low", "rename_space": "high"}
+
+
+async def test_the_bodies_of_the_space_writes_are_whole_and_closed(client: AsyncClient) -> None:
+    # The model gets each body as the document writes it, whole: a new space takes a name and a
+    # description, with every tab and Space's own color; a space renamed, its new name alone
+    document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
+
+    schemas = {
+        name: operations[name]["requestBody"]["content"]["application/json"]["schema"]
+        for name in ("create_space", "rename_space")
+    }
+
+    assert "$ref" not in json.dumps(schemas)
+    assert {name: sorted(schema["properties"]) for name, schema in schemas.items()} == {
+        "create_space": ["description", "name"],
+        "rename_space": ["name"],
+    }
+    assert [schema["additionalProperties"] for schema in schemas.values()] == [False] * 2
+    assert [schema["required"] for schema in schemas.values()] == [["name"]] * 2
+    assert [schema["properties"]["name"]["maxLength"] for schema in schemas.values()] == [255] * 2
 
 
 async def test_changing_the_members_of_a_space_are_high_risk_writes_with_whole_and_closed_bodies(

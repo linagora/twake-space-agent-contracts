@@ -1,6 +1,6 @@
 """Twake Space: the contracts that read the user's spaces, their members and their feeds, and that
-add, change and remove the members of those where the user is an admin, through the Twake Space
-backend, with the API token of Space the user made for their assistant."""
+create spaces, rename those where the user is an admin and add, change and remove their members,
+through the Twake Space backend, with the API token of Space the user made for their assistant."""
 
 from typing import Annotated, Literal
 

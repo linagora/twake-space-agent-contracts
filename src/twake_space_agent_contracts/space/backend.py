@@ -20,9 +20,9 @@ API_TOKEN_PREFIX = "tws_"
 """What Space's API tokens start with, by which Space tells them from the tokens of a person's
 session."""
 
-Scope = Literal["space:read", "feed:read", "members:write"]
+Scope = Literal["space:read", "feed:read", "space:write", "members:write"]
 """What an API token of Space may do that the contracts need, by Space's names: read the spaces,
-read their feeds, and add, change and remove their members."""
+read their feeds, create and rename spaces, and add, change and remove their members."""
 
 AT_ONCE = 5
 """The most calls to Space a contract makes at a time, when it reads several spaces."""
@@ -58,6 +58,18 @@ def space_not_found(space_id: str) -> Problem:
         title="Space not found",
         detail=f"The user is a member of no space {space_id} their API token of Space reaches: "
         "list_spaces gives the spaces it reaches.",
+    )
+
+
+def needs_an_account() -> Problem:
+    return Problem(
+        status=403,
+        code="needs_an_account",
+        title="Needs an account",
+        detail="Space creates a space only for the API token of a person's account, who becomes its"
+        " admin: the user's API token of Space is not one, such as a token of the organization."
+        " The user creates the space in Space, or gives their assistant a token of their own"
+        " account.",
     )
 
 
@@ -129,6 +141,16 @@ def last_admin(space_id: str) -> Problem:
         detail=f"Space {space_id} would be left without an admin of its own, which it keeps at"
         " least one of, a group linked as admin counting for none: make another member an admin"
         " first.",
+    )
+
+
+def _refused(what: str) -> Problem:
+    """Space's refusal of a text the contracts let through: Space counts its length in UTF-16
+    code units, where a character outside the Basic Multilingual Plane, such as an emoji, counts
+    two."""
+    return invalid_request(
+        f"Space refused the {what}: Space counts characters in UTF-16 code units, an emoji counting"
+        " two, and takes 1 to 255 in a name, 1,000 at most in a description."
     )
 
 
@@ -571,6 +593,54 @@ class TwakeSpace:
             ]
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Space gave the spaces in an unexpected form.") from error
+
+    async def create(self, owner: SpaceOwner, name: str, description: str) -> SpaceSummary:
+        """The space Space created of that name and description, with every tab, as it would list
+        it: the user its only member, as its admin. Space takes no idempotency key: each call
+        creates one."""
+        response = await self._call(
+            owner,
+            "POST",
+            "/spaces",
+            scope="space:write",
+            body={"name": name, "description": description},
+        )
+        if response.status_code == 403 and _error_of(response) == "needs_an_account":
+            raise needs_an_account()
+        if response.status_code == 400:
+            raise _refused("name or the description")
+        found = self._json(response, "POST", "/spaces")
+        try:
+            return SpaceSummary(
+                space_id=_text(found["id"]),
+                name=_text(found["name"]),
+                description=description,
+                role=_text(found["role"]),
+                member_count=1,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise _unavailable("Space gave the new space in an unexpected form.") from error
+
+    async def reaches(self, owner: SpaceOwner, space_id: str) -> bool:
+        """Whether the user's API token of Space reaches the space: one made for a list of spaces
+        reaches no other, not even a space it created since."""
+        found = await self._get(owner, f"/spaces/{space_id}", scope="space:read", missing_ok=True)
+        return found is not None
+
+    async def rename(self, owner: SpaceOwner, space_id: str, name: str) -> None:
+        """Gives the space that name, its tabs left as they are: Space tells its members at once.
+        Space lets the admins of the space alone rename it."""
+        path = f"/spaces/{space_id}"
+        response = await self._call(owner, "PATCH", path, scope="space:write", body={"name": name})
+        error = _error_of(response)
+        if response.status_code == 404 and error == "not_found":
+            raise space_not_found(space_id)
+        if response.status_code == 403 and error == "not_space_admin":
+            raise not_space_admin(space_id)
+        if response.status_code == 400:
+            raise _refused("name")
+        if not response.is_success:
+            raise _unavailable(f"Space answered {response.status_code} to PATCH {path}.")
 
     async def space(self, owner: SpaceOwner, space_id: str) -> SpaceDetail:
         """The space, if the user is a member of it: Space answers for any other as for an
