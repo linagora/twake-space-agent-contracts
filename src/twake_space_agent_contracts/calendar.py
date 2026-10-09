@@ -3,6 +3,7 @@
 import copy
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, Literal, get_args
@@ -451,6 +452,14 @@ class CalendarEvent:
         return (self.organizer[1] or "").lower() == email.lower()
 
     @property
+    def invitees(self) -> set[str]:
+        """The addresses it invites, lowercased, but for its organizer, whom Twake Calendar lists
+        among its attendees too, as its chair."""
+        organizer = (self.organizer[1] or "").lower()
+        invited = {attendee.address.lower() for attendee in self.attendees if attendee.address}
+        return invited - {organizer}
+
+    @property
     def starts(self) -> EventTime | None:
         return _event_time(self._prop("dtstart"))
 
@@ -713,11 +722,14 @@ def new_event(
     busy: bool = True,
     location: str | None = None,
     description: str | None = None,
+    organizer: str | None = None,
+    attendees: Sequence[str] = (),
 ) -> list[Any]:
-    """An event in jCal that invites nobody, its times written in an IANA time zone, which it
-    describes, or else in UTC; or an event of whole days, from its first day to its last, which
-    names no time zone. Stamped when it is written. A transparent event, one that does not make the
-    user busy, is left out of free/busy."""
+    """An event in jCal that invites nobody, unless it is given an organizer and attendees, as a
+    meeting: the organizer is its chair, and each attendee is asked to answer. Its times are
+    written in an IANA time zone, which it describes, or else in UTC; or an event of whole days,
+    from its first day to its last, which names no time zone. Stamped when it is written. A
+    transparent event, one that does not make the user busy, is left out of free/busy."""
     texts = [
         [name, {}, "text", value]
         for name, value in (("location", location), ("description", description))
@@ -732,6 +744,33 @@ def new_event(
         local = formatted(moment.astimezone(ZoneInfo(zone)), JCAL_TIME)
         return [name, {"tzid": zone}, "date-time", local]
 
+    people = (
+        [
+            ["organizer", {}, "cal-address", f"mailto:{organizer}"],
+            [
+                "attendee",
+                {"partstat": "ACCEPTED", "role": "CHAIR", "cutype": "INDIVIDUAL"},
+                "cal-address",
+                f"mailto:{organizer}",
+            ],
+            *(
+                [
+                    "attendee",
+                    {
+                        "partstat": "NEEDS-ACTION",
+                        "role": "REQ-PARTICIPANT",
+                        "rsvp": "TRUE",
+                        "cutype": "INDIVIDUAL",
+                    },
+                    "cal-address",
+                    f"mailto:{address}",
+                ]
+                for address in attendees
+            ),
+        ]
+        if organizer is not None
+        else []
+    )
     return [
         "vcalendar",
         [["version", {}, "text", "2.0"], ["prodid", {}, "text", PRODID]],
@@ -747,6 +786,7 @@ def new_event(
                     ["summary", {}, "text", title],
                     ["transp", {}, "text", "OPAQUE" if busy else "TRANSPARENT"],
                     *texts,
+                    *people,
                 ],
                 [],
             ],
@@ -865,11 +905,30 @@ class Calendar:
         except Problem:
             return None
 
+    async def person_id(self, user: User, email: str) -> str | None:
+        """The id in Calendar of the person of that email; None when Calendar has none."""
+        found = await self._call(user, "GET", "/api/users", params={"email": email})
+        if not isinstance(found, list) or not found or "_id" not in found[0]:
+            return None
+        return str(found[0]["_id"])
+
     async def busy(
         self, user: User, start: datetime, end: datetime, exclude: list[str]
     ) -> list[BusySlot]:
         """The user's busy slots between two UTC times, but for the events of the given UIDs."""
         user_id = await self.user_id(user)
+        return (await self.busy_of(user, [user_id], start, end, exclude))[user_id]
+
+    async def busy_of(
+        self,
+        user: User,
+        ids: list[str],
+        start: datetime,
+        end: datetime,
+        exclude: Sequence[str] = (),
+    ) -> dict[str, list[BusySlot]]:
+        """The busy slots of those people, by their ids, between two UTC times: free/busy alone,
+        never what the events are. The events of the given UIDs are left out."""
         answer = await self._call(
             user,
             "POST",
@@ -877,23 +936,31 @@ class Calendar:
             json={
                 "start": formatted(start, SABRE_TIME),
                 "end": formatted(end, SABRE_TIME),
-                "users": [user_id],
-                "uids": exclude,
+                "users": ids,
+                "uids": list(exclude),
             },
         )
         try:
-            slots = [
-                BusySlot(
-                    start=datetime.strptime(slot["start"], SABRE_TIME).replace(tzinfo=UTC),
-                    end=datetime.strptime(slot["end"], SABRE_TIME).replace(tzinfo=UTC),
+            slots = {
+                str(user_free_busy["id"]): sorted(
+                    (
+                        BusySlot(
+                            start=datetime.strptime(slot["start"], SABRE_TIME).replace(tzinfo=UTC),
+                            end=datetime.strptime(slot["end"], SABRE_TIME).replace(tzinfo=UTC),
+                        )
+                        for calendar in user_free_busy.get("calendars", [])
+                        for slot in calendar.get("busy", [])
+                    ),
+                    key=lambda slot: slot.start,
                 )
                 for user_free_busy in answer["users"]
-                for calendar in user_free_busy.get("calendars", [])
-                for slot in calendar.get("busy", [])
-            ]
+            }
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Calendar gave free/busy in an unexpected form.") from error
-        return sorted(slots, key=lambda slot: slot.start)
+        # A person Calendar left out of its answer is no one whose calendar can be called free
+        if not set(ids) <= slots.keys():
+            raise _unavailable("Calendar gave free/busy in an unexpected form.")
+        return slots
 
     async def _calendars(self, user: User, user_id: str) -> list[str]:
         """The calendars the user owns, by the hrefs of their JSON, as esn-sabre lists them."""
