@@ -280,6 +280,19 @@ async def test_an_admin_renames_their_space(client: AsyncClient, boundary: FakeB
     )
 
 
+async def test_a_name_the_space_has_already_writes_nothing(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    brand = boundary.space.space("Brand", {MMAUDET: "admin", ALICE: "editor"})
+
+    response = await rename(client, brand.id, name=" Brand ")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["untrusted"]["name"] == "Brand"
+    # Space would rename it all the same, and tell every member
+    assert boundary.space.writes == []
+
+
 @pytest.mark.parametrize("headers", [{}, asking_preview("en")], ids=["call", "preview"])
 @pytest.mark.parametrize("role", ["viewer", "editor"])
 async def test_only_an_admin_of_the_space_renames_it(

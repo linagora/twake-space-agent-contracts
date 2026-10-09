@@ -267,7 +267,9 @@ def _update(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
             summary = _renaming(detail.name, name, len(detail.members), preview.language)
             return preview.answer(summary, digest)
         preview.check(digest)
-        await space.rename(owner, space_id, name)
+        # Space would rename it all the same, and tell every member
+        if name != detail.name:
+            await space.rename(owner, space_id, name)
         return ListedSpace(
             space_id=detail.space_id,
             url=space.feed_url(detail.space_id),
