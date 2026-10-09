@@ -4,8 +4,14 @@ members and what its apps linked to it."""
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import AS_MMAUDET
-from tests.fakes import FakeBoundary, SpaceGroupLink, SpacePerson, space_person, space_uuid
+from tests.fakes import (
+    FakeBoundary,
+    SpaceGroupLink,
+    SpacePerson,
+    as_space_owner,
+    space_person,
+    space_uuid,
+)
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
@@ -24,7 +30,7 @@ async def test_the_user_lists_the_spaces_they_are_a_member_of(
     # A space the user is not a member of
     boundary.space.space("Finance", {ALICE: "admin"})
 
-    response = await client.get("/contracts/v1/space/spaces", headers=AS_MMAUDET)
+    response = await client.get("/contracts/v1/space/spaces", headers=as_space_owner())
 
     assert response.status_code == 200, response.text
     assert response.json() == {
@@ -52,12 +58,12 @@ async def test_what_people_wrote_of_a_space_comes_on_one_line_without_what_is_un
     # A name or a description holds what anyone who administers the space wrote: line breaks,
     # bidirectional marks or zero-width characters would pass for something else
     boundary.space.space(
-        "Design\u202e\nTeam",
+        "Design‮\nTeam",
         {MMAUDET: "editor"},
-        description="Brand\u200b and\r\nproduct " + "design " * 300,
+        description="Brand​ and\r\nproduct " + "design " * 300,
     )
 
-    response = await client.get("/contracts/v1/space/spaces", headers=AS_MMAUDET)
+    response = await client.get("/contracts/v1/space/spaces", headers=as_space_owner())
 
     assert response.status_code == 200, response.text
     text = response.json()["spaces"][0]["untrusted"]
@@ -73,7 +79,7 @@ async def test_the_list_holds_a_hundred_spaces_at_most(
     for number in range(spaces):
         boundary.space.space(f"Space {number:03}", {MMAUDET: "viewer"})
 
-    response = await client.get("/contracts/v1/space/spaces", headers=AS_MMAUDET)
+    response = await client.get("/contracts/v1/space/spaces", headers=as_space_owner())
 
     assert response.status_code == 200, response.text
     listed = response.json()["spaces"]
@@ -100,7 +106,7 @@ async def test_the_user_reads_a_space_with_its_members_and_what_its_apps_linked_
         groups=[SpaceGroupLink("0b5a6c8e-3c2b-4f5e-9d7a-1e2f3a4b5c6d", "Designers", "editor")],
     )
 
-    response = await client.get(f"/contracts/v1/space/spaces/{design.id}", headers=AS_MMAUDET)
+    response = await client.get(f"/contracts/v1/space/spaces/{design.id}", headers=as_space_owner())
 
     assert response.status_code == 200, response.text
     assert response.json() == {
@@ -156,7 +162,7 @@ async def test_a_space_the_user_is_not_a_member_of_answers_like_an_unknown_one(
     finance = boundary.space.space("Finance", {ALICE: "admin"})
 
     responses = [
-        await client.get(f"/contracts/v1/space/spaces/{space_id}", headers=AS_MMAUDET)
+        await client.get(f"/contracts/v1/space/spaces/{space_id}", headers=as_space_owner())
         for space_id in (finance.id, space_uuid("unknown"))
     ]
 
@@ -167,7 +173,7 @@ async def test_a_space_the_user_is_not_a_member_of_answers_like_an_unknown_one(
 async def test_an_id_that_is_not_a_uuid_is_invalid(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
-    response = await client.get("/contracts/v1/space/spaces/design", headers=AS_MMAUDET)
+    response = await client.get("/contracts/v1/space/spaces/design", headers=as_space_owner())
 
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_request"
@@ -181,7 +187,7 @@ async def test_the_user_is_told_apart_whatever_the_case_of_their_email(
     shouted = SpacePerson(MMAUDET.user_id, "mmaudet", "MMaudet@Twake.test")
     design = boundary.space.space("Design", {shouted: "admin", ALICE: "editor"})
 
-    response = await client.get(f"/contracts/v1/space/spaces/{design.id}", headers=AS_MMAUDET)
+    response = await client.get(f"/contracts/v1/space/spaces/{design.id}", headers=as_space_owner())
 
     assert response.status_code == 200, response.text
     assert [(member["username"], member["you"]) for member in response.json()["members"]] == [
@@ -198,7 +204,7 @@ async def test_no_member_is_the_user_when_several_have_their_email(
     twin = SpacePerson(space_uuid("former account"), "mmaudet2", "MMaudet@twake.test")
     design = boundary.space.space("Design", {MMAUDET: "admin", twin: "viewer", ALICE: "editor"})
 
-    response = await client.get(f"/contracts/v1/space/spaces/{design.id}", headers=AS_MMAUDET)
+    response = await client.get(f"/contracts/v1/space/spaces/{design.id}", headers=as_space_owner())
 
     assert response.status_code == 200, response.text
     assert [(member["username"], member["you"]) for member in response.json()["members"]] == [

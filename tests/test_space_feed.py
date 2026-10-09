@@ -5,8 +5,7 @@ from typing import Any
 
 from httpx import AsyncClient
 
-from tests.conftest import AS_MMAUDET
-from tests.fakes import FakeBoundary, space_person, space_uuid
+from tests.fakes import FakeBoundary, as_space_owner, space_person, space_uuid
 
 MMAUDET = space_person("mmaudet", "Michel-Marie Maudet")
 ALICE = space_person("alice", "Alice Martin")
@@ -42,7 +41,9 @@ async def test_the_user_reads_the_feed_of_a_space_newest_first(
     boundary.space.react(post, BOB, "👍")
     boundary.space.react(post, BOB, "🎉")
 
-    response = await client.get(f"/contracts/v1/space/spaces/{design.id}/feed", headers=AS_MMAUDET)
+    response = await client.get(
+        f"/contracts/v1/space/spaces/{design.id}/feed", headers=as_space_owner()
+    )
 
     assert response.status_code == 200, response.text
     assert response.json() == {
@@ -113,12 +114,12 @@ async def test_older_items_follow_from_the_cursor_of_each_page(
     ]
     feed = f"/contracts/v1/space/spaces/{design.id}/feed"
 
-    first = await client.get(feed, params={"limit": 2}, headers=AS_MMAUDET)
+    first = await client.get(feed, params={"limit": 2}, headers=as_space_owner())
     second = await client.get(
-        feed, params={"limit": 2, "before": first.json()["next"]}, headers=AS_MMAUDET
+        feed, params={"limit": 2, "before": first.json()["next"]}, headers=as_space_owner()
     )
     last = await client.get(
-        feed, params={"limit": 2, "before": second.json()["next"]}, headers=AS_MMAUDET
+        feed, params={"limit": 2, "before": second.json()["next"]}, headers=as_space_owner()
     )
 
     pages = [[item["item_id"] for item in page.json()["items"]] for page in (first, second, last)]
@@ -134,7 +135,7 @@ async def test_a_cursor_space_did_not_write_is_invalid(
     response = await client.get(
         f"/contracts/v1/space/spaces/{design.id}/feed",
         params={"before": "bm90LWEtY3Vyc29y"},
-        headers=AS_MMAUDET,
+        headers=as_space_owner(),
     )
 
     assert response.status_code == 400
@@ -164,8 +165,8 @@ async def test_a_category_keeps_its_cards_and_messages_the_posts_too(
     post = boundary.space.post(design, ALICE, "Hello", time="2026-10-04T09:00:00.000Z").id
     feed = f"/contracts/v1/space/spaces/{design.id}/feed"
 
-    files = await client.get(feed, params={"category": "files"}, headers=AS_MMAUDET)
-    messages = await client.get(feed, params={"category": "messages"}, headers=AS_MMAUDET)
+    files = await client.get(feed, params={"category": "files"}, headers=as_space_owner())
+    messages = await client.get(feed, params={"category": "messages"}, headers=as_space_owner())
 
     assert [item["item_id"] for item in files.json()["items"]] == [roadmap]
     assert [item["item_id"] for item in messages.json()["items"]] == [post, invoice]
@@ -203,7 +204,9 @@ async def test_what_people_wrote_comes_without_what_is_unseen_and_a_post_keeps_i
     )
     boundary.space.react(post, shown, "\N{THUMBS UP SIGN}\u202e")
 
-    response = await client.get(f"/contracts/v1/space/spaces/{design.id}/feed", headers=AS_MMAUDET)
+    response = await client.get(
+        f"/contracts/v1/space/spaces/{design.id}/feed", headers=as_space_owner()
+    )
 
     assert response.status_code == 200, response.text
     written, carded = response.json()["items"]
@@ -247,7 +250,9 @@ async def test_each_item_says_who_made_it(client: AsyncClient, boundary: FakeBou
     boundary.space.post(design, None, "Former member's post", time="2026-10-04T09:00:00.000Z")
     boundary.space.post(design, MMAUDET, "My own post", time="2026-10-05T09:00:00.000Z")
 
-    response = await client.get(f"/contracts/v1/space/spaces/{design.id}/feed", headers=AS_MMAUDET)
+    response = await client.get(
+        f"/contracts/v1/space/spaces/{design.id}/feed", headers=as_space_owner()
+    )
 
     assert response.status_code == 200, response.text
     assert [item["by"] for item in response.json()["items"]] == [
@@ -277,7 +282,7 @@ async def test_the_user_reads_one_item_of_the_feed(
     )
 
     response = await client.get(
-        f"/contracts/v1/space/spaces/{design.id}/feed/items/{post.id}", headers=AS_MMAUDET
+        f"/contracts/v1/space/spaces/{design.id}/feed/items/{post.id}", headers=as_space_owner()
     )
 
     assert response.status_code == 200, response.text
@@ -301,13 +306,14 @@ async def test_an_item_outside_the_feed_of_the_space_is_not_found(
 
     unknown = await client.get(
         f"/contracts/v1/space/spaces/{design.id}/feed/items/{space_uuid('unknown')}",
-        headers=AS_MMAUDET,
+        headers=as_space_owner(),
     )
     other = await client.get(
-        f"/contracts/v1/space/spaces/{design.id}/feed/items/{elsewhere.id}", headers=AS_MMAUDET
+        f"/contracts/v1/space/spaces/{design.id}/feed/items/{elsewhere.id}",
+        headers=as_space_owner(),
     )
     not_theirs = await client.get(
-        f"/contracts/v1/space/spaces/{finance.id}/feed/items/{secret.id}", headers=AS_MMAUDET
+        f"/contracts/v1/space/spaces/{finance.id}/feed/items/{secret.id}", headers=as_space_owner()
     )
 
     assert (unknown.status_code, unknown.json()["code"]) == (404, "feed_item_not_found")
@@ -321,7 +327,9 @@ async def test_the_feed_of_a_space_the_user_is_not_a_member_of_is_not_found(
     finance = boundary.space.space("Finance", {ALICE: "admin"})
     boundary.space.post(finance, ALICE, "Budget", time="2026-10-06T08:30:00.000Z")
 
-    response = await client.get(f"/contracts/v1/space/spaces/{finance.id}/feed", headers=AS_MMAUDET)
+    response = await client.get(
+        f"/contracts/v1/space/spaces/{finance.id}/feed", headers=as_space_owner()
+    )
 
     assert response.status_code == 404
     assert response.json()["code"] == "space_not_found"

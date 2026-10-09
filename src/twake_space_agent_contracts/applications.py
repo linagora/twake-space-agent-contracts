@@ -36,7 +36,7 @@ from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, th
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
 from twake_space_agent_contracts.space import feed, spaces
-from twake_space_agent_contracts.space.backend import TwakeSpace
+from twake_space_agent_contracts.space.backend import TwakeSpace, space_owner_dependency
 from twake_space_agent_contracts.tasks import Tasks
 
 # An application's entry in x-twake-domains: by level, name included, its words in each language
@@ -184,7 +184,8 @@ def _space(context: Context) -> list[APIRouter]:
     if context.settings.space_url is None:
         raise ValueError("PUBLISHED_APPS names space, which needs SPACE_URL")
     space = TwakeSpace(context.settings.space_url, context.http)
-    return [spaces.router(space, context.caller), feed.router(space, context.caller)]
+    space_owner = space_owner_dependency(context.caller)
+    return [spaces.router(space, space_owner), feed.router(space, space_owner)]
 
 
 APPLICATIONS = (

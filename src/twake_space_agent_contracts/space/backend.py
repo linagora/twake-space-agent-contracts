@@ -1,13 +1,15 @@
-"""The Twake Space backend (0.1.9), called as the user with their own token: Space acts for the uuid
-of the token's user in their org_id, and shows them the spaces they are a member of."""
+"""The Twake Space backend (0.1.18), called with the API token of Space the user made for their
+assistant: Space acts for the token, and shows it the spaces it reaches."""
 
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
+from fastapi import Depends, Header
 
-from twake_space_agent_contracts.caller import User
+from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.problems import Problem, invalid_request
 
 # The ids of spaces, people and items of a feed, as Space writes them: a pattern any OpenAPI
@@ -39,6 +41,37 @@ def feed_item_not_found(space_id: str, item_id: str) -> Problem:
         title="Feed item not found",
         detail=f"The feed of space {space_id} has no item {item_id}.",
     )
+
+
+@dataclass(frozen=True)
+class SpaceOwner:
+    """The user, with the API token of Space they made for their assistant, which the token broker
+    holds for them, never stored here."""
+
+    user: User
+    token: str = field(repr=False)
+    """Out of the owner's representation, so that no trace or log shows it."""
+
+
+SpaceOwnerDependency = Callable[..., Awaitable[SpaceOwner]]
+
+
+def space_owner_dependency(caller: CallerDependency) -> SpaceOwnerDependency:
+    """The dependency that gives a Space route the user and their API token of Space, as APISIX
+    attached them."""
+
+    async def space_owner(
+        user: Annotated[User, Depends(caller)],
+        x_twake_space_token: Annotated[str | None, Header(include_in_schema=False)] = None,
+    ) -> SpaceOwner:
+        """The user's API token of Space, from the header the gateway sets with what the token
+        broker gives, once it removed the one an agent sent.
+
+        Left out of the OpenAPI document, as the user's token is.
+        """
+        return SpaceOwner(user, x_twake_space_token or "")
+
+    return space_owner
 
 
 def _text(value: Any) -> str:
@@ -250,14 +283,14 @@ def _member(item: Any) -> Member:
 
 
 class TwakeSpace:
-    """The Twake Space backend, called as the user with their own token."""
+    """The Twake Space backend, called with the user's API token of Space."""
 
     def __init__(self, url: str, http: httpx.AsyncClient) -> None:
         self._url = url
         self._http = http
 
     async def _call(
-        self, user: User, method: str, path: str, *, params: Any = None, body: Any = None
+        self, owner: SpaceOwner, method: str, path: str, *, params: Any = None
     ) -> httpx.Response:
         """Space's answer, once Space answered and took the user's token."""
         try:
@@ -265,8 +298,7 @@ class TwakeSpace:
                 method,
                 self._url + path,
                 params=params,
-                json=body,
-                headers={"Authorization": f"Bearer {user.token}", "Accept": "application/json"},
+                headers={"Authorization": f"Bearer {owner.token}", "Accept": "application/json"},
             )
         except httpx.HTTPError as error:
             raise _unavailable(f"Space did not answer {method} {path}.") from error
@@ -297,7 +329,7 @@ class TwakeSpace:
 
     async def _get(
         self,
-        user: User,
+        owner: SpaceOwner,
         path: str,
         params: dict[str, str | int] | None = None,
         *,
@@ -308,16 +340,16 @@ class TwakeSpace:
         Space answers 404 not_found for what does not exist and for what the user does not
         reach alike. A refused request raises `invalid` when given: Space checks a parameter
         the contract cannot."""
-        response = await self._call(user, "GET", path, params=params)
+        response = await self._call(owner, "GET", path, params=params)
         if missing_ok and response.status_code == 404 and _error_of(response) == "not_found":
             return None
         if invalid is not None and response.status_code == 400:
             raise invalid
         return self._json(response, "GET", path)
 
-    async def spaces(self, user: User) -> list[SpaceSummary]:
+    async def spaces(self, owner: SpaceOwner) -> list[SpaceSummary]:
         """The spaces the user is a member of, by name."""
-        found = await self._get(user, "/spaces")
+        found = await self._get(owner, "/spaces")
         try:
             return [
                 SpaceSummary(
@@ -332,10 +364,10 @@ class TwakeSpace:
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Space gave the spaces in an unexpected form.") from error
 
-    async def space(self, user: User, space_id: str) -> SpaceDetail:
+    async def space(self, owner: SpaceOwner, space_id: str) -> SpaceDetail:
         """The space, if the user is a member of it: Space answers for any other as for an
         unknown one."""
-        found = await self._get(user, f"/spaces/{space_id}", missing_ok=True)
+        found = await self._get(owner, f"/spaces/{space_id}", missing_ok=True)
         if found is None:
             raise space_not_found(space_id)
         try:
@@ -365,7 +397,7 @@ class TwakeSpace:
 
     async def feed(
         self,
-        user: User,
+        owner: SpaceOwner,
         space_id: str,
         *,
         category: str | None,
@@ -380,7 +412,7 @@ class TwakeSpace:
         if before is not None:
             params["before"] = before
         found = await self._get(
-            user,
+            owner,
             f"/spaces/{space_id}/feed",
             params,
             missing_ok=True,
@@ -398,10 +430,10 @@ class TwakeSpace:
             raise _unavailable("Space gave the feed in an unexpected form.") from error
         return items, following
 
-    async def item(self, user: User, space_id: str, item_id: str) -> FeedItem | None:
+    async def item(self, owner: SpaceOwner, space_id: str, item_id: str) -> FeedItem | None:
         """The item of the feed of the space; None if the feed has no such item, or if the
         space is not the user's."""
-        found = await self._get(user, f"/spaces/{space_id}/feed/items/{item_id}", missing_ok=True)
+        found = await self._get(owner, f"/spaces/{space_id}/feed/items/{item_id}", missing_ok=True)
         if found is None:
             return None
         try:

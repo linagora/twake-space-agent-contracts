@@ -8,7 +8,15 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import AS_MMAUDET, Serve, operations_of, serving
-from tests.fakes import CHAT_GATEWAY_KEY, ISSUER, SETTINGS, FakeBoundary, as_drive_owner, email_of
+from tests.fakes import (
+    CHAT_GATEWAY_KEY,
+    ISSUER,
+    SETTINGS,
+    FakeBoundary,
+    as_drive_owner,
+    as_space_owner,
+    email_of,
+)
 from twake_space_agent_contracts.app import create_app_from_env
 from twake_space_agent_contracts.settings import Settings
 
@@ -398,7 +406,7 @@ async def test_space_published_with_its_url_is_served(
 
     async with serve(Settings.from_env()) as client:
         document = await document_of(client)
-        spaces = await client.get("/contracts/v1/space/spaces", headers=AS_MMAUDET)
+        spaces = await client.get("/contracts/v1/space/spaces", headers=as_space_owner())
 
     assert set(document["x-twake-domains"]) == {"space"}
     assert spaces.status_code == 200, spaces.text

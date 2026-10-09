@@ -8,7 +8,6 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from twake_space_agent_contracts.caller import CallerDependency, User
 from twake_space_agent_contracts.space import (
     EXAMPLE_ITEM,
     EXAMPLE_SPACE,
@@ -20,6 +19,8 @@ from twake_space_agent_contracts.space import (
 from twake_space_agent_contracts.space.backend import (
     Actor,
     FeedItem,
+    SpaceOwner,
+    SpaceOwnerDependency,
     TwakeSpace,
     feed_item_not_found,
 )
@@ -202,7 +203,7 @@ def feed_item(item: FeedItem, me: str | None) -> SpaceFeedItem:
     )
 
 
-def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
+def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/space", tags=["space.feed.read.v1"])
 
     @routes.get(
@@ -220,7 +221,7 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
     )
     async def list_feed_items(
         space_id: SpaceId,
-        user: Annotated[User, Depends(caller)],
+        owner: Annotated[SpaceOwner, Depends(owner_of)],
         category: Annotated[
             Category | None,
             Query(description="messages, files, activities or events; all of them by default."),
@@ -236,9 +237,9 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
             ),
         ] = None,
     ) -> SpaceFeed:
-        me = (await space.space(user, space_id)).user_id_of(user.email)
+        me = (await space.space(owner, space_id)).user_id_of(owner.user.email)
         items, following = await space.feed(
-            user, space_id, category=category, limit=limit, before=before
+            owner, space_id, category=category, limit=limit, before=before
         )
         return SpaceFeed(items=[feed_item(item, me) for item in items], next=following)
 
@@ -253,10 +254,10 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
         ),
     )
     async def read_feed_item(
-        space_id: SpaceId, item_id: ItemId, user: Annotated[User, Depends(caller)]
+        space_id: SpaceId, item_id: ItemId, owner: Annotated[SpaceOwner, Depends(owner_of)]
     ) -> SpaceFeedItem:
-        me = (await space.space(user, space_id)).user_id_of(user.email)
-        item = await space.item(user, space_id, item_id)
+        me = (await space.space(owner, space_id)).user_id_of(owner.user.email)
+        item = await space.item(owner, space_id, item_id)
         if item is None:
             raise feed_item_not_found(space_id, item_id)
         return feed_item(item, me)

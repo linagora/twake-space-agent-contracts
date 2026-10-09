@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from twake_space_agent_contracts.caller import CallerDependency, User
+from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.space import (
     EXAMPLE_SPACE,
     LONGEST_NAME,
@@ -15,7 +15,13 @@ from twake_space_agent_contracts.space import (
     UNTRUSTED,
     SpaceId,
 )
-from twake_space_agent_contracts.space.backend import Member, SpaceDetail, TwakeSpace
+from twake_space_agent_contracts.space.backend import (
+    Member,
+    SpaceDetail,
+    SpaceOwner,
+    SpaceOwnerDependency,
+    TwakeSpace,
+)
 from twake_space_agent_contracts.text import line
 
 LONGEST_DESCRIPTION = 1000
@@ -148,7 +154,7 @@ def space_of(detail: SpaceDetail, user: User) -> Space:
     )
 
 
-def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
+def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
     routes = APIRouter(prefix="/contracts/v1/space", tags=["space.spaces.read.v1"])
 
     @routes.get(
@@ -162,8 +168,8 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
             f"list_feed_items for its feed. {UNTRUSTED} Example: (no parameters)."
         ),
     )
-    async def list_spaces(user: Annotated[User, Depends(caller)]) -> SpaceList:
-        found = await space.spaces(user)
+    async def list_spaces(owner: Annotated[SpaceOwner, Depends(owner_of)]) -> SpaceList:
+        found = await space.spaces(owner)
         return SpaceList(
             spaces=[
                 ListedSpace(
@@ -192,7 +198,9 @@ def router(space: TwakeSpace, caller: CallerDependency) -> APIRouter:
             f"not a member of answers like an unknown one. {UNTRUSTED} Example: {EXAMPLE_SPACE}."
         ),
     )
-    async def read_space(space_id: SpaceId, user: Annotated[User, Depends(caller)]) -> Space:
-        return space_of(await space.space(user, space_id), user)
+    async def read_space(
+        space_id: SpaceId, owner: Annotated[SpaceOwner, Depends(owner_of)]
+    ) -> Space:
+        return space_of(await space.space(owner, space_id), owner.user)
 
     return routes
