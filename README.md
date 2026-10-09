@@ -621,14 +621,14 @@ The Space contracts call the REST API of the Twake Space backend 0.1.18, at `SPA
 | `X-Twake-Space-Token` | the user's API token of Space, which the broker holds for them, and which starts with `tws_` |
 
 - The gateway removes `X-Twake-Space-Token` from what an agent sends, so only the broker sets it. A user who gave the broker no API token of Space never reaches the service: the broker answers `space_token_missing`, with its consent link, which APISIX returns as is. The service reads the header like the bearer token, out of the OpenAPI document, and never stores it. Without it, or with a token that does not start with `tws_`, a Space contract answers `missing_space_token`, and nothing goes to Space.
-- The service sends the API token to Space alone, as a bearer token. Space acts for it with the role the user has in each space, and shows it the spaces it reaches. A token Space refuses, one the user revoked, one expired, or one whose account left the organization, answers `space_token_rejected`. A token without a scope the call needs answers `space_scope_missing`, `scope` naming it as Space does: `space:read`, to read the spaces, which every Space contract needs, `feed:read`, to read their feeds, which `list_feed_items` and `read_feed_item` need too, and `members:write`, to change their members, which `add_space_members`, `update_space_member` and `remove_space_member` need too.
+- The service sends the API token to Space alone, as a bearer token. Space acts for it with the role the user has in each space, and shows it the spaces it reaches. A token Space refuses, one the user revoked, one expired, or one whose account left the organization, answers `space_token_rejected`. A token without a scope the call needs answers `space_scope_missing`, `scope` naming it as Space does: `space:read`, to read the spaces, which every Space contract needs, `feed:read`, to read their feeds, which `list_feed_items` and `read_feed_item` need too, `space:write`, to create and rename spaces, which `create_space` and `rename_space` need too, and `members:write`, to change their members, which `add_space_members`, `update_space_member` and `remove_space_member` need too.
 - Space is published once `PUBLISHED_APPS` names `space`. The service then needs `SPACE_URL` and `SPACE_WEB_URL`, and does not start without them; while Space is not published, it needs neither.
-- Space lets no API token post in a feed or react there, so no contract does. `list_spaces` and `read_space` give the `url` of each space's feed in Twake Space's web app, `<SPACE_WEB_URL>/spaces/<space_id>/feed`, where the user posts and reacts, and every Space contract tells the agent to draft the text for the user and give them that link.
+- Space lets no API token post in a feed or react there, and no contract does: the Space contracts write spaces and their members alone, and none deletes a space. `list_spaces`, `read_space`, `create_space` and `rename_space` give the `url` of each space's feed in Twake Space's web app, `<SPACE_WEB_URL>/spaces/<space_id>/feed`, where the user posts and reacts, and every Space contract tells the agent to draft the text for the user and give them that link.
 - A space the user is not a member of, or one their API token does not reach, answers exactly like an unknown one, and an item outside the feed of the space like a missing one.
 - Space does not say which member the user is: the contracts take the member who has the user's email, whatever its case, as the user, to tell their own posts and reactions, which `you` and `mine` mark. With no such member, or several, none is marked.
 - What people wrote comes under `untrusted`, on one line but a post, which keeps its lines, all without what a reader does not see: the names of spaces, groups, people and tokens, descriptions, posts, reactions, and the titles, previews and ids of the objects of the cards. What an app tells of an object, such as an event's times or where it takes place, comes under `untrusted` too, each of its texts so cleaned and cut at 500 characters, 20 entries of each list or object and three levels at most.
 - `role` is the user's in a space, or a member's: `viewer`, who reads and reacts, `editor`, who posts too, or `admin`, who also adds, changes and removes members.
-- Its words in `x-twake-domains` say what reading covers there, "list your spaces and their members, and read their feeds", and what writing covers: "add members, change their roles and remove them where you are admin".
+- Its words in `x-twake-domains` say what reading covers there, "list your spaces and their members, and read their feeds", and what writing covers: "create and rename your spaces, and add members, change their roles and remove them where you are admin".
 
 ### `space.spaces.read.v1`
 
@@ -668,6 +668,25 @@ The feed of a space, its Fil, shows a card per object of the space's apps, such 
 - `since` is an RFC 3339 time with its offset, such as `2026-10-01T00:00:00+02:00`; one without is an invalid request. A card keeps the place and the `time` of its object's first event, which `since` bounds: the card of an older object that an app changed since stays out, further down the feed.
 - `category` keeps `messages`, the posts and the mail, `files`, `activities`, such as tasks, or `events`, of the calendar. `limit` goes from 1 to 50 and is 20 by default.
 - With `space_id`, and for `read_feed_item`, the contract reads the space first (`GET /spaces/{id}`), for the member who is the user, then `GET /spaces/{id}/feed` or `GET /spaces/{id}/feed/items/{item_id}`. Without, it reads `GET /spaces`, then the first of the spaces still found (`GET /spaces/{id}`), for the member who is the user, and `GET /spaces/{id}/feed` of each.
+
+### `space.space.create.v1` and `space.space.update.v1`
+
+The spaces the user creates, and those they rename where they are an admin.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `create_space` | `POST /contracts/v1/space/spaces` `{"name", "description"}` | 201, `{"space_id", "url", "role", "member_count", "reachable", "untrusted": {"name", "description"}}` |
+| `rename_space` | `PATCH /contracts/v1/space/spaces/{space_id}` `{"name"}` | the space as `list_spaces` gives it, with its new name |
+
+- `create_space` creates a space as Space does for a person (`POST /spaces`): the user is its only member, as its admin, and it has every tab Space gives a space whose creator picked none, chat, tasks, drive, mail and calendar, in Space's own color, the contract sending neither `apps` nor `color`. `name` takes 1 to 255 characters and `description` 1,000 at most, both trimmed. Space counts them in UTF-16 code units, an emoji counting two: a text it refuses answers `invalid_request`, and nothing is created.
+- Space creates a space for the API token of a person's account alone, who becomes its admin: a token of the organization answers `needs_an_account`, and nothing is created.
+- Space takes the name of a space the user has already, and no idempotency key: each call creates a new space.
+- `reachable` tells whether the API token reaches the new space, which the contract reads back (`GET /spaces/{id}`): Space adds no space it creates to a token the user made for a list of spaces, so that no contract can then read or change it.
+- `create_space` reads the user's spaces first (`GET /spaces`), for those of that name, and so needs `space:read` too.
+- `rename_space` reads the space (`GET /spaces/{id}`), then gives it the new name (`PATCH /spaces/{id}` with `{"name"}` alone), its tabs left as they are, and Space tells every member of the space at once. The name the space has already, written the same, writes nothing: Space would rename it all the same, and tell every member. A space where the user is not an admin answers `not_space_admin` before anything is written, and before the owner is asked.
+- An API token of Space without `space:write` answers `space_scope_missing` once either contract writes, and nothing is written; their previews, which only read, do not tell.
+- `create_space` is a low-risk write (`x-twake-risk: low`): a space the user alone is a member of, which the owner's consent to write in Space covers without a confirmation each time. `rename_space` is a high-risk write (`x-twake-risk: high`), which the owner confirms call by call: every member of the space sees the new name.
+- Each tells what it would do ([Previews](#previews)). `create_space` tells the space's name, its description, whole when it fits, how many spaces of that name, whatever its case, the user is a member of already, of those their API token reaches, and that they will be its only member; the digest covers the name, the description and those spaces, so that a call made once one more was created answers `changed_since_preview`. `rename_space` tells the name the space has, the new one, and how many members will see it; the digest covers the space's name as it is, so that a call made once it changed answers `changed_since_preview`.
 
 ### `space.member.add.v1`, `space.member.update.v1` and `space.member.remove.v1`
 
@@ -720,6 +739,8 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `create_contact` | each field of the contact, its note whole when it fits; or that it is in the address book already | the contact, by its UID, as the address book holds it, if at all |
 | `update_contact` | each field it changes, as it would be and as it was, what it removes named as such | the contact as it is |
 | `delete_contact` | that the contact goes for good, and each field it holds | the contact as it is |
+| `create_space` | the space's name and description, the spaces of that name the user is a member of already, and that they will be its only member | the name, the description, and the spaces of that name the user is a member of already |
+| `rename_space` | the name the space has, the new one, and how many members will see it | the space, its name as it is, and the new name |
 | `add_space_members` | whom the space takes in and as what, by their name and email when the user's spaces list them, else by their username, to be checked, and who it lists already, made direct members when it links groups | the people, and who of them the space lists, as what |
 | `update_space_member` | the member's new role and their former one, what an admin does, and that a member through a linked group too keeps the stronger role | the member as they are |
 | `remove_space_member` | who leaves the space, the user maybe, and that a member through a linked group stays | the member as they are |
@@ -740,8 +761,9 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 401 | `space_token_rejected` | Space refused the user's API token of Space: they revoked it, it expired, or their account left the organization |
 | 403 | `forbidden_role` | the user is a viewer of the board, where they only read and comment |
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
-| 403 | `space_scope_missing` | the user's API token of Space lacks a scope the call needs, which `scope` names as Space does: `space:read`, `feed:read` or `members:write` |
-| 403 | `not_space_admin` | the user is not an admin of the space, whose admins alone change its members |
+| 403 | `space_scope_missing` | the user's API token of Space lacks a scope the call needs, which `scope` names as Space does: `space:read`, `feed:read`, `space:write` or `members:write` |
+| 403 | `needs_an_account` | the user's API token of Space is not one of a person's account, such as a token of the organization, for which Space creates no space |
+| 403 | `not_space_admin` | the user is not an admin of the space, whose admins alone rename it and change its members |
 | 404 | `invitation_not_found` | no invitation to an event of this UID was sent to the user: their calendars have no copy of the event, their copy does not list them as an attendee, or they organize it |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `person_not_found` | Calendar has no user with an email `find_meeting_slots` is given, whose free/busy it cannot read |

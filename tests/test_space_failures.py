@@ -26,7 +26,12 @@ DESIGN = {"space_id": space_uuid("Design")}
 PEOPLE = "/contracts/v1/space/people"
 MEMBERS = f"{SPACE}/members"
 MEMBER = f"{MEMBERS}/{BOB.user_id}"
-# Each write's method, path, query and body
+# Each write of a space's method, path, query and body
+SPACE_WRITES = [
+    pytest.param("POST", "/contracts/v1/space/spaces", {}, {"name": "Launch"}, id="create_space"),
+    pytest.param("PATCH", SPACE, {}, {"name": "Brand design"}, id="rename_space"),
+]
+# Each write of members' method, path, query and body
 WRITES = [
     pytest.param(
         "POST", MEMBERS, {}, {"usernames": ["jmartin"], "role": "editor"}, id="add_space_members"
@@ -42,6 +47,7 @@ OPERATIONS = [
     pytest.param("GET", FEEDS, DESIGN, None, id="list_feed_items"),
     pytest.param("GET", FEEDS, {}, None, id="list_feed_items, all spaces"),
     pytest.param("GET", ITEM, {}, None, id="read_feed_item"),
+    *SPACE_WRITES,
     *WRITES,
 ]
 PARAMETERS = ("method", "path", "params", "body")
@@ -80,7 +86,7 @@ async def test_space_is_called_with_the_owners_space_token_alone(
         method, path, params=params, json=body, headers=as_space_owner()
     )
 
-    assert response.status_code == 200, response.text
+    assert response.is_success, response.text
     sent = [
         request.headers.get("authorization")
         for request in boundary.requests
@@ -339,6 +345,28 @@ async def test_a_write_space_fails_or_refuses_for_a_reason_it_does_not_name_is_a
     assert response.status_code == 502
     assert response.json()["code"] == "space_unavailable"
     assert response.json()["detail"].startswith(f"Space answered {failure[0]} to {method} /spaces/")
+
+
+@pytest.mark.parametrize(PARAMETERS, SPACE_WRITES)
+async def test_a_create_or_rename_space_fails_is_a_bad_gateway(
+    client: AsyncClient,
+    boundary: FakeBoundary,
+    method: str,
+    path: str,
+    params: dict[str, str],
+    body: Any,
+) -> None:
+    # Space answers 500 when ldap-rest fails a write it took; a name or a description it refuses
+    # as invalid is the contract's 400, Space counting characters otherwise
+    boundary.space.failing = {method: (500, "internal_error")}
+
+    response = await client.request(
+        method, path, params=params, json=body, headers=as_space_owner()
+    )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "space_unavailable"
+    assert response.json()["detail"].startswith(f"Space answered 500 to {method} /spaces")
 
 
 @pytest.mark.parametrize(PARAMETERS, OPERATIONS)

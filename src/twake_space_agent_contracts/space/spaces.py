@@ -127,7 +127,7 @@ def space_member(member: Member, me: str | None) -> SpaceMember:
     )
 
 
-def _space_text(name: str, description: str) -> SpaceText:
+def space_text(name: str, description: str) -> SpaceText:
     """What people wrote of a space, as the contracts give it back."""
     return SpaceText(
         name=line(name, LONGEST_NAME)[0],
@@ -159,7 +159,7 @@ def space_of(detail: SpaceDetail, user: User, url: str) -> Space:
             )
             for group in detail.groups
         ],
-        untrusted=_space_text(detail.name, detail.description),
+        untrusted=space_text(detail.name, detail.description),
     )
 
 
@@ -187,7 +187,7 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
                     url=space.feed_url(summary.space_id),
                     role=summary.role,
                     member_count=summary.member_count,
-                    untrusted=_space_text(summary.name, summary.description),
+                    untrusted=space_text(summary.name, summary.description),
                 )
                 for summary in found[:MOST_SPACES]
             ],

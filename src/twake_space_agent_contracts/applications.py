@@ -35,7 +35,7 @@ from twake_space_agent_contracts.drive import Drive, drive_owner_dependency
 from twake_space_agent_contracts.mail import drafts, emails, mailboxes, move, threads, trash
 from twake_space_agent_contracts.mail.tmail import TMail
 from twake_space_agent_contracts.settings import Settings
-from twake_space_agent_contracts.space import feed, memberships, people, spaces
+from twake_space_agent_contracts.space import feed, memberships, people, space_writes, spaces
 from twake_space_agent_contracts.space.backend import TwakeSpace, space_owner_dependency
 from twake_space_agent_contracts.tasks import Tasks
 
@@ -195,6 +195,7 @@ def _space(context: Context) -> list[APIRouter]:
         spaces.router(space, space_owner),
         people.router(space, space_owner),
         feed.router(space, space_owner, context.now),
+        *space_writes.routers(space, space_owner),
         *memberships.routers(space, space_owner),
     ]
 
@@ -297,8 +298,10 @@ APPLICATIONS = (
             fr="lister tes espaces et leurs membres, et lire leur fil",
         ),
         write=Words(
-            en="add members, change their roles and remove them where you are admin",
-            fr="ajouter des membres, changer leur rôle et les retirer où tu es admin",
+            en="create and rename your spaces, and add members, change their roles and remove them"
+            " where you are admin",
+            fr="créer et renommer tes espaces, et ajouter des membres, changer leur rôle et les"
+            " retirer où tu es admin",
         ),
         routers=_space,
     ),

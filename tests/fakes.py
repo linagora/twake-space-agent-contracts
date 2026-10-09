@@ -3098,9 +3098,9 @@ class SpaceToken:
     """The user id of the account it acts as, with the account's role in each space the account
     is a member of; None for a token of the organization, which has a role of its own in every
     space."""
-    scopes: frozenset[str] = frozenset({"space:read", "feed:read", "members:write"})
-    """What it may do, by Space's names: by default, read the spaces and their feeds, and change
-    the members of the spaces."""
+    scopes: frozenset[str] = frozenset({"space:read", "feed:read", "space:write", "members:write"})
+    """What it may do, by Space's names: by default, read the spaces and their feeds, create and
+    rename spaces, and change the members of the spaces."""
     space_ids: frozenset[str] | None = None
     """The spaces it covers, among those it would reach; None for all of them."""
     role: str | None = None
@@ -3121,6 +3121,12 @@ class FakeSpace:
 
     A space lists its direct members and the people of its linked groups alike.
 
+    A token of an account creates spaces, of which the account is the only member, as admin, and
+    which a token made for a few spaces does not reach; a token of the organization creates none,
+    answering 403 needs_an_account. Renaming a space takes an admin of it, else 403
+    not_space_admin. Space checks the body of a write before the space it acts on, answering 400
+    invalid_request for one it refuses.
+
     An admin of a space adds people of the organization to it by username, changes the role of its
     members and removes them, as Space 0.1.18 has ldap-rest do: Space checks the ids and the body
     of the write first, answering 400 invalid_request, then the space, which takes an admin, else
@@ -3136,11 +3142,11 @@ class FakeSpace:
             MMAUDET_SPACE_TOKEN: SpaceToken(space_uuid(email_of("mmaudet")))
         }
         """The API tokens Space knows, by their value: the one the owner made for their assistant,
-        which reads and changes members, unless a test sets others."""
+        which reads, creates and renames spaces, and changes members, unless a test sets others."""
         self.people = {person.user_id: person for person in [space_person("mmaudet")]}
-        """The people of the organization's directory, by user id, among whom ldap-rest finds those
-        an admin adds by username, whatever its case: the members of the spaces, and those a test
-        adds."""
+        """The people of the organization's directory, by user id, among whom ldap-rest finds the
+        account of a token, and those an admin adds by username, whatever its case: the members of
+        the spaces, and those a test adds."""
         self.requests: list[tuple[str, str]] = []
         """The method and path of each request received."""
         self.writes: list[tuple[str, str, Any]] = []
@@ -3265,12 +3271,16 @@ class FakeSpace:
             return httpx.Response(200, text=self.unexpected)
         if self.unexpected is not None:
             return httpx.Response(200, json=self.unexpected)
+        if path == "/spaces" and request.method == "POST":
+            return self._create(token, request)
         if path == "/spaces":
             return httpx.Response(200, json={"spaces": self._listed(token)})
         members = re.fullmatch(r"/spaces/([^/]+)/members(?:/([^/]+))?", path)
         if members is not None and request.method != "GET":
             return self._members(request, members[1], members[2], token)
         found = re.fullmatch(r"/spaces/([^/]+)(/.*)?", path)
+        if found is not None and found[2] is None and request.method == "PATCH":
+            return self._rename(found[1], token, request)
         reached = self._reached(found[1], token) if found else None
         if found is None or reached is None:
             return _space_refusal(404, "not_found")
@@ -3285,6 +3295,49 @@ class FakeSpace:
         if shown is None:
             return _space_refusal(404, "not_found")
         return httpx.Response(200, json=shown)
+
+    def _create(self, token: SpaceToken, request: httpx.Request) -> httpx.Response:
+        """A space of the token's account, as POST /spaces creates it without tabs picked, then
+        as ldap-rest answers it: its creator its only member, as admin, and every tab."""
+        body = json.loads(request.content or b"null")
+        if not isinstance(body, dict) or not (
+            _space_name(body.get("name")) and _space_description(body.get("description", ""))
+        ):
+            return _space_refusal(400, "invalid_request")
+        creator = None if token.account is None else self.people.get(token.account)
+        if creator is None:
+            return _space_refusal(403, "needs_an_account")
+        self.writes.append((request.method, request.url.path, body))
+        failing = self.failing.get(request.method)
+        if failing is not None:
+            return _space_refusal(*failing)
+        room = SpaceRoom(
+            str(uuid.uuid4()),
+            body["name"].strip(),
+            {creator.user_id: SpaceMembership(creator, "admin")},
+            description=body.get("description", "").strip(),
+        )
+        self.spaces[room.id] = room
+        return httpx.Response(201, json={"id": room.id, "name": room.name, "role": "admin"})
+
+    def _rename(self, room_id: str, token: SpaceToken, request: httpx.Request) -> httpx.Response:
+        """A space renamed, as PATCH /spaces/:id does with a name: once the name is checked, by an
+        admin of the space alone, then as ldap-rest answers it."""
+        body = json.loads(request.content or b"null")
+        if not isinstance(body, dict) or not _space_name(body.get("name")):
+            return _space_refusal(400, "invalid_request")
+        reached = self._reached(room_id, token)
+        if reached is None:
+            return _space_refusal(404, "not_found")
+        room, role = reached
+        if role != "admin":
+            return _space_refusal(403, "not_space_admin")
+        self.writes.append((request.method, request.url.path, body))
+        failing = self.failing.get(request.method)
+        if failing is not None:
+            return _space_refusal(*failing)
+        room.name = body["name"].strip()
+        return httpx.Response(204)
 
     def _reached(self, room_id: str, token: SpaceToken) -> tuple[SpaceRoom, str] | None:
         """The space of that id and the role the token acts with there, if it reaches it."""
@@ -3540,6 +3593,10 @@ def _insufficient_scope(scope: str | None) -> httpx.Response:
 def _scope_of(method: str, path: str) -> str | None:
     """The scope a token needs for the route, as Space names it; None for a route only a person's
     session takes."""
+    if (method, path) == ("POST", "/spaces") or (
+        method == "PATCH" and re.fullmatch(r"/spaces/[^/]+", path)
+    ):
+        return "space:write"
     if (method == "POST" and re.fullmatch(r"/spaces/[^/]+/members", path)) or (
         method in ("PATCH", "DELETE") and re.fullmatch(r"/spaces/[^/]+/members/[^/]+", path)
     ):
@@ -3577,6 +3634,24 @@ def _member_body(method: str, body: Any) -> bool:
 def _direct_admins(room: SpaceRoom) -> int:
     """How many admins the space has of its own: a group linked as admin counts for none."""
     return sum(1 for membership in room.members.values() if membership.role == "admin")
+
+
+def _js_length(text: str) -> int:
+    """The length of the text as Space's checks count it, in UTF-16 code units, as JavaScript
+    does: a character outside the Basic Multilingual Plane, such as an emoji, counts two."""
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def _space_name(value: Any) -> bool:
+    """Whether Space takes the value as the name of a space: text of 1 to 255 characters, once
+    trimmed."""
+    return isinstance(value, str) and 1 <= _js_length(value.strip()) <= 255
+
+
+def _space_description(value: Any) -> bool:
+    """Whether Space takes the value as the description of a space: text of 1,000 characters at
+    most, once trimmed."""
+    return isinstance(value, str) and _js_length(value.strip()) <= 1000
 
 
 def _role_of(room: SpaceRoom, token: SpaceToken) -> str | None:

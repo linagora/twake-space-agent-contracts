@@ -29,7 +29,6 @@ from twake_space_agent_contracts.space.backend import (
     TwakeSpace,
     member_exists,
     member_not_found,
-    not_space_admin,
     person_not_found,
 )
 from twake_space_agent_contracts.space.people import read_spaces
@@ -57,14 +56,6 @@ class NewMembers(BaseModel):
         ]
     ] = Field(min_length=1, max_length=MOST_PEOPLE)
     role: Role = Field(description=f"Their role in the space: {ROLES}")
-
-
-async def _administered(space: TwakeSpace, owner: SpaceOwner, space_id: str) -> SpaceDetail:
-    """The space, if the user is one of its admins: only they change its members."""
-    detail = await space.space(owner, space_id)
-    if detail.role != "admin":
-        raise not_space_admin(space_id)
-    return detail
 
 
 def _each_once(usernames: list[str]) -> list[str]:
@@ -138,7 +129,7 @@ def _add(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         owner: Annotated[SpaceOwner, Depends(owner_of)],
         preview: Previewing,
     ) -> Space | JSONResponse:
-        detail = await _administered(space, owner, space_id)
+        detail = await space.administered(owner, space_id)
         wanted = _each_once(new.usernames)
         members = {member.username.lower(): member for member in detail.members}
         added = [username for username in wanted if username.lower() not in members]
@@ -229,7 +220,7 @@ def _update(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         owner: Annotated[SpaceOwner, Depends(owner_of)],
         preview: Previewing,
     ) -> SpaceMember | JSONResponse:
-        detail = await _administered(space, owner, space_id)
+        detail = await space.administered(owner, space_id)
         member = _member(detail, user_id)
         groups = bool(detail.groups)
         # What the owner allows: the member as they are, and whether the space links groups,
@@ -276,7 +267,7 @@ def _remove(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         owner: Annotated[SpaceOwner, Depends(owner_of)],
         preview: Previewing,
     ) -> SpaceMember | JSONResponse:
-        detail = await _administered(space, owner, space_id)
+        detail = await space.administered(owner, space_id)
         member = _member(detail, user_id)
         removed = space_member(member, detail.user_id_of(owner.user.email))
         groups = bool(detail.groups)
