@@ -3297,8 +3297,8 @@ class FakeSpace:
         return httpx.Response(200, json=shown)
 
     def _create(self, token: SpaceToken, request: httpx.Request) -> httpx.Response:
-        """A space of the token's account, as POST /spaces creates it without tabs picked: its
-        creator its only member, as admin, and every tab."""
+        """A space of the token's account, as POST /spaces creates it without tabs picked, then
+        as ldap-rest answers it: its creator its only member, as admin, and every tab."""
         body = json.loads(request.content or b"null")
         if not isinstance(body, dict) or not (
             _space_name(body.get("name")) and _space_description(body.get("description", ""))
@@ -3308,6 +3308,9 @@ class FakeSpace:
         if creator is None:
             return _space_refusal(403, "needs_an_account")
         self.writes.append((request.method, request.url.path, body))
+        failing = self.failing.get(request.method)
+        if failing is not None:
+            return _space_refusal(*failing)
         room = SpaceRoom(
             str(uuid.uuid4()),
             body["name"].strip(),
@@ -3319,7 +3322,7 @@ class FakeSpace:
 
     def _rename(self, room_id: str, token: SpaceToken, request: httpx.Request) -> httpx.Response:
         """A space renamed, as PATCH /spaces/:id does with a name: once the name is checked, by an
-        admin of the space alone."""
+        admin of the space alone, then as ldap-rest answers it."""
         body = json.loads(request.content or b"null")
         if not isinstance(body, dict) or not _space_name(body.get("name")):
             return _space_refusal(400, "invalid_request")
@@ -3330,6 +3333,9 @@ class FakeSpace:
         if role != "admin":
             return _space_refusal(403, "not_space_admin")
         self.writes.append((request.method, request.url.path, body))
+        failing = self.failing.get(request.method)
+        if failing is not None:
+            return _space_refusal(*failing)
         room.name = body["name"].strip()
         return httpx.Response(204)
 
