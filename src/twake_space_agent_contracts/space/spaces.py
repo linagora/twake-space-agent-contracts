@@ -11,6 +11,7 @@ from twake_space_agent_contracts.caller import User
 from twake_space_agent_contracts.space import (
     EXAMPLE_SPACE,
     LONGEST_NAME,
+    NO_POSTING,
     ROLES,
     UNTRUSTED,
     SpaceId,
@@ -168,7 +169,8 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
             "Lists the spaces of Twake Space the user you act for is a member of, by name, "
             f"{MOST_SPACES} at most, with their role in each, how many members each has and the "
             "url of its feed. Give space_id to read_space for its members and the apps linked to "
-            f"it, or to list_feed_items for its feed. {UNTRUSTED} Example: (no parameters)."
+            f"it, or to list_feed_items for its feed. {NO_POSTING} {UNTRUSTED} Example: (no "
+            "parameters)."
         ),
     )
     async def list_spaces(owner: Annotated[SpaceOwner, Depends(owner_of)]) -> SpaceList:
@@ -199,7 +201,7 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
             "gives: the user's role there, the url of its feed, its members with their roles, by "
             "username, you telling which one is the user, the groups linked to it, and what its "
             "apps linked to it: its Tasks project, Chat room, shared mailbox, calendar and files. "
-            "A space the user is not a member of answers like an unknown one. "
+            f"A space the user is not a member of answers like an unknown one. {NO_POSTING} "
             f"{UNTRUSTED} Example: {EXAMPLE_SPACE}."
         ),
     )

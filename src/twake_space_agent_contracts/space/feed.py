@@ -12,6 +12,7 @@ from twake_space_agent_contracts.space import (
     EXAMPLE_ITEM,
     EXAMPLE_SPACE,
     LONGEST_NAME,
+    NO_POSTING,
     UNTRUSTED,
     ItemId,
     SpaceId,
@@ -215,8 +216,8 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
             "a card per object of the space's apps, such as a file, an event, a task or an email, "
             "showing its latest activity, and the posts its members wrote, each with its "
             "reactions. category keeps messages, the posts and the mail, files, activities, such "
-            f"as tasks, or events. {UNTRUSTED} Example, for the latest files of a space: "
-            f"{EXAMPLE_SPACE}, category=files, limit=20."
+            f"as tasks, or events. {NO_POSTING} {UNTRUSTED} Example, for the latest files of a "
+            f"space: {EXAMPLE_SPACE}, category=files, limit=20."
         ),
     )
     async def list_feed_items(
@@ -249,8 +250,8 @@ def router(space: TwakeSpace, owner_of: SpaceOwnerDependency) -> APIRouter:
         summary="Read an item of the feed of one of the user's spaces in Twake Space",
         description=(
             "Reads a card or a post of the feed of a space the user you act for is a member of, "
-            f"by the item_id list_feed_items gives, with its reactions. {UNTRUSTED} Example: "
-            f"{EXAMPLE_ITEM}."
+            f"by the item_id list_feed_items gives, with its reactions. {NO_POSTING} {UNTRUSTED} "
+            f"Example: {EXAMPLE_ITEM}."
         ),
     )
     async def read_feed_item(
