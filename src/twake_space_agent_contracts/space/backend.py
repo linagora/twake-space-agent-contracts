@@ -15,6 +15,13 @@ from twake_space_agent_contracts.problems import Problem, invalid_request
 # The ids of spaces, people and items of a feed, as Space writes them: a pattern any OpenAPI
 # validator checks
 SPACE_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+API_TOKEN_PREFIX = "tws_"
+"""What Space's API tokens start with, by which Space tells them from the tokens of a person's
+session."""
+
+Scope = Literal["space:read", "feed:read"]
+"""What an API token of Space may do that the contracts need, by Space's names: read the spaces,
+and read their feeds."""
 
 
 def _space_problem(code: str, title: str, detail: str) -> Problem:
@@ -69,7 +76,17 @@ def space_owner_dependency(caller: CallerDependency) -> SpaceOwnerDependency:
 
         Left out of the OpenAPI document, as the user's token is.
         """
-        return SpaceOwner(user, x_twake_space_token or "")
+        token = (x_twake_space_token or "").strip()
+        # Anything else, such as the token LemonLDAP-NG gave the broker, never reaches Space
+        if not token.startswith(API_TOKEN_PREFIX):
+            raise Problem(
+                status=401,
+                code="missing_space_token",
+                title="Missing Space token",
+                detail="The request must carry the user's API token of Space in "
+                "X-Twake-Space-Token.",
+            )
+        return SpaceOwner(user, token)
 
     return space_owner
 
@@ -290,9 +307,10 @@ class TwakeSpace:
         self._http = http
 
     async def _call(
-        self, owner: SpaceOwner, method: str, path: str, *, params: Any = None
+        self, owner: SpaceOwner, method: str, path: str, *, scope: Scope, params: Any = None
     ) -> httpx.Response:
-        """Space's answer, once Space answered and took the user's token."""
+        """Space's answer, once Space answered and took the user's token with the scope the call
+        needs."""
         try:
             response = await self._http.request(
                 method,
@@ -303,18 +321,22 @@ class TwakeSpace:
         except httpx.HTTPError as error:
             raise _unavailable(f"Space did not answer {method} {path}.") from error
         if response.status_code == 401:
-            raise _space_problem(
-                "space_refused",
-                "Space refused the user's token",
-                f"Space answered 401 to {method} {path}.",
+            raise Problem(
+                status=401,
+                code="space_token_rejected",
+                title="Space token rejected",
+                detail=f"Space refused the user's API token of Space, answering 401 to {method}"
+                f" {path}: the user revoked it, it expired, or their account left the"
+                " organization.",
             )
-        # What Space answers every call of a user it knows in no organization
-        if response.status_code == 403 and _error_of(response) == "forbidden":
-            raise _space_problem(
-                "space_refused",
-                "Space refused the user's token",
-                f"Space answered 403 forbidden to {method} {path}: it knows the user in no"
-                " organization, as when their token gives it no org_id.",
+        if response.status_code == 403 and _error_of(response) == "insufficient_scope":
+            raise Problem(
+                status=403,
+                code="space_scope_missing",
+                title="Space scope missing",
+                detail=f"The user's API token of Space lacks {scope}, which {method} {path}"
+                " needs: the user chose what it may do when they made it in Space.",
+                extensions={"scope": scope},
             )
         return response
 
@@ -333,14 +355,15 @@ class TwakeSpace:
         path: str,
         params: dict[str, str | int] | None = None,
         *,
+        scope: Scope,
         missing_ok: bool = False,
         invalid: Problem | None = None,
     ) -> Any:
         """Space's JSON answer; None when what is asked for is missing and missing_ok is set:
-        Space answers 404 not_found for what does not exist and for what the user does not
+        Space answers 404 not_found for what does not exist and for what the token does not
         reach alike. A refused request raises `invalid` when given: Space checks a parameter
         the contract cannot."""
-        response = await self._call(owner, "GET", path, params=params)
+        response = await self._call(owner, "GET", path, scope=scope, params=params)
         if missing_ok and response.status_code == 404 and _error_of(response) == "not_found":
             return None
         if invalid is not None and response.status_code == 400:
@@ -349,7 +372,7 @@ class TwakeSpace:
 
     async def spaces(self, owner: SpaceOwner) -> list[SpaceSummary]:
         """The spaces the user is a member of, by name."""
-        found = await self._get(owner, "/spaces")
+        found = await self._get(owner, "/spaces", scope="space:read")
         try:
             return [
                 SpaceSummary(
@@ -367,7 +390,7 @@ class TwakeSpace:
     async def space(self, owner: SpaceOwner, space_id: str) -> SpaceDetail:
         """The space, if the user is a member of it: Space answers for any other as for an
         unknown one."""
-        found = await self._get(owner, f"/spaces/{space_id}", missing_ok=True)
+        found = await self._get(owner, f"/spaces/{space_id}", scope="space:read", missing_ok=True)
         if found is None:
             raise space_not_found(space_id)
         try:
@@ -415,6 +438,7 @@ class TwakeSpace:
             owner,
             f"/spaces/{space_id}/feed",
             params,
+            scope="feed:read",
             missing_ok=True,
             invalid=invalid_request(
                 "before: Space does not know this cursor: pass the next a list_feed_items answer"
@@ -433,7 +457,9 @@ class TwakeSpace:
     async def item(self, owner: SpaceOwner, space_id: str, item_id: str) -> FeedItem | None:
         """The item of the feed of the space; None if the feed has no such item, or if the
         space is not the user's."""
-        found = await self._get(owner, f"/spaces/{space_id}/feed/items/{item_id}", missing_ok=True)
+        found = await self._get(
+            owner, f"/spaces/{space_id}/feed/items/{item_id}", scope="feed:read", missing_ok=True
+        )
         if found is None:
             return None
         try:
