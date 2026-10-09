@@ -2962,9 +2962,6 @@ _CHANGES: dict[str, Callable[[Any], bool]] = {
 }
 
 
-SPACE_ORGANIZATION = "linagora"
-"""The organization of Twake Space the spaces and the tokens of the tests belong to, unless one sets
-another."""
 SPACE_APPS = ("chat", "tasks", "drive", "mail", "calendar")
 """The apps the deployment provides, by the tab each gives a space."""
 SPACE_KINDS = ("drive", "mailbox", "calendar", "matrix_space", "project")
@@ -3022,7 +3019,6 @@ class SpaceRoom:
     name: str
     members: dict[str, SpaceMembership]
     """Its direct members by user id, whom ldap-rest's member routes change."""
-    organization: str = SPACE_ORGANIZATION
     description: str = ""
     created_at: str = "2026-10-01T08:00:00.000Z"
     apps: list[str] = field(default_factory=lambda: list(SPACE_APPS))
@@ -3107,7 +3103,6 @@ class SpaceToken:
     """The spaces it covers, among those it would reach; None for all of them."""
     role: str | None = None
     """The role of a token of the organization."""
-    organization: str = SPACE_ORGANIZATION
 
 
 class FakeSpace:
@@ -3117,11 +3112,10 @@ class FakeSpace:
     Space looks the token up first, then checks that it holds the scope of the route, and only
     then the route's parameters: a token it does not know answers 401 invalid_token, and one
     without the scope 403 insufficient_scope, as does any route that takes no token, such as the
-    posts and the reactions, which are a person's own. A token of an account reaches the spaces of
-    its organization the account is a member of, with the account's role in each; a token of the
-    organization reaches every space of it, with its own role; and a token made for a few spaces
-    reaches those alone. Any other space answers 404 {"error": "not_found"}, as an unknown one
-    does.
+    posts and the reactions, which are a person's own. A token of an account reaches the spaces the
+    account is a member of, with the account's role in each; a token of the organization reaches
+    every space, with its own role; and a token made for a few spaces reaches those alone. Any
+    other space answers 404 {"error": "not_found"}, as an unknown one does.
 
     A space lists its direct members and the people of its linked groups alike."""
 
@@ -3443,8 +3437,6 @@ def _scope_of(method: str, path: str) -> str | None:
 
 def _role_of(room: SpaceRoom, token: SpaceToken) -> str | None:
     """The role the token acts with in the space; None for a space it does not reach."""
-    if room.organization != token.organization:
-        return None
     if token.space_ids is not None and room.id not in token.space_ids:
         return None
     if token.account is None:
