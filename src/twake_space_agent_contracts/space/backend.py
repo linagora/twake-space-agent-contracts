@@ -24,12 +24,8 @@ Scope = Literal["space:read", "feed:read"]
 and read their feeds."""
 
 
-def _space_problem(code: str, title: str, detail: str) -> Problem:
-    return Problem(status=502, code=code, title=title, detail=detail)
-
-
 def _unavailable(detail: str) -> Problem:
-    return _space_problem("space_unavailable", "Space unavailable", detail)
+    return Problem(status=502, code="space_unavailable", title="Space unavailable", detail=detail)
 
 
 def space_not_found(space_id: str) -> Problem:
