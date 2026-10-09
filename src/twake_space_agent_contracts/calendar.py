@@ -969,8 +969,8 @@ class Calendar:
             user, "GET", f"/dav/calendars/{user_id}.json", params={"personal": "true"}
         )
         try:
-            # A user who never opened Calendar has no calendar yet: esn-sabre then leaves out
-            # _embedded
+            # A user without a calendar of their own, such as one who only holds those others share
+            # with them, gets no _embedded from esn-sabre
             listed = found.get("_embedded", {}).get("dav:calendar", []) if found else []
             hrefs = [calendar["_links"]["self"]["href"] for calendar in listed]
         except (AttributeError, KeyError, TypeError) as error:

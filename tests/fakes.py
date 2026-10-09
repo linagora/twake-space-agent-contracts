@@ -414,8 +414,8 @@ class FakeCalendar:
         what the contracts make of what they read but Calendar is not known to write, such as a
         time at an offset from UTC."""
         self.no_home = False
-        """Whether the user's home lists no calendar at all, without its _embedded: as esn-sabre
-        answers for a user who never opened Calendar."""
+        """Whether the user has no calendar of their own, which esn-sabre answers without
+        _embedded: it creates the default one only for a home with no calendar at all."""
         self.subscriptions: dict[str, str] = {}
         """The calendars of others that users subscribe to, by their path in the subscriber's
         home: the path of the calendar each shows."""
