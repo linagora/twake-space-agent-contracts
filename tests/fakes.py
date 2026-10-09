@@ -3098,8 +3098,9 @@ class SpaceToken:
     """The user id of the account it acts as, with the account's role in each space the account
     is a member of; None for a token of the organization, which has a role of its own in every
     space."""
-    scopes: frozenset[str] = frozenset({"space:read", "feed:read"})
-    """What it may do, by Space's names: by default, read the spaces and their feeds."""
+    scopes: frozenset[str] = frozenset({"space:read", "feed:read", "members:write"})
+    """What it may do, by Space's names: by default, read the spaces and their feeds, and change
+    the members of the spaces."""
     space_ids: frozenset[str] | None = None
     """The spaces it covers, among those it would reach; None for all of them."""
     role: str | None = None
@@ -3118,7 +3119,16 @@ class FakeSpace:
     every space, with its own role; and a token made for a few spaces reaches those alone. Any
     other space answers 404 {"error": "not_found"}, as an unknown one does.
 
-    A space lists its direct members and the people of its linked groups alike."""
+    A space lists its direct members and the people of its linked groups alike.
+
+    An admin of a space adds people of the organization to it by username, changes the role of its
+    members and removes them, as Space 0.1.18 has ldap-rest do: Space checks the ids and the body
+    of the write first, answering 400 invalid_request, then the space, which takes an admin, else
+    403 not_space_admin, and, to change or remove a member, that it lists them, else 404
+    not_found; then it passes ldap-rest's refusals on. ldap-rest's member routes see the direct
+    members alone: Space gives someone it has through a linked group alone a role of their own,
+    and takes their removal for done, though the group keeps them in; the fake, unlike Space,
+    goes on listing them."""
 
     def __init__(self) -> None:
         self.spaces: dict[str, SpaceRoom] = {}
@@ -3126,9 +3136,20 @@ class FakeSpace:
             MMAUDET_SPACE_TOKEN: SpaceToken(space_uuid(email_of("mmaudet")))
         }
         """The API tokens Space knows, by their value: the one the owner made for their assistant,
-        which reads, unless a test sets others."""
+        which reads and changes members, unless a test sets others."""
+        self.people = {person.user_id: person for person in [space_person("mmaudet")]}
+        """The people of the organization's directory, by user id, among whom ldap-rest finds those
+        an admin adds by username, whatever its case: the members of the spaces, and those a test
+        adds."""
         self.requests: list[tuple[str, str]] = []
         """The method and path of each request received."""
+        self.writes: list[tuple[str, str, Any]] = []
+        """The method, path and body of each write Space took."""
+        self.failing: dict[str, tuple[int, str]] = {}
+        """ldap-rest's refusal of the writes of each method, as its status and error, which Space
+        passes on once it took the write."""
+        self.while_writing: Callable[[], None] | None = None
+        """What someone else changes while Space takes a write on members, before it checks it."""
         self.down = False
         """Whether Space answers 503, as when it cannot look a token up."""
         self.unreachable = False
@@ -3219,6 +3240,9 @@ class FakeSpace:
             **more,
         )
         self.spaces[room.id] = room
+        # Its members are people of the organization
+        for membership in room.listed().values():
+            self.people[membership.person.user_id] = membership.person
         return room
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -3243,6 +3267,9 @@ class FakeSpace:
             return httpx.Response(200, json=self.unexpected)
         if path == "/spaces":
             return httpx.Response(200, json={"spaces": self._listed(token)})
+        members = re.fullmatch(r"/spaces/([^/]+)/members(?:/([^/]+))?", path)
+        if members is not None and request.method != "GET":
+            return self._members(request, members[1], members[2], token)
         found = re.fullmatch(r"/spaces/([^/]+)(/.*)?", path)
         reached = self._reached(found[1], token) if found else None
         if found is None or reached is None:
@@ -3264,6 +3291,76 @@ class FakeSpace:
         room = self.spaces.get(room_id)
         role = None if room is None else _role_of(room, token)
         return None if room is None or role is None else (room, role)
+
+    def _members(
+        self, request: httpx.Request, room_id: str, user_id: str | None, token: SpaceToken
+    ) -> httpx.Response:
+        """A write on the members of a space, as Space checks it, in its order, then as ldap-rest
+        answers it."""
+        if self.while_writing is not None:
+            self.while_writing()
+        body = json.loads(request.content or b"null")
+        ids = [room_id] if user_id is None else [room_id, user_id]
+        if not all(_is_uuid(value) for value in ids) or not _member_body(request.method, body):
+            return _space_refusal(400, "invalid_request")
+        reached = self._reached(room_id, token)
+        if reached is None:
+            return _space_refusal(404, "not_found")
+        room, role = reached
+        if role != "admin":
+            return _space_refusal(403, "not_space_admin")
+        if user_id is not None and user_id not in room.listed():
+            return _space_refusal(404, "not_found")
+        self.writes.append((request.method, request.url.path, body))
+        failing = self.failing.get(request.method)
+        if failing is not None:
+            return _space_refusal(*failing)
+        if user_id is None:
+            return self._add_members(room, body["usernames"], body["role"])
+        if request.method == "PATCH":
+            return self._set_role(room, user_id, body["role"])
+        return self._remove_member(room, user_id)
+
+    def _add_members(self, room: SpaceRoom, usernames: list[str], role: str) -> httpx.Response:
+        """People of the organization added to the space by username, whatever its case, as
+        ldap-rest adds them: all of them or none, refusing a username it does not have, then a
+        direct member of another role; it leaves a direct member of that role as they are."""
+        directory = {person.username.lower(): person for person in self.people.values()}
+        found = [directory.get(username.lower()) for username in usernames]
+        people = [person for person in found if person is not None]
+        if len(people) < len(found):
+            return _space_refusal(404, "USER_NOT_FOUND")
+        held = [room.members.get(person.user_id) for person in people]
+        if any(membership is not None and membership.role != role for membership in held):
+            return _space_refusal(409, "MEMBER_EXISTS")
+        for person in people:
+            room.members[person.user_id] = SpaceMembership(person, role)
+        return httpx.Response(204)
+
+    def _set_role(self, room: SpaceRoom, user_id: str, role: str) -> httpx.Response:
+        """The role of a member changed, as Space has ldap-rest change it: someone it has through
+        a linked group alone gets a role of their own, the space listing the stronger of it and
+        the group's; and the space keeps one direct admin at least."""
+        membership = room.members.get(user_id)
+        if membership is None:
+            room.members[user_id] = SpaceMembership(room.listed()[user_id].person, role)
+            return httpx.Response(204)
+        if membership.role == "admin" and role != "admin" and _direct_admins(room) == 1:
+            return _space_refusal(409, "LAST_ADMIN")
+        room.members[user_id] = SpaceMembership(membership.person, role)
+        return httpx.Response(204)
+
+    def _remove_member(self, room: SpaceRoom, user_id: str) -> httpx.Response:
+        """A member removed, as Space has ldap-rest remove them: Space takes the removal of
+        someone ldap-rest has through a linked group alone for done; and the space keeps one
+        direct admin at least."""
+        membership = room.members.get(user_id)
+        if membership is None:
+            return httpx.Response(204)
+        if membership.role == "admin" and _direct_admins(room) == 1:
+            return _space_refusal(409, "LAST_ADMIN")
+        del room.members[user_id]
+        return httpx.Response(204)
 
     def _listed(self, token: SpaceToken) -> list[dict[str, Any]]:
         """The spaces the token reaches, by name, as GET /spaces gives them."""
@@ -3443,6 +3540,10 @@ def _insufficient_scope(scope: str | None) -> httpx.Response:
 def _scope_of(method: str, path: str) -> str | None:
     """The scope a token needs for the route, as Space names it; None for a route only a person's
     session takes."""
+    if (method == "POST" and re.fullmatch(r"/spaces/[^/]+/members", path)) or (
+        method in ("PATCH", "DELETE") and re.fullmatch(r"/spaces/[^/]+/members/[^/]+", path)
+    ):
+        return "members:write"
     if method != "GET":
         return None
     if re.fullmatch(r"/spaces(/[^/]+)?", path):
@@ -3450,6 +3551,32 @@ def _scope_of(method: str, path: str) -> str | None:
     if re.fullmatch(r"/spaces/[^/]+/feed(/items/[^/]+)?", path):
         return "feed:read"
     return None
+
+
+def _is_uuid(value: str) -> bool:
+    """Whether Space takes the value as the id of a space or a person: a UUID."""
+    form = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    return re.fullmatch(form, value, re.IGNORECASE) is not None
+
+
+def _member_body(method: str, body: Any) -> bool:
+    """Whether Space takes the body of a write on the members of a space: a role, and, to add
+    people, 1 to 100 usernames."""
+    if method == "DELETE":
+        return True
+    if not isinstance(body, dict) or body.get("role") not in SPACE_ROLES:
+        return False
+    usernames = body.get("usernames")
+    return method == "PATCH" or (
+        isinstance(usernames, list)
+        and 1 <= len(usernames) <= 100
+        and all(isinstance(username, str) and username for username in usernames)
+    )
+
+
+def _direct_admins(room: SpaceRoom) -> int:
+    """How many admins the space has of its own: a group linked as admin counts for none."""
+    return sum(1 for membership in room.members.values() if membership.role == "admin")
 
 
 def _role_of(room: SpaceRoom, token: SpaceToken) -> str | None:

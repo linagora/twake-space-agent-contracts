@@ -20,9 +20,9 @@ API_TOKEN_PREFIX = "tws_"
 """What Space's API tokens start with, by which Space tells them from the tokens of a person's
 session."""
 
-Scope = Literal["space:read", "feed:read"]
+Scope = Literal["space:read", "feed:read", "members:write"]
 """What an API token of Space may do that the contracts need, by Space's names: read the spaces,
-and read their feeds."""
+read their feeds, and add, change and remove their members."""
 
 AT_ONCE = 5
 """The most calls to Space a contract makes at a time, when it reads several spaces."""
@@ -58,6 +58,77 @@ def space_not_found(space_id: str) -> Problem:
         title="Space not found",
         detail=f"The user is a member of no space {space_id} their API token of Space reaches: "
         "list_spaces gives the spaces it reaches.",
+    )
+
+
+def not_space_admin(space_id: str) -> Problem:
+    return Problem(
+        status=403,
+        code="not_space_admin",
+        title="Not a space admin",
+        detail=f"The user is not an admin of space {space_id}: only its admins may change it.",
+    )
+
+
+def person_not_found(usernames: list[str], entered: "list[Member]") -> Problem:
+    """Space's refusal of usernames, as ldap-rest refuses a whole list for one it lacks: the
+    usernames the space does not list, and those it lists all the same."""
+    detail = (
+        "The user's organization has no person of one of these usernames at least, and"
+        f" Space does not say which: {', '.join(usernames)}. search_space_people finds the people"
+        " of the user's spaces: ask the user for the username of anyone else."
+    )
+    return Problem(
+        status=404,
+        code="person_not_found",
+        title="Person not found",
+        detail=detail
+        + (
+            " entered names those of the people to add whom the space lists all the same."
+            if entered
+            else " Nobody was added."
+        ),
+        extensions={
+            "usernames": usernames,
+            "entered": [
+                {"user_id": member.user_id, "username": member.username, "role": member.role}
+                for member in entered
+            ],
+        },
+    )
+
+
+def member_exists(space_id: str, members: "list[Member]") -> Problem:
+    return Problem(
+        status=409,
+        code="member_exists",
+        title="Member exists",
+        detail=f"Some of these people are direct members of space {space_id} already, with"
+        " another role, which update_space_member changes: nobody was added. members names those"
+        " the space lists with another role, when the contract tells.",
+        extensions={
+            "members": [{"user_id": member.user_id, "role": member.role} for member in members]
+        },
+    )
+
+
+def member_not_found(space_id: str, user_id: str) -> Problem:
+    return Problem(
+        status=404,
+        code="member_not_found",
+        title="Member not found",
+        detail=f"Space {space_id} has no member {user_id}: read_space gives its members.",
+    )
+
+
+def last_admin(space_id: str) -> Problem:
+    return Problem(
+        status=409,
+        code="last_admin",
+        title="Last admin",
+        detail=f"Space {space_id} would be left without an admin of its own, which it keeps at"
+        " least one of, a group linked as admin counting for none: make another member an admin"
+        " first.",
     )
 
 
@@ -192,6 +263,10 @@ class SpaceDetail:
         several do."""
         found = [member.user_id for member in self.members if member.email.lower() == email.lower()]
         return found[0] if len(found) == 1 else None
+
+    def member(self, user_id: str) -> Member | None:
+        """The member of that user id; None if the space has none."""
+        return next((member for member in self.members if member.user_id == user_id), None)
 
 
 ActorKind = Literal["user", "token", "deleted_user"]
@@ -333,7 +408,14 @@ class TwakeSpace:
         return f"{self._web_url}/spaces/{space_id}/feed"
 
     async def _call(
-        self, owner: SpaceOwner, method: str, path: str, *, scope: Scope, params: Any = None
+        self,
+        owner: SpaceOwner,
+        method: str,
+        path: str,
+        *,
+        scope: Scope,
+        params: Any = None,
+        body: Any = None,
     ) -> httpx.Response:
         """Space's answer, once Space answered and took the user's token with the scope the call
         needs."""
@@ -342,6 +424,7 @@ class TwakeSpace:
                 method,
                 self._url + path,
                 params=params,
+                json=body,
                 headers={"Authorization": f"Bearer {owner.token}", "Accept": "application/json"},
             )
         except httpx.HTTPError as error:
@@ -395,6 +478,82 @@ class TwakeSpace:
         if invalid is not None and response.status_code == 400:
             raise invalid
         return self._json(response, "GET", path)
+
+    async def _write(
+        self,
+        owner: SpaceOwner,
+        method: str,
+        path: str,
+        *,
+        missing: Problem,
+        refusals: dict[str, Problem],
+        body: Any = None,
+    ) -> None:
+        """Has Space take a write on the members of a space: `missing` when what it acts on is
+        gone, or out of the token's reach, since the contract read it, and each of the `refusals`
+        for the error Space names it with, as when the user's role changed meanwhile."""
+        response = await self._call(owner, method, path, scope="members:write", body=body)
+        error = _error_of(response)
+        if response.status_code == 404 and error == "not_found":
+            raise missing
+        if not response.is_success and error in refusals:
+            raise refusals[error]
+        if not response.is_success:
+            raise _unavailable(f"Space answered {response.status_code} to {method} {path}.")
+
+    async def add_members(
+        self, owner: SpaceOwner, space_id: str, usernames: list[str], role: str
+    ) -> None:
+        """Adds people of the organization to the space, by username, all with one role: Space
+        passes them on to ldap-rest in one call, which adds all of them or none."""
+        await self._write(
+            owner,
+            "POST",
+            f"/spaces/{space_id}/members",
+            missing=space_not_found(space_id),
+            # Space's refusal of a user no longer an admin, and ldap-rest's, which Space passes
+            # on: a direct member of another role, or a username the organization does not have
+            refusals={
+                "not_space_admin": not_space_admin(space_id),
+                "MEMBER_EXISTS": member_exists(space_id, []),
+                "USER_NOT_FOUND": person_not_found(usernames, []),
+            },
+            body={"usernames": usernames, "role": role},
+        )
+
+    async def set_role(self, owner: SpaceOwner, space_id: str, user_id: str, role: str) -> None:
+        """Changes the role of a member of the space: Space gives someone ldap-rest has through a
+        linked group alone a role of their own, and lists the stronger of it and the group's."""
+        await self._write(
+            owner,
+            "PATCH",
+            f"/spaces/{space_id}/members/{user_id}",
+            missing=member_not_found(space_id, user_id),
+            # Space's refusal of a user no longer an admin, and ldap-rest's, which Space passes
+            # on: the last admin of its own the space has
+            refusals={
+                "not_space_admin": not_space_admin(space_id),
+                "LAST_ADMIN": last_admin(space_id),
+            },
+            body={"role": role},
+        )
+
+    async def remove_member(self, owner: SpaceOwner, space_id: str, user_id: str) -> None:
+        """Removes a member from the space: Space takes the removal of someone ldap-rest has
+        through a linked group alone for done, and stops listing them, though the group keeps
+        them in."""
+        await self._write(
+            owner,
+            "DELETE",
+            f"/spaces/{space_id}/members/{user_id}",
+            missing=member_not_found(space_id, user_id),
+            # As for a role: Space's refusal of a user no longer an admin, and ldap-rest's of the
+            # last admin of its own the space has
+            refusals={
+                "not_space_admin": not_space_admin(space_id),
+                "LAST_ADMIN": last_admin(space_id),
+            },
+        )
 
     async def spaces(self, owner: SpaceOwner) -> list[SpaceSummary]:
         """The spaces the user is a member of, by name."""

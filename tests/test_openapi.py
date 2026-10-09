@@ -276,6 +276,9 @@ async def test_the_contract_is_described_for_agents(client: AsyncClient) -> None
         "search_space_people": ["space.people.read.v1"],
         "list_feed_items": ["space.feed.read.v1"],
         "read_feed_item": ["space.feed.read.v1"],
+        "add_space_members": ["space.member.add.v1"],
+        "update_space_member": ["space.member.update.v1"],
+        "remove_space_member": ["space.member.remove.v1"],
     }
 
 
@@ -414,6 +417,11 @@ WRITES_NAMED = {
         "create_contact": ("create", "créer"),
         "update_contact": ("change", "modifier"),
         "delete_contact": ("delete", "supprimer"),
+    },
+    "space": {
+        "add_space_members": ("add members", "ajouter des membres"),
+        "update_space_member": ("change their roles", "changer leur rôle"),
+        "remove_space_member": ("remove them", "les retirer"),
     },
 }
 
@@ -557,6 +565,9 @@ async def test_the_writes_that_tell_what_they_would_do_declare_it(client: AsyncC
         "create_contact": ("post", True),
         "update_contact": ("patch", True),
         "delete_contact": ("delete", True),
+        "add_space_members": ("post", True),
+        "update_space_member": ("patch", True),
+        "remove_space_member": ("delete", True),
     }
 
 
@@ -969,6 +980,44 @@ async def test_the_bodies_of_the_batched_mail_moves_are_whole_and_closed(
         {"required": ["mailbox_id"]},
         {"required": ["mailbox_name"]},
     ]
+
+
+async def test_changing_the_members_of_a_space_are_high_risk_writes_with_whole_and_closed_bodies(
+    client: AsyncClient,
+) -> None:
+    # Who sees all a space holds changes: the owner confirms each call. The model gets each body as
+    # the document writes it, whole, and the gateway checks each call against it: 1 to 20
+    # usernames and one role, or the role alone
+    document = (await client.get("/openapi.json")).json()
+    operations = {
+        operation["operationId"]: operation for _, _, operation in operations_of(document)
+    }
+    writes = ("add_space_members", "update_space_member", "remove_space_member")
+
+    schemas = {
+        name: operations[name]["requestBody"]["content"]["application/json"]["schema"]
+        for name in ("add_space_members", "update_space_member")
+    }
+
+    assert {name: operations[name]["x-twake-risk"] for name in writes} == dict.fromkeys(
+        writes, "high"
+    )
+    assert "requestBody" not in operations["remove_space_member"]
+    assert "$ref" not in json.dumps(schemas)
+    assert {name: sorted(schema["properties"]) for name, schema in schemas.items()} == {
+        "add_space_members": ["role", "usernames"],
+        "update_space_member": ["role"],
+    }
+    assert [schema["additionalProperties"] for schema in schemas.values()] == [False] * 2
+    assert [sorted(schema["required"]) for schema in schemas.values()] == [
+        ["role", "usernames"],
+        ["role"],
+    ]
+    usernames = schemas["add_space_members"]["properties"]["usernames"]
+    assert (usernames["type"], usernames["minItems"], usernames["maxItems"]) == ("array", 1, 20)
+    assert [schema["properties"]["role"]["enum"] for schema in schemas.values()] == [
+        ["viewer", "editor", "admin"]
+    ] * 2
 
 
 async def test_each_description_ends_with_a_worked_call_the_gateway_accepts(

@@ -621,14 +621,14 @@ The Space contracts call the REST API of the Twake Space backend 0.1.18, at `SPA
 | `X-Twake-Space-Token` | the user's API token of Space, which the broker holds for them, and which starts with `tws_` |
 
 - The gateway removes `X-Twake-Space-Token` from what an agent sends, so only the broker sets it. A user who gave the broker no API token of Space never reaches the service: the broker answers `space_token_missing`, with its consent link, which APISIX returns as is. The service reads the header like the bearer token, out of the OpenAPI document, and never stores it. Without it, or with a token that does not start with `tws_`, a Space contract answers `missing_space_token`, and nothing goes to Space.
-- The service sends the API token to Space alone, as a bearer token. Space acts for it with the role the user has in each space, and shows it the spaces it reaches. A token Space refuses, one the user revoked, one expired, or one whose account left the organization, answers `space_token_rejected`. A token without a scope the call needs answers `space_scope_missing`, `scope` naming it as Space does: `space:read`, to read the spaces, which every Space contract needs, and `feed:read`, to read their feeds, which `list_feed_items` and `read_feed_item` need too.
+- The service sends the API token to Space alone, as a bearer token. Space acts for it with the role the user has in each space, and shows it the spaces it reaches. A token Space refuses, one the user revoked, one expired, or one whose account left the organization, answers `space_token_rejected`. A token without a scope the call needs answers `space_scope_missing`, `scope` naming it as Space does: `space:read`, to read the spaces, which every Space contract needs, `feed:read`, to read their feeds, which `list_feed_items` and `read_feed_item` need too, and `members:write`, to change their members, which `add_space_members`, `update_space_member` and `remove_space_member` need too.
 - Space is published once `PUBLISHED_APPS` names `space`. The service then needs `SPACE_URL` and `SPACE_WEB_URL`, and does not start without them; while Space is not published, it needs neither.
-- Space lets no API token post in a feed or react there, and no contract writes in Space. `list_spaces` and `read_space` give the `url` of each space's feed in Twake Space's web app, `<SPACE_WEB_URL>/spaces/<space_id>/feed`, where the user posts and reacts, and every Space contract tells the agent to draft the text for the user and give them that link.
+- Space lets no API token post in a feed or react there, so no contract does. `list_spaces` and `read_space` give the `url` of each space's feed in Twake Space's web app, `<SPACE_WEB_URL>/spaces/<space_id>/feed`, where the user posts and reacts, and every Space contract tells the agent to draft the text for the user and give them that link.
 - A space the user is not a member of, or one their API token does not reach, answers exactly like an unknown one, and an item outside the feed of the space like a missing one.
 - Space does not say which member the user is: the contracts take the member who has the user's email, whatever its case, as the user, to tell their own posts and reactions, which `you` and `mine` mark. With no such member, or several, none is marked.
 - What people wrote comes under `untrusted`, on one line but a post, which keeps its lines, all without what a reader does not see: the names of spaces, groups, people and tokens, descriptions, posts, reactions, and the titles, previews and ids of the objects of the cards. What an app tells of an object, such as an event's times or where it takes place, comes under `untrusted` too, each of its texts so cleaned and cut at 500 characters, 20 entries of each list or object and three levels at most.
 - `role` is the user's in a space, or a member's: `viewer`, who reads and reacts, `editor`, who posts too, or `admin`, who also adds, changes and removes members.
-- Its words in `x-twake-domains` say what reading covers there: "list your spaces and their members, and read their feeds". It has none for writing, which no Space contract does.
+- Its words in `x-twake-domains` say what reading covers there, "list your spaces and their members, and read their feeds", and what writing covers: "add members, change their roles and remove them where you are admin".
 
 ### `space.spaces.read.v1`
 
@@ -649,6 +649,7 @@ The Space contracts call the REST API of the Twake Space backend 0.1.18, at `SPA
 
 - `q` takes 2 to 100 characters, on one line and without what a reader does not see. The contract finds the members of the user's first 50 spaces by name whose username, email or name holds it, whatever its case and accents: each person once, the user too, whom `you` marks, with the spaces they share with the user, by name, and their role there. The list holds 20 people at most, `truncated` telling that more were found, or that the user has more than 50 spaces.
 - Space lets no API token search the directory of the organization: `GET /organization/members` takes a session alone. Someone who shares no space with the user is not found, and the agent asks the user for their username.
+- `username` is what `add_space_members` takes.
 - `GET /spaces`, then `GET /spaces/{id}` of each of the first 50, five at a time at most. A space the user left, or that was deleted, while they are read is left out.
 
 ### `space.feed.read.v1`
@@ -667,6 +668,27 @@ The feed of a space, its Fil, shows a card per object of the space's apps, such 
 - `since` is an RFC 3339 time with its offset, such as `2026-10-01T00:00:00+02:00`; one without is an invalid request. A card keeps the place and the `time` of its object's first event, which `since` bounds: the card of an older object that an app changed since stays out, further down the feed.
 - `category` keeps `messages`, the posts and the mail, `files`, `activities`, such as tasks, or `events`, of the calendar. `limit` goes from 1 to 50 and is 20 by default.
 - With `space_id`, and for `read_feed_item`, the contract reads the space first (`GET /spaces/{id}`), for the member who is the user, then `GET /spaces/{id}/feed` or `GET /spaces/{id}/feed/items/{item_id}`. Without, it reads `GET /spaces`, then the first of the spaces still found (`GET /spaces/{id}`), for the member who is the user, and `GET /spaces/{id}/feed` of each.
+
+### `space.member.add.v1`, `space.member.update.v1` and `space.member.remove.v1`
+
+Add people of the user's organization to one of their spaces, change the role of its members, and remove them, where the user is an admin.
+
+| Operation | Request | Answer |
+|---|---|---|
+| `add_space_members` | `POST /contracts/v1/space/spaces/{space_id}/members` `{"usernames", "role"}` | the space, as `read_space` gives it, read again |
+| `update_space_member` | `PATCH /contracts/v1/space/spaces/{space_id}/members/{user_id}` `{"role"}` | the member, as `read_space` then gives them |
+| `remove_space_member` | `DELETE /contracts/v1/space/spaces/{space_id}/members/{user_id}` | the member as they were |
+
+- Only the admins of a space change its members: anyone else is refused with `not_space_admin`, before anything is written, and when Space refuses it once the user's role changed. An API token of Space without `members:write` answers `space_scope_missing` once the call writes, and nothing is written; its preview, which only reads, does not tell.
+- `usernames` lists 1 to 20 usernames, all added with one `role`, each once whatever its case, as first written. `read_space` and `search_space_people` give those of the people of the user's spaces; Space lets no API token search the directory of the organization, so the agent asks the user for anyone else's. ldap-rest adds all of them or none: a username the organization does not have answers `person_not_found`, and nobody is added. Space does not say which username it lacks: the contract reads the space again, and `usernames` lists those it does not list, `entered` those it lists now and did not before, as when another admin added them meanwhile.
+- A space lists its direct members and the people of its linked groups alike, with their strongest role, but ldap-rest's member routes see the direct members alone. In a space without linked groups, a member of another role answers `member_exists`, as ldap-rest would, before anything is written: `update_space_member` changes it; members of that role already are left as they are, and nothing is written when all are. In a space with linked groups, the contract cannot tell the direct members from the others: the people it lists are sent too, which makes someone it lists through a group alone a direct member, with that role, and a direct member of another role answers `member_exists`, which names those the space lists with another role, and adds nobody.
+- The people added see the space, its feed and what its apps hold, such as its room, its tasks and its files.
+- `user_id` is a member's, as `read_space` gives it: one the space does not list answers `member_not_found`. A member given the role they have is left as is, and nothing is written. A change or a removal that would leave the space without an admin of its own answers `last_admin`, as ldap-rest refuses it: a group linked as admin counts for none.
+- Someone the space lists through a linked group alone gets a role of their own from `update_space_member`, as Space 0.1.18 has ldap-rest give it, and keeps the stronger of it and the group's: the contract reads the space again once Space took the change, and answers the member as it then lists them.
+- Space takes the removal of someone ldap-rest has through a linked group alone for done, while the group keeps them in the space and its apps, as long as it is linked and they are in it. `remove_space_member` answers the member as they were, and its description and its preview warn that a member through a linked group stays.
+- `POST /spaces/{id}/members` `{"usernames", "role"}`, `PATCH /spaces/{id}/members/{user_id}` `{"role"}` and `DELETE /spaces/{id}/members/{user_id}`, each after `GET /spaces/{id}`, which `add_space_members` reads again after the write, and `update_space_member` after a change. The preview of `add_space_members` reads `GET /spaces`, then `GET /spaces/{id}` of each of the first 50, five at a time at most, to name the people it adds by what the user's spaces tell of them.
+- All three are high-risk writes (`x-twake-risk: high`), which the owner confirms call by call: they change who sees what a space holds, and who manages it.
+- Each tells what it would do ([Previews](#previews)): whom the space takes in and as what, each by their name and their email when one of the user's first 50 spaces lists them, else by the username, to be checked, and who it lists already, left as they are, or made direct members, with the role each has now, in a space that links groups; a member's new role and their former one, what an admin does, and, in a space that links groups, that a member through one too keeps the stronger role; or who leaves the space, the user maybe, and, in a space that links groups, that a member through one stays. The digest covers the people, their membership and whether the space links groups: a call made once one of them changed answers `changed_since_preview`, or `member_not_found` for a member gone, and writes nothing.
 
 ## Previews
 
@@ -698,6 +720,9 @@ When the harness asks an owner about a write, for a first use, a high-risk write
 | `create_contact` | each field of the contact, its note whole when it fits; or that it is in the address book already | the contact, by its UID, as the address book holds it, if at all |
 | `update_contact` | each field it changes, as it would be and as it was, what it removes named as such | the contact as it is |
 | `delete_contact` | that the contact goes for good, and each field it holds | the contact as it is |
+| `add_space_members` | whom the space takes in and as what, by their name and email when the user's spaces list them, else by their username, to be checked, and who it lists already, made direct members when it links groups | the people, and who of them the space lists, as what |
+| `update_space_member` | the member's new role and their former one, what an admin does, and that a member through a linked group too keeps the stronger role | the member as they are |
+| `remove_space_member` | who leaves the space, the user maybe, and that a member through a linked group stays | the member as they are |
 
 ## Errors
 
@@ -715,7 +740,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 401 | `space_token_rejected` | Space refused the user's API token of Space: they revoked it, it expired, or their account left the organization |
 | 403 | `forbidden_role` | the user is a viewer of the board, where they only read and comment |
 | 403 | `address_book_read_only` | the address book is someone else's, shared with the user, their domain's, or one Contacts lets them only read: no contract writes in it |
-| 403 | `space_scope_missing` | the user's API token of Space lacks a scope the call needs, which `scope` names as Space does: `space:read` or `feed:read` |
+| 403 | `space_scope_missing` | the user's API token of Space lacks a scope the call needs, which `scope` names as Space does: `space:read`, `feed:read` or `members:write` |
+| 403 | `not_space_admin` | the user is not an admin of the space, whose admins alone change its members |
 | 404 | `invitation_not_found` | no invitation to an event of this UID was sent to the user: their calendars have no copy of the event, their copy does not list them as an attendee, or they organize it |
 | 404 | `calendar_user_not_found` | Calendar has no user with the user's email |
 | 404 | `person_not_found` | Calendar has no user with an email `find_meeting_slots` is given, whose free/busy it cannot read |
@@ -734,6 +760,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 404 | `contact_not_found` | the address book has no contact with this id |
 | 404 | `space_not_found` | the user is a member of no space with this id that their API token of Space reaches |
 | 404 | `feed_item_not_found` | the feed of the space has no item with this id |
+| 404 | `member_not_found` | the space has no member with this user id |
+| 404 | `person_not_found` | the user's organization has no person of one of the usernames `add_space_members` is given at least, which Space does not name: `usernames` lists those the space does not list, `entered` those it lists now and did not before, and the call added nobody |
 | 409 | `changed_since_preview` | what the call acts on changed since its owner was shown what it would do: nothing was done |
 | 409 | `recurring_invitation` | the invitation repeats, or holds several occurrences of a series, and the call does not answer for the whole series |
 | 409 | `invitation_cancelled` | the organizer cancelled the invitation itself: the event that does not repeat, the whole series, or each occurrence the user was invited to without the series; an occurrence cancelled alone is not refused for the whole series |
@@ -757,6 +785,8 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem (`a
 | 409 | `mailbox_forbidden` | `move_email` and `move_emails` do not move an email to drafts, sent, outbox, templates, trash or spam |
 | 409 | `email_in_spam` | the email is in spam, which only `trash_email` and `trash_emails` take it out of; the code of an email refused when several are moved at once |
 | 409 | `contact_exists` | the user's default address book has a contact with one of the emails already, or the one the same call added, changed since: `book_id` and `contact_id` name it, and nothing was added |
+| 409 | `member_exists` | some of the people to add are direct members of the space already, with another role, which `update_space_member` changes: `members` names those the space lists with another role, when the contract tells, and nobody was added |
+| 409 | `last_admin` | the change or the removal would leave the space without an admin of its own, a group linked as admin counting for none |
 | 413 | `file_too_large` | the document takes more than the 20 MiB the service reads, or more than it reads once uncompressed |
 | 413 | `contact_too_large` | the contact would take more than the 1 MiB Contacts takes in a card: nothing was written |
 | 415 | `content_not_extractable` | the file is neither text nor a document the service reads, or the document is damaged, holds no text, as a scanned PDF, or gave none in the time or the memory its reading has |
