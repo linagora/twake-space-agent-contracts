@@ -854,11 +854,19 @@ class Calendar:
             raise _unavailable(f"Calendar did not answer {method} {path}.") from error
 
     async def _call(
-        self, user: User, method: str, path: str, *, missing_ok: bool = False, **request: Any
+        self,
+        user: User,
+        method: str,
+        path: str,
+        *,
+        missing_ok: bool = False,
+        empty_ok: bool = False,
+        **request: Any,
     ) -> Any:
-        """Calendar's JSON answer; None when what is asked for is missing and missing_ok is set."""
+        """Calendar's JSON answer; None when what is asked for is missing and missing_ok is set,
+        or when Calendar answers with no body and empty_ok is set."""
         response = await self._request(user, method, path, missing_ok=missing_ok, **request)
-        if response is None:
+        if response is None or (empty_ok and not response.content):
             return None
         try:
             return response.json()
@@ -966,11 +974,16 @@ class Calendar:
         """The calendars the user owns, by the hrefs of their JSON, as esn-sabre lists them."""
         # Asked for personal calendars, esn-sabre leaves out those of others the user subscribes to
         found = await self._call(
-            user, "GET", f"/dav/calendars/{user_id}.json", params={"personal": "true"}
+            user,
+            "GET",
+            f"/dav/calendars/{user_id}.json",
+            params={"personal": "true"},
+            # A user without a calendar of their own, such as one who only holds those others share
+            # with them, gets an answer with no body: esn-sabre sends none for an empty list
+            empty_ok=True,
         )
         try:
-            # A user without a calendar of their own, such as one who only holds those others share
-            # with them, gets no _embedded from esn-sabre
+            # A list without _embedded holds no calendar either
             listed = found.get("_embedded", {}).get("dav:calendar", []) if found else []
             hrefs = [calendar["_links"]["self"]["href"] for calendar in listed]
         except (AttributeError, KeyError, TypeError) as error:

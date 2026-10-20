@@ -414,8 +414,17 @@ class FakeCalendar:
         what the contracts make of what they read but Calendar is not known to write, such as a
         time at an offset from UTC."""
         self.no_home = False
-        """Whether the user has no calendar of their own, which esn-sabre answers without
-        _embedded: it creates the default one only for a home with no calendar at all."""
+        """Whether the user has no calendar of their own, whose list esn-sabre answers with a 200
+        and no body, as text/html: it sends no body for an empty list. Their free/busy then holds
+        no calendar. It creates the default calendar only for a home with no calendar at all."""
+        self.bare_home = False
+        """Whether the list of the user's calendars comes as JSON without _embedded, as HAL allows
+        for a list with nothing in it but esn-sabre is not known to answer, to see that the
+        contracts read it as no calendar."""
+        self.html_home = False
+        """Whether the list of the user's calendars comes as a page of HTML, as esn-sabre is not
+        known to answer, to see that the contracts take no answer they cannot read for an empty
+        list."""
         self.subscriptions: dict[str, str] = {}
         """The calendars of others that users subscribe to, by their path in the subscriber's
         home: the path of the calendar each shows."""
@@ -526,7 +535,17 @@ class FakeCalendar:
         if user is None or request.url.path != f"/dav/calendars/{user}.json":
             return httpx.Response(403)
         if self.no_home:
-            return httpx.Response(200, json={"_links": {"self": {"href": ""}}})
+            return httpx.Response(200, headers={"Content-Type": "text/html; charset=UTF-8"})
+        if self.bare_home:
+            return httpx.Response(
+                200, json={"_links": {"self": {"href": f"/calendars/{user}.json"}}}
+            )
+        if self.html_home:
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/html; charset=UTF-8"},
+                content=b"<html><body>Calendars</body></html>",
+            )
         personal = request.url.params.get("personal")
         calendars = self._own_calendars(user) if personal in (None, "true") else []
         if personal is None:
@@ -618,10 +637,14 @@ class FakeCalendar:
             or not set(body["users"]) <= set(self.users.values())
         ):
             return httpx.Response(403)
+        # esn-sabre gives the free/busy of the calendars each person owns, none for a person
+        # without a calendar of their own, as the user is with no_home
         free_busy = [
             {
                 "id": person,
-                "calendars": [
+                "calendars": []
+                if self.no_home and person == user
+                else [
                     {
                         "id": person,
                         "busy": [

@@ -1143,6 +1143,8 @@ async def test_a_user_calendar_does_not_know_is_not_found(client: AsyncClient) -
         # Without the user's time zone, the days to read are not known
         pytest.param("settings_down", "calendar_unavailable", id="settings down"),
         pytest.param("refused_tokens", "calendar_refused", id="token refused"),
+        # A list of calendars the contract cannot read is no empty list
+        pytest.param("html_home", "calendar_unavailable", id="calendars as a page"),
     ],
 )
 async def test_a_calendar_that_fails_is_a_bad_gateway(
@@ -1190,10 +1192,17 @@ async def test_an_event_whose_times_the_contract_cannot_read_fails_the_list(
     assert response.json()["code"] == "calendar_unavailable"
 
 
+@pytest.mark.parametrize(
+    "home",
+    [
+        pytest.param("no_home", id="list with no body"),
+        pytest.param("bare_home", id="list without _embedded"),
+    ],
+)
 async def test_a_user_without_any_calendar_has_no_event(
-    client: AsyncClient, boundary: FakeBoundary
+    client: AsyncClient, boundary: FakeBoundary, home: str
 ) -> None:
-    boundary.calendar.no_home = True
+    setattr(boundary.calendar, home, True)
 
     answer = await list_events(client, **{"from": "2026-10-09", "days": "1"})
 
