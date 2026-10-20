@@ -23,6 +23,17 @@ async def test_a_user_with_nothing_then_is_free(client: AsyncClient) -> None:
     }
 
 
+async def test_a_user_without_a_calendar_of_their_own_is_free(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.calendar.no_home = True
+
+    answer = await free_busy(client)
+
+    assert answer["free"] is True
+    assert answer["busy"] == []
+
+
 async def test_a_user_with_a_meeting_in_the_period_is_busy(
     client: AsyncClient, boundary: FakeBoundary
 ) -> None:
