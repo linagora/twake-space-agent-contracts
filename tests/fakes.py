@@ -3075,7 +3075,8 @@ class SpaceRoom:
 @dataclass
 class SpaceCard:
     """A card of a space's feed: the latest activity of an app on one object, which keeps the
-    place of the object's first."""
+    place of the object's first in the feed by time, and takes the place of its latest in the feed
+    by latest activity."""
 
     id: str
     space: str
@@ -3136,8 +3137,8 @@ class SpaceToken:
 
 
 class FakeSpace:
-    """The Twake Space backend 0.1.18, as the contracts call its REST API with an API token of
-    Space.
+    """The Twake Space backend 0.1.18, with the feed by latest activity of
+    linagora/twake-space#438, as the contracts call its REST API with an API token of Space.
 
     Space looks the token up first, then checks that it holds the scope of the route, and only
     then the route's parameters: a token it does not know answers 401 invalid_token, and one
@@ -3190,6 +3191,9 @@ class FakeSpace:
         self.unexpected: object = None
         """What Space answers every call of a token it takes with, in a form the contracts do not
         know, if set: JSON of another form, or text."""
+        self.reads_since = True
+        """Whether the feed reads since, as linagora/twake-space#438 has it: a Space before it
+        leaves since out, as any parameter it does not know, and gives its feed by time."""
         self.cards: dict[str, SpaceCard] = {}
         self.posts: dict[str, SpacePost] = {}
         self.reactions: list[SpaceReaction] = []
@@ -3469,33 +3473,47 @@ class FakeSpace:
         ]
 
     def _feed(self, room: SpaceRoom, params: httpx.QueryParams) -> httpx.Response:
-        """A page of the feed of the space, newest first, as GET /spaces/:id/feed gives it."""
+        """A page of the feed of the space, newest first, as GET /spaces/:id/feed gives it; with
+        since, the items active since then, newest activity first: a card by its latest event, a
+        post by its time."""
         category = params.get("category")
         limit = params.get("limit", "20")
         before = _feed_cursor(params["before"]) if "before" in params else None
+        since = _feed_since(params["since"]) if "since" in params and self.reads_since else None
         if (
             category not in (None, "messages", "files", "activities", "events")
             or not limit.isdigit()
             or not 1 <= int(limit) <= 50
             or before is False
+            or since is False
+            # A cursor pages the order of its page
+            or (before is not None and before.by_activity != (since is not None))
         ):
             return _space_refusal(400, "invalid_request")
         rows = [
-            (card.time, card.id)
+            (card.time if since is None else card.updated_at, card.id)
             for card in self.cards.values()
             if card.space == room.id and category in (None, card.category)
         ]
         # A post is a message: other categories hold cards only
         if category in (None, "messages"):
             rows += [(post.time, post.id) for post in self.posts.values() if post.space == room.id]
-        rows = sorted((row for row in rows if before is None or row < before), reverse=True)
+        rows = sorted(
+            (
+                row
+                for row in rows
+                if (before is None or row < (before.time, before.item_id))
+                and (since is None or datetime.fromisoformat(row[0]) >= since)
+            ),
+            reverse=True,
+        )
         shown = rows[: int(limit)]
         more = len(rows) > int(limit)
         return httpx.Response(
             200,
             json={
                 "items": [self._item(room, item_id) for _, item_id in shown],
-                "next": _feed_cursor_of(*shown[-1]) if more else None,
+                "next": _feed_cursor_of(*shown[-1], activity=since is not None) if more else None,
             },
         )
 
@@ -3577,20 +3595,48 @@ class FakeSpace:
         }
 
 
-def _feed_cursor_of(time: str, item_id: str) -> str:
-    """The cursor of the page that follows an item, as Space writes it."""
-    return base64.urlsafe_b64encode(f"{time}|{item_id}".encode()).decode().rstrip("=")
+def _feed_cursor_of(time: str, item_id: str, *, activity: bool = False) -> str:
+    """The cursor of the page that follows an item, as Space writes it: one of the feed by latest
+    activity says so."""
+    fields = [time, item_id, "activity"] if activity else [time, item_id]
+    return base64.urlsafe_b64encode("|".join(fields).encode()).decode().rstrip("=")
 
 
-def _feed_cursor(cursor: str) -> tuple[str, str] | Literal[False]:
-    """The time and id of the item a cursor follows; False for a cursor Space did not write."""
+@dataclass(frozen=True)
+class _FeedCursor:
+    """What a cursor of Space tells: the item it follows, and the order it pages."""
+
+    time: str
+    item_id: str
+    by_activity: bool
+    """Whether it pages the feed by latest activity."""
+
+
+def _feed_cursor(cursor: str) -> _FeedCursor | Literal[False]:
+    """What a cursor tells; False for a cursor Space did not write."""
     try:
-        time, item_id = (
+        time, item_id, *order = (
             base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode().split("|")
         )
     except (ValueError, UnicodeDecodeError):
         return False
-    return (time, item_id)
+    if order not in ([], ["activity"]):
+        return False
+    return _FeedCursor(time, item_id, by_activity=order == ["activity"])
+
+
+def _feed_since(value: str) -> datetime | Literal[False]:
+    """The instant since which a feed reads the items active, as Space takes it, a JavaScript
+    Date: a time with its offset, cut to the millisecond; False for any other, and for one outside
+    the years 1 to 9999 in UTC."""
+    try:
+        since = datetime.fromisoformat(value)
+        if since.tzinfo is None:
+            return False
+        utc = since.astimezone(UTC)
+    except (ValueError, OverflowError):
+        return False
+    return utc.replace(microsecond=utc.microsecond // 1000 * 1000)
 
 
 def _space_refusal(status: int, error: str) -> httpx.Response:

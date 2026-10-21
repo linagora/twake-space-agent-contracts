@@ -410,9 +410,10 @@ async def test_the_feeds_of_all_the_spaces_go_back_seven_days_unless_told(
     assert {response.json()["truncated"] for response in (default, told, further)} == {False}
 
 
-async def test_a_time_without_its_offset_is_invalid(client: AsyncClient) -> None:
+@pytest.mark.parametrize("parameter", ["since", "active_since"])
+async def test_a_time_without_its_offset_is_invalid(client: AsyncClient, parameter: str) -> None:
     response = await client.get(
-        FEEDS, params={"since": "2026-10-05T00:00:00"}, headers=as_space_owner()
+        FEEDS, params={parameter: "2026-10-05T00:00:00"}, headers=as_space_owner()
     )
 
     assert response.status_code == 400
@@ -475,8 +476,9 @@ async def test_a_category_keeps_its_items_in_the_feeds_of_all_the_spaces(
     assert items_of(messages) == [post]
 
 
+@pytest.mark.parametrize("bound", [{}, {"active_since": "2026-10-05T00:00:00Z"}])
 async def test_the_feeds_of_the_first_fifty_spaces_by_name_are_read_and_truncated_says_so(
-    client: AsyncClient, boundary: FakeBoundary
+    client: AsyncClient, boundary: FakeBoundary, bound: dict[str, str | int]
 ) -> None:
     rooms = [
         boundary.space.space(f"Space {number:02}", {MMAUDET: "viewer", ALICE: "admin"})
@@ -487,7 +489,9 @@ async def test_the_feeds_of_the_first_fifty_spaces_by_name_are_read_and_truncate
         for number, room in enumerate(rooms)
     ]
 
-    response = await client.get(FEEDS, params={"limit": 50}, headers=as_space_owner())
+    page: dict[str, str | int] = {"limit": 50}
+
+    response = await client.get(FEEDS, params=page | bound, headers=as_space_owner())
 
     assert items_of(response) == [post.id for post in reversed(posts[:50])]
     assert response.json()["truncated"] is True
@@ -545,6 +549,241 @@ async def test_since_bounds_the_feed_of_one_space_too(
     assert items_of(first) == [posts[4].id, posts[3].id]
     assert items_of(last) == [posts[2].id]
     assert last.json()["next"] is None
+
+
+async def test_active_since_reads_the_items_active_since_then_newest_activity_first(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # A task created last week and done yesterday: its card keeps the time of its creation, which
+    # since bounds, and shows its latest activity, which active_since reads
+    design = boundary.space.space("Design", {MMAUDET: "editor", ALICE: "admin"})
+    roadmap = boundary.space.space("Roadmap", {MMAUDET: "viewer", BOB: "admin"})
+
+    def card(room: SpaceRoom, title: str, time: str, updated_at: str | None = None) -> str:
+        found = boundary.space.card(
+            room,
+            "activities",
+            "com.twake.tasks.task.updated.v1",
+            actor=ALICE,
+            object={"type": "task", "id": title, "title": title},
+            time=time,
+            updated_at=updated_at,
+        )
+        return found.id
+
+    done = card(design, "Mockups", "2026-10-01T09:00:00.000Z", "2026-10-07T15:00:00.000Z")
+    card(roadmap, "Budget", "2026-10-01T09:00:00.000Z", "2026-10-02T09:00:00.000Z")
+    minutes = card(roadmap, "Minutes", "2026-10-06T10:00:00.000Z")
+    post = boundary.space.post(design, ALICE, "Kick-off", time="2026-10-06T12:00:00.000Z").id
+    # A post counts from when it was written, its edits aside
+    boundary.space.post(
+        design,
+        ALICE,
+        "Agenda",
+        time="2026-10-01T09:00:00.000Z",
+        edited_at="2026-10-07T09:00:00.000Z",
+    )
+    instant = "2026-10-05T00:00:00+02:00"
+
+    active = await client.get(FEEDS, params={"active_since": instant}, headers=as_space_owner())
+    since = await client.get(FEEDS, params={"since": instant}, headers=as_space_owner())
+
+    assert items_of(active) == [done, post, minutes]
+    assert active.json()["truncated"] is False
+    assert items_of(since) == [post, minutes]
+
+
+async def test_the_items_active_since_then_come_limit_at_most_truncated_beyond(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # Space gives fifty items of a feed at once: the page it has after them tells of the others,
+    # whose objects are older than active_since
+    design = boundary.space.space("Design", {MMAUDET: "editor", ALICE: "admin"})
+    cards = [
+        boundary.space.card(
+            design,
+            "files",
+            "com.twake.drive.file.updated.v1",
+            actor=ALICE,
+            object={"type": "file", "id": f"file-{minute}", "title": f"File {minute}.odt"},
+            time="2026-09-01T09:00:00.000Z",
+            updated_at=f"2026-10-07T09:{minute:02}:00.000Z",
+        ).id
+        for minute in range(51)
+    ]
+
+    response = await client.get(
+        FEEDS,
+        params={"active_since": "2026-10-05T00:00:00Z", "limit": 50},
+        headers=as_space_owner(),
+    )
+
+    assert items_of(response) == list(reversed(cards))[:50]
+    assert response.json()["truncated"] is True
+
+
+async def test_active_since_pages_the_feed_of_one_space_by_latest_activity(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    design = boundary.space.space("Design", {MMAUDET: "editor", ALICE: "admin"})
+    # The task created first changed last; the fourth changed before active_since
+    tasks = [
+        boundary.space.card(
+            design,
+            "activities",
+            "com.twake.tasks.task.updated.v1",
+            actor=ALICE,
+            object={"type": "task", "id": f"task-{day}", "title": f"Task {day}"},
+            time=f"2026-09-2{day}T09:00:00.000Z",
+            updated_at=updated_at,
+        ).id
+        for day, updated_at in enumerate(
+            (
+                "2026-10-07T09:00:00.000Z",
+                "2026-10-06T09:00:00.000Z",
+                "2026-10-05T09:00:00.000Z",
+                "2026-10-02T09:00:00.000Z",
+            ),
+            start=1,
+        )
+    ]
+    post = boundary.space.post(design, ALICE, "Kick-off", time="2026-10-05T12:00:00.000Z").id
+    page: dict[str, str | int] = {
+        "space_id": design.id,
+        "active_since": "2026-10-04T00:00:00Z",
+        "limit": 2,
+    }
+
+    first = await client.get(FEEDS, params=page, headers=as_space_owner())
+    last = await client.get(
+        FEEDS, params=page | {"before": first.json()["next"]}, headers=as_space_owner()
+    )
+
+    assert items_of(first) == [tasks[0], tasks[1]]
+    assert items_of(last) == [post, tasks[2]]
+    assert last.json()["next"] is None
+
+
+async def test_a_cursor_pages_with_active_since_only_if_its_call_had_it(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    # The feed by latest activity is in another order than the feed by time
+    design = boundary.space.space("Design", {MMAUDET: "editor", ALICE: "admin"})
+    for day in range(1, 4):
+        boundary.space.post(design, ALICE, f"Update {day}", time=f"2026-10-0{day}T09:00:00.000Z")
+    by_time: dict[str, str | int] = {"space_id": design.id, "limit": 1}
+    by_activity = by_time | {"active_since": "2026-10-01T00:00:00Z"}
+    first_by_time = await client.get(FEEDS, params=by_time, headers=as_space_owner())
+    first_by_activity = await client.get(FEEDS, params=by_activity, headers=as_space_owner())
+
+    mixed = [
+        await client.get(FEEDS, params=params, headers=as_space_owner())
+        for params in (
+            by_activity | {"before": first_by_time.json()["next"]},
+            by_time | {"before": first_by_activity.json()["next"]},
+        )
+    ]
+
+    assert [response.status_code for response in mixed] == [400, 400]
+    assert {response.json()["code"] for response in mixed} == {"invalid_request"}
+    assert {response.json()["detail"] for response in mixed} == {
+        "before: Space does not know this cursor: pass the next a list_feed_items answer gave, "
+        "with active_since if that call had it, without if not."
+    }
+
+
+async def test_since_and_active_since_together_are_invalid(
+    client: AsyncClient, boundary: FakeBoundary
+) -> None:
+    boundary.space.space("Design", {MMAUDET: "editor"})
+
+    response = await client.get(
+        FEEDS,
+        params={"since": "2026-10-05T00:00:00Z", "active_since": "2026-10-05T00:00:00Z"},
+        headers=as_space_owner(),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
+    assert response.json()["detail"].startswith("active_since:")
+    assert boundary.space.requests == []
+
+
+@pytest.mark.parametrize("one_space", [False, True])
+async def test_active_since_is_read_to_the_millisecond_as_space_reads_it(
+    client: AsyncClient, boundary: FakeBoundary, one_space: bool
+) -> None:
+    # Space reads since as a JavaScript Date, to the millisecond: the item of that millisecond is
+    # active since then
+    design = boundary.space.space("Design", {MMAUDET: "editor", ALICE: "admin"})
+
+    def card(title: str, updated_at: str) -> str:
+        found = boundary.space.card(
+            design,
+            "activities",
+            "com.twake.tasks.task.updated.v1",
+            actor=ALICE,
+            object={"type": "task", "id": title, "title": title},
+            time="2026-09-01T09:00:00.000Z",
+            updated_at=updated_at,
+        )
+        return found.id
+
+    on_time = card("Mockups", "2026-10-05T00:00:00.000Z")
+    card("Budget", "2026-10-04T23:59:59.999Z")
+    space = {"space_id": design.id} if one_space else {}
+
+    response = await client.get(
+        FEEDS,
+        params={"active_since": "2026-10-05T02:00:00.000900+02:00"} | space,
+        headers=as_space_owner(),
+    )
+
+    assert response.status_code == 200
+    assert items_of(response) == [on_time]
+
+
+@pytest.mark.parametrize("instant", ["0001-01-01T00:00:00+01:00", "9999-12-31T23:30:00-01:00"])
+async def test_an_active_since_outside_the_years_space_reads_is_invalid(
+    client: AsyncClient, boundary: FakeBoundary, instant: str
+) -> None:
+    # Space reads the years 1 to 9999 in UTC, which these times leave
+    boundary.space.space("Design", {MMAUDET: "editor"})
+
+    response = await client.get(FEEDS, params={"active_since": instant}, headers=as_space_owner())
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
+    assert response.json()["detail"].startswith("active_since:")
+    assert boundary.space.requests == []
+
+
+@pytest.mark.parametrize("one_space", [False, True])
+async def test_a_space_that_does_not_read_its_feed_by_latest_activity_yet_is_unavailable(
+    client: AsyncClient, boundary: FakeBoundary, one_space: bool
+) -> None:
+    # A Space before linagora/twake-space#438 leaves since out and gives its feed by time, with
+    # the card of an older object last active before active_since
+    boundary.space.reads_since = False
+    design = boundary.space.space("Design", {MMAUDET: "editor", ALICE: "admin"})
+    boundary.space.card(
+        design,
+        "activities",
+        "com.twake.tasks.task.updated.v1",
+        actor=ALICE,
+        object={"type": "task", "id": "Budget", "title": "Budget"},
+        time="2026-09-01T09:00:00.000Z",
+        updated_at="2026-09-15T09:00:00.000Z",
+    )
+    boundary.space.post(design, ALICE, "Kick-off", time="2026-10-06T12:00:00.000Z")
+    space = {"space_id": design.id} if one_space else {}
+
+    response = await client.get(
+        FEEDS, params={"active_since": "2026-10-05T00:00:00Z"} | space, headers=as_space_owner()
+    )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "space_unavailable"
 
 
 @pytest.mark.parametrize("gone", ["Design", "Roadmap"])

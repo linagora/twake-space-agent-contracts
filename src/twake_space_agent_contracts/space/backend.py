@@ -1,10 +1,11 @@
-"""The Twake Space backend (0.1.18), called with the API token of Space the user made for their
-assistant: Space acts for the token, and shows it the spaces it reaches."""
+"""The Twake Space backend (0.1.18, with the feed by latest activity of linagora/twake-space#438),
+called with the API token of Space the user made for their assistant: Space acts for the token,
+and shows it the spaces it reaches."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -338,6 +339,12 @@ class FeedItem:
     body: str | None = None
     edited_at: datetime | None = None
 
+    @property
+    def active_at(self) -> datetime:
+        """Where the feed by latest activity places the item, as Space orders it: a card at its
+        latest activity, a post when it was written, its edits aside."""
+        return self.updated_at if self.kind == "card" else self.time
+
 
 def _actor(value: Any) -> Actor | None:
     """An actor as Space gives it. Raises KeyError, TypeError or ValueError for any other form."""
@@ -355,6 +362,13 @@ def _actor(value: Any) -> Actor | None:
 
 def _time(value: Any) -> datetime:
     return datetime.fromisoformat(_text(value))
+
+
+def as_space_reads(time: datetime) -> datetime:
+    """A time as Space reads it, a JavaScript Date: in UTC, to the millisecond. Raises
+    OverflowError for one outside the years 1 to 9999 in UTC, which Space refuses."""
+    utc = time.astimezone(UTC)
+    return utc.replace(microsecond=utc.microsecond // 1000 * 1000)
 
 
 def _feed_item(value: Any) -> FeedItem:
@@ -696,11 +710,18 @@ class TwakeSpace:
         category: str | None,
         limit: int,
         before: str | None,
+        active_since: datetime | None,
     ) -> tuple[list[FeedItem], str | None]:
         """A page of the feed of the space, newest first, and the cursor of the next one; None
-        after the last."""
+        after the last. With active_since, the items active since then, as Space reads it, newest
+        activity first."""
         found = await self.found_feed(
-            owner, space_id, category=category, limit=limit, before=before
+            owner,
+            space_id,
+            category=category,
+            limit=limit,
+            before=before,
+            active_since=active_since,
         )
         if found is None:
             raise space_not_found(space_id)
@@ -714,6 +735,7 @@ class TwakeSpace:
         category: str | None,
         limit: int,
         before: str | None,
+        active_since: datetime | None,
     ) -> tuple[list[FeedItem], str | None] | None:
         """A page of the feed of the space, as `feed` gives it; None if the user is not a member
         of the space, or no longer is."""
@@ -722,15 +744,20 @@ class TwakeSpace:
             params["category"] = category
         if before is not None:
             params["before"] = before
+        # Space reads active_since as its since, and the items are held to it as Space reads it
+        if active_since is not None:
+            active_since = as_space_reads(active_since)
+            params["since"] = active_since.isoformat(timespec="milliseconds")
         found = await self._get(
             owner,
             f"/spaces/{space_id}/feed",
             params,
             scope="feed:read",
             missing_ok=True,
+            # The feed by latest activity is in another order than the feed by time
             invalid=invalid_request(
                 "before: Space does not know this cursor: pass the next a list_feed_items answer"
-                " gave."
+                " gave, with active_since if that call had it, without if not."
             ),
         )
         if found is None:
@@ -740,6 +767,13 @@ class TwakeSpace:
             following = _optional_text(found["next"])
         except (KeyError, TypeError, ValueError) as error:
             raise _unavailable("Space gave the feed in an unexpected form.") from error
+        # A Space before linagora/twake-space#438 leaves since out, as any parameter it does not
+        # know, and gives its feed by time: told by an item last active before active_since, which
+        # a page of items all active since then does not hold
+        if active_since is not None and any(item.active_at < active_since for item in items):
+            raise _unavailable(
+                "Space does not read its feed by latest activity yet: read it with since."
+            )
         return items, following
 
     async def item(self, owner: SpaceOwner, space_id: str, item_id: str) -> FeedItem | None:
