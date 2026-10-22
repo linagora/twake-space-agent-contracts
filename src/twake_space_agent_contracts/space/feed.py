@@ -28,6 +28,7 @@ from twake_space_agent_contracts.space.backend import (
     SpaceOwnerDependency,
     SpaceSummary,
     TwakeSpace,
+    as_space_reads,
     feed_item_not_found,
     for_each,
 )
@@ -120,11 +121,15 @@ class SpaceFeedItem(BaseModel):
     item_id: str
     kind: Literal["card", "post"] = Field(
         description="card, the latest activity of an app on one object, which keeps the place of "
-        "the object's first; post, what a member wrote."
+        "the object's first, or takes the place of its latest with active_since; post, what a "
+        "member wrote."
     )
     category: str = Field(description=CATEGORIES)
     time: datetime = Field(description="When the object's first activity was, or the post written.")
-    updated_at: datetime
+    updated_at: datetime = Field(
+        description="When a card's latest activity was, which active_since reads; when a post "
+        "was last edited, else written."
+    )
     edited_at: datetime | None = Field(description="When a post was last edited; null until then.")
     event_type: str | None = Field(
         description="The type of a card's latest activity, such as "
@@ -159,9 +164,9 @@ class SpaceFeed(BaseModel):
         "the last, and without space_id."
     )
     truncated: bool = Field(
-        description="Without space_id, whether items since since were left out: more than limit, "
-        f"or in the feeds of the spaces after the first {MOST_READ}. False with space_id, where "
-        "next tells of older items."
+        description="Without space_id, whether items since since, or active since active_since, "
+        "were left out: more than limit, or in the feeds of the spaces after the first "
+        f"{MOST_READ}. False with space_id, where next tells of older items."
     )
 
 
@@ -258,9 +263,10 @@ async def _all_feeds(
     category: Category | None,
     limit: int,
     since: datetime,
+    by_activity: bool,
 ) -> SpaceFeed:
     """The items of the feeds of the user's first MOST_READ spaces since `since`, newest first,
-    `limit` at most."""
+    `limit` at most; `by_activity`, those active since then, newest activity first."""
     summaries = await space.spaces(owner)
     read = summaries[:MOST_READ]
     # The user has the same user id in every space: the first one that holds them tells it. A
@@ -276,8 +282,17 @@ async def _all_feeds(
 
     async def page_of(summary: SpaceSummary) -> tuple[list[FeedItem], str | None] | None:
         return await space.found_feed(
-            owner, summary.space_id, category=category, limit=asked, before=None
+            owner,
+            summary.space_id,
+            category=category,
+            limit=asked,
+            before=None,
+            active_since=since if by_activity else None,
         )
+
+    def placed_at(item: FeedItem) -> datetime:
+        """Where each feed places the item."""
+        return item.active_at if by_activity else item.time
 
     pages = await for_each(read, page_of)
     found: list[tuple[FeedItem, ItemSpace]] = []
@@ -288,11 +303,11 @@ async def _all_feeds(
             continue
         items, following = page
         held_in = _item_space(space, summary.space_id, summary.name)
-        found += [(item, held_in) for item in items if item.time >= since]
+        found += [(item, held_in) for item in items if placed_at(item) >= since]
         # Older items follow the last one Space gave, which is since then too
-        more = more or (following is not None and len(items) > 0 and items[-1].time >= since)
+        more = more or (following is not None and len(items) > 0 and placed_at(items[-1]) >= since)
     # As each feed orders them
-    found.sort(key=lambda pair: (pair[0].time, pair[0].item_id), reverse=True)
+    found.sort(key=lambda pair: (placed_at(pair[0]), pair[0].item_id), reverse=True)
     return SpaceFeed(
         items=[_listed(item, me, held_in) for item, held_in in found[:limit]],
         next=None,
@@ -317,11 +332,13 @@ def router(
             f"space_id, the feeds of the user's spaces, the first {MOST_READ} by name, merged: "
             "the items since since, 7 days ago by default, limit at most, truncated telling that "
             "more were left out. With space_id, the feed of that space alone: when next is not "
-            "null, older items follow: make the same call with before set to it. category keeps "
-            "messages, the posts and the mail, files, activities, such as tasks, or events. "
-            f"{NO_POSTING} {UNTRUSTED} Example, for what is new in the user's spaces: (no "
-            f"parameters); for the latest files of a space: {EXAMPLE_SPACE}, category=files, "
-            "limit=20."
+            "null, older items follow: make the same call with before set to it. active_since, "
+            "in place of since, gives the items active since then, newest activity first: the "
+            "card of an object an app changed since then, however old the object, and the posts "
+            "written since then. category keeps messages, the posts and the mail, files, "
+            f"activities, such as tasks, or events. {NO_POSTING} {UNTRUSTED} Example, for what is "
+            "new in the user's spaces: (no parameters); for the latest files of a space: "
+            f"{EXAMPLE_SPACE}, category=files, limit=20."
         ),
     )
     async def list_feed_items(
@@ -353,11 +370,33 @@ def router(
             AwareDatetime | None,
             Query(
                 description="An RFC 3339 time with its offset, such as "
-                "2026-10-01T00:00:00+02:00: the items of a time since then. Without space_id, 7 "
-                "days ago by default; with it, the whole feed by default."
+                "2026-10-01T00:00:00+02:00: the items of a time since then, a card by its "
+                "object's first activity. Without space_id, 7 days ago by default; with it, the "
+                "whole feed by default."
+            ),
+        ] = None,
+        active_since: Annotated[
+            AwareDatetime | None,
+            Query(
+                description="An RFC 3339 time with its offset, such as "
+                "2026-10-01T00:00:00+02:00, in place of since: the items active since then, "
+                "newest activity first, a card by its latest activity, a post by when it was "
+                "written."
             ),
         ] = None,
     ) -> SpaceFeed:
+        if since is not None and active_since is not None:
+            raise invalid_request(
+                "active_since: since bounds the items by their first activity, active_since by "
+                "their latest: give one of them, not both."
+            )
+        if active_since is not None:
+            try:
+                active_since = as_space_reads(active_since)
+            except OverflowError:
+                raise invalid_request(
+                    "active_since: Space reads the years 1 to 9999 in UTC: give a time within them."
+                ) from None
         if space_id is None:
             # A cursor of Space names an item, not the feed it is in
             if before is not None:
@@ -366,11 +405,21 @@ def router(
                     "whose next it is."
                 )
             return await _all_feeds(
-                space, owner, category=category, limit=limit, since=since or now() - RECENT
+                space,
+                owner,
+                category=category,
+                limit=limit,
+                since=active_since or since or now() - RECENT,
+                by_activity=active_since is not None,
             )
         detail = await space.space(owner, space_id)
         items, following = await space.feed(
-            owner, space_id, category=category, limit=limit, before=before
+            owner,
+            space_id,
+            category=category,
+            limit=limit,
+            before=before,
+            active_since=active_since,
         )
         if since is not None:
             recent = [item for item in items if item.time >= since]
